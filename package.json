@@ -9,6 +9,7 @@
 		"leads": "node dist/cli.js"
 	},
 	"dependencies": {
+		"@reduck-ai/cli": "^2.0.18",
 		"commander": "^12.1.0"
 	},
 	"devDependencies": {

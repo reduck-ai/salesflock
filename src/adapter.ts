@@ -4,11 +4,13 @@
 
 import { appendFile } from "node:fs/promises";
 
+// A lead is the assembled output of the base scripts, keyed by publicId. We don't
+// type its inner shape — that's each script's documented output, not ours to copy.
 export interface Lead {
-	profile: Record<string, unknown>;
+	publicId: string;
+	card: unknown;
 	experience: unknown;
 	education: unknown;
-	company: unknown;
 }
 
 export interface Adapter {
