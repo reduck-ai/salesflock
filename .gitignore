@@ -1,6 +1,5 @@
 node_modules/
 dist/
-leads.jsonl
 
-# personal knowledge — templates tracked as *.example
-knowledge/*.md
+# lead output (run artifact)
+*.jsonl

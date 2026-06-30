@@ -2,8 +2,8 @@
 // compose several base-script calls and write the result to the record store.
 // Single base-script calls have no wrapper; the agent runs them via `reduck run`.
 
-import { run } from "./run.js";
-import type { Adapter, Lead } from "./adapter.js";
+import { run } from "../../src/clients/reduck.js";
+import type { Adapter, Lead } from "./store.js";
 
 // LinkedIn's profile scripts key off publicId — the /in/<publicId> slug. Accept a
 // full profile URL or a bare publicId.

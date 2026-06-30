@@ -3,10 +3,12 @@
 	"version": "0.1.0",
 	"private": true,
 	"type": "module",
-	"bin": { "leads": "./dist/cli.js" },
+	"bin": {
+		"sflock": "./dist/src/cli.js",
+		"leads": "./dist/agents/linkedin-leads/cli.js"
+	},
 	"scripts": {
-		"build": "tsc",
-		"leads": "node dist/cli.js"
+		"build": "tsc"
 	},
 	"dependencies": {
 		"@reduck-ai/cli": "^2.0.18",
