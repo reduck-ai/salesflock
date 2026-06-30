@@ -1,30 +1,41 @@
 #!/usr/bin/env node
 // sflock — the setup CLI. Populates an agent's schema with destination Ground Truth.
 //   sflock pull --agent <id> --client <name> --model <m> [--model <m> …]
-// writes agents/<id>/schema/<client>/<model>.json — the writable property set,
-// enum options included.
+// writes agents/<id>/schema/<model>.json — the model's writable contract.
+//
+// Each client describes a model as a JSON Schema (notion); a generic layer turns those
+// into TS models. sflock is that generic layer's front: it asks the client to describe
+// each model and writes the result verbatim — it holds no per-client semantics.
 
 import { Command } from "commander";
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as hubspot from "./clients/hubspot.js";
+import * as notion from "./clients/notion.js";
 
 // Client registry: name → the client that can describe a model. Only clients with a
 // property surface belong here (reduck is a runner, not a schema source). Add one = add an entry.
-const CLIENTS = { hubspot } as const;
+const CLIENTS = { hubspot, notion } as const;
 type ClientName = keyof typeof CLIENTS;
 
-// Project a property to what a writer needs, dropping the unwritable. What lands is
-// exactly what the destination takes on write — enum values included (the bit the CLI couldn't give).
-const project = (p: hubspot.Property) => ({
-	name: p.name,
-	label: p.label,
-	type: p.type,
-	fieldType: p.fieldType,
-	...(p.options.length ? { options: p.options.map((o) => o.value) } : {})
-});
-
 const collect = (v: string, acc: string[]): string[] => [...acc, v];
+
+// Name the dump file by the schema's own title when the client gives one (notion's
+// JSON Schema), else the model token (hubspot object types are already clean names).
+const fileName = (model: string, described: unknown): string => {
+	const title =
+		described && typeof described === "object" && !Array.isArray(described)
+			? (described as { title?: unknown }).title
+			: undefined;
+	return (typeof title === "string" ? title : model).replace(/[^\w.-]+/g, "_");
+};
+
+// Number of writable properties in a described model — a JSON Schema's `properties`, or
+// a flat property array (hubspot, pending alignment) — for the progress line.
+const propCount = (described: unknown): number =>
+	Array.isArray(described)
+		? described.length
+		: Object.keys((described as { properties?: object }).properties ?? {}).length;
 
 const program = new Command()
 	.name("sflock")
@@ -45,15 +56,10 @@ program
 		const dir = join(agentDir, "schema");
 		await mkdir(dir, { recursive: true });
 		for (const m of model) {
-			// readOnlyValue is the destination's own authoritative "can't write this".
-			// Sort by name so the file is stable and `git diff` reads as a changelog.
-			const rows = (await c.properties(m))
-				.filter((p) => !p.modificationMetadata?.readOnlyValue)
-				.sort((a, b) => a.name.localeCompare(b.name))
-				.map(project);
-			const path = join(dir, `${m}.json`);
-			await writeFile(path, JSON.stringify(rows, null, 2) + "\n");
-			console.error(`${m}: ${rows.length} writable properties → ${path}`);
+			const described = await c.describe(m);
+			const path = join(dir, `${fileName(m, described)}.json`);
+			await writeFile(path, JSON.stringify(described, null, 2) + "\n");
+			console.error(`${m}: ${propCount(described)} writable properties → ${path}`);
 		}
 	});
 

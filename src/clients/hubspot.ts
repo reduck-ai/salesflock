@@ -36,3 +36,24 @@ export interface Property {
 // GET /crm/v3/properties/{type} — every property of an object, options included.
 export const properties = async (type: string): Promise<Property[]> =>
 	((await api(`/crm/v3/properties/${type}`)) as { results: Property[] }).results;
+
+// Project a property to what a writer needs, dropping the unwritable. What lands is
+// exactly what the destination takes on write — enum values included (the bit the CLI
+// couldn't give).
+const project = (p: Property) => ({
+	name: p.name,
+	label: p.label,
+	type: p.type,
+	fieldType: p.fieldType,
+	...(p.options.length ? { options: p.options.map((o) => o.value) } : {})
+});
+
+// describe(type) — the model's writable properties. readOnlyValue is the destination's
+// own authoritative "can't write this". Sorted by name so the file is stable and
+// `git diff` reads as a changelog. (Not yet a JSON Schema like notion.describe — the
+// flat shape is what this client emits today; align to JSON Schema later.)
+export const describe = async (type: string) =>
+	(await properties(type))
+		.filter((p) => !p.modificationMetadata?.readOnlyValue)
+		.sort((a, b) => a.name.localeCompare(b.name))
+		.map(project);

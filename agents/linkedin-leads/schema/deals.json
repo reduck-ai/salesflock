@@ -1,0 +1,312 @@
+[
+  {
+    "name": "amount",
+    "label": "Amount",
+    "type": "number",
+    "fieldType": "number"
+  },
+  {
+    "name": "closed_lost_reason",
+    "label": "Closed Lost Reason",
+    "type": "string",
+    "fieldType": "textarea"
+  },
+  {
+    "name": "closed_won_reason",
+    "label": "Closed Won Reason",
+    "type": "string",
+    "fieldType": "textarea"
+  },
+  {
+    "name": "closedate",
+    "label": "Close Date",
+    "type": "datetime",
+    "fieldType": "date"
+  },
+  {
+    "name": "createdate",
+    "label": "Create Date",
+    "type": "datetime",
+    "fieldType": "date"
+  },
+  {
+    "name": "deal_currency_code",
+    "label": "Currency",
+    "type": "enumeration",
+    "fieldType": "select"
+  },
+  {
+    "name": "dealname",
+    "label": "Deal Name",
+    "type": "string",
+    "fieldType": "text"
+  },
+  {
+    "name": "dealstage",
+    "label": "Deal Stage",
+    "type": "enumeration",
+    "fieldType": "radio"
+  },
+  {
+    "name": "dealtype",
+    "label": "Deal Type",
+    "type": "enumeration",
+    "fieldType": "radio",
+    "options": [
+      "newbusiness",
+      "existingbusiness"
+    ]
+  },
+  {
+    "name": "description",
+    "label": "Deal Description",
+    "type": "string",
+    "fieldType": "textarea"
+  },
+  {
+    "name": "hs_all_assigned_business_unit_ids",
+    "label": "Brands",
+    "type": "enumeration",
+    "fieldType": "checkbox"
+  },
+  {
+    "name": "hs_all_collaborator_owner_ids",
+    "label": "Deal Collaborator",
+    "type": "enumeration",
+    "fieldType": "checkbox"
+  },
+  {
+    "name": "hs_analytics_source",
+    "label": "Original Traffic Source",
+    "type": "enumeration",
+    "fieldType": "select",
+    "options": [
+      "ORGANIC_SEARCH",
+      "PAID_SEARCH",
+      "EMAIL_MARKETING",
+      "SOCIAL_MEDIA",
+      "REFERRALS",
+      "OTHER_CAMPAIGNS",
+      "DIRECT_TRAFFIC",
+      "OFFLINE",
+      "PAID_SOCIAL",
+      "AI_REFERRALS"
+    ]
+  },
+  {
+    "name": "hs_attributed_team_ids",
+    "label": "Attributed reporting team",
+    "type": "enumeration",
+    "fieldType": "checkbox"
+  },
+  {
+    "name": "hs_campaign",
+    "label": "HubSpot Campaign",
+    "type": "string",
+    "fieldType": "text"
+  },
+  {
+    "name": "hs_cross_account_note",
+    "label": "Cross-account Note",
+    "type": "string",
+    "fieldType": "textarea"
+  },
+  {
+    "name": "hs_cross_sell_opportunity",
+    "label": "Cross-sell Opportunity",
+    "type": "bool",
+    "fieldType": "booleancheckbox",
+    "options": [
+      "true",
+      "false"
+    ]
+  },
+  {
+    "name": "hs_deal_amount_calculation_preference",
+    "label": "Deal amount calculation preference",
+    "type": "enumeration",
+    "fieldType": "radio",
+    "options": [
+      "TCV",
+      "ARR",
+      "MRR",
+      "CUSTOM"
+    ]
+  },
+  {
+    "name": "hs_deal_stage_probability",
+    "label": "Deal probability",
+    "type": "number",
+    "fieldType": "number"
+  },
+  {
+    "name": "hs_exchange_rate",
+    "label": "Exchange rate",
+    "type": "number",
+    "fieldType": "number"
+  },
+  {
+    "name": "hs_forecast_probability",
+    "label": "Forecast probability",
+    "type": "number",
+    "fieldType": "number"
+  },
+  {
+    "name": "hs_is_active_shared_deal",
+    "label": "Is Active Shared Deal",
+    "type": "bool",
+    "fieldType": "booleancheckbox",
+    "options": [
+      "true",
+      "false"
+    ]
+  },
+  {
+    "name": "hs_line_item_global_term_hs_discount_percentage",
+    "label": "Global Term Line Item Discount Percentage",
+    "type": "string",
+    "fieldType": "text"
+  },
+  {
+    "name": "hs_line_item_global_term_hs_discount_percentage_enabled",
+    "label": "Global Term Line Item Discount Percentage Enabled",
+    "type": "bool",
+    "fieldType": "booleancheckbox",
+    "options": [
+      "true",
+      "false"
+    ]
+  },
+  {
+    "name": "hs_line_item_global_term_hs_recurring_billing_period",
+    "label": "Global Term Line Item Recurring Billing Period",
+    "type": "string",
+    "fieldType": "text"
+  },
+  {
+    "name": "hs_line_item_global_term_hs_recurring_billing_period_enabled",
+    "label": "Global Term Line Item Recurring Billing Period Enabled",
+    "type": "bool",
+    "fieldType": "booleancheckbox",
+    "options": [
+      "true",
+      "false"
+    ]
+  },
+  {
+    "name": "hs_line_item_global_term_hs_recurring_billing_start_date",
+    "label": "Global Term Line Item Recurring Billing Start Date",
+    "type": "string",
+    "fieldType": "text"
+  },
+  {
+    "name": "hs_line_item_global_term_hs_recurring_billing_start_date_enabled",
+    "label": "Global Term Line Item Recurring Billing Start Date Enabled",
+    "type": "bool",
+    "fieldType": "booleancheckbox",
+    "options": [
+      "true",
+      "false"
+    ]
+  },
+  {
+    "name": "hs_line_item_global_term_recurringbillingfrequency",
+    "label": "Global Term Line Item Recurring Billing Frequency",
+    "type": "string",
+    "fieldType": "text"
+  },
+  {
+    "name": "hs_line_item_global_term_recurringbillingfrequency_enabled",
+    "label": "Global Term Line Item Recurring Billing Frequency Enabled",
+    "type": "bool",
+    "fieldType": "booleancheckbox",
+    "options": [
+      "true",
+      "false"
+    ]
+  },
+  {
+    "name": "hs_manual_forecast_category",
+    "label": "Forecast category",
+    "type": "enumeration",
+    "fieldType": "select",
+    "options": [
+      "OMIT",
+      "PIPELINE",
+      "BEST_CASE",
+      "COMMIT",
+      "CLOSED"
+    ]
+  },
+  {
+    "name": "hs_net_pipeline_impact",
+    "label": "Net Pipeline Impact",
+    "type": "number",
+    "fieldType": "number"
+  },
+  {
+    "name": "hs_next_step",
+    "label": "Next step",
+    "type": "string",
+    "fieldType": "textarea"
+  },
+  {
+    "name": "hs_owning_teams",
+    "label": "Owning Teams",
+    "type": "enumeration",
+    "fieldType": "checkbox"
+  },
+  {
+    "name": "hs_partner_tech_win",
+    "label": "Partner Tech Win",
+    "type": "enumeration",
+    "fieldType": "select",
+    "options": [
+      "in_progress",
+      "Yes",
+      "No",
+      "Incomplete"
+    ]
+  },
+  {
+    "name": "hs_pinned_engagement_id",
+    "label": "Pinned Engagement ID",
+    "type": "number",
+    "fieldType": "number"
+  },
+  {
+    "name": "hs_priority",
+    "label": "Priority",
+    "type": "enumeration",
+    "fieldType": "select",
+    "options": [
+      "low",
+      "medium",
+      "high"
+    ]
+  },
+  {
+    "name": "hs_shared_team_ids",
+    "label": "Shared teams",
+    "type": "enumeration",
+    "fieldType": "checkbox"
+  },
+  {
+    "name": "hs_shared_user_ids",
+    "label": "Shared users",
+    "type": "enumeration",
+    "fieldType": "checkbox"
+  },
+  {
+    "name": "hubspot_owner_id",
+    "label": "Deal owner",
+    "type": "enumeration",
+    "fieldType": "select"
+  },
+  {
+    "name": "pipeline",
+    "label": "Pipeline",
+    "type": "enumeration",
+    "fieldType": "select"
+  }
+]
