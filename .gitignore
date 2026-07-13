@@ -6,3 +6,4 @@ dist/
 
 # lead output (run artifact)
 *.jsonl
+.vercel
