@@ -109,6 +109,14 @@ const fragment = (p: NotionProp): Record<string, unknown> | null => {
 	}
 };
 
+// Notion caps one rich text item at 2000 chars; longer strings are written as a run of
+// items, so callers never truncate.
+const chunks = (s: string): { text: { content: string } }[] => {
+	const out: { text: { content: string } }[] = [];
+	for (let i = 0; i < Math.max(s.length, 1); i += 2000) out.push({ text: { content: s.slice(i, i + 2000) } });
+	return out;
+};
+
 // Inverse of fragment: a value + its Notion property type → the API write payload. Covers
 // the writable scalar types; relation/people need id resolution, so we refuse them loudly
 // rather than write a wrong shape silently.
@@ -116,7 +124,7 @@ const serialize = (value: unknown, p: NotionProp): Record<string, unknown> => {
 	switch (p.type) {
 		case "title":
 		case "rich_text":
-			return { [p.type]: [{ text: { content: String(value) } }] };
+			return { [p.type]: chunks(String(value)) };
 		case "url":
 		case "email":
 		case "phone_number":
@@ -143,33 +151,113 @@ const serialize = (value: unknown, p: NotionProp): Record<string, unknown> => {
 // id, its url, and whether it was created.
 const pageUrl = (id: string): string => `https://www.notion.so/${id.replace(/-/g, "")}`;
 
+// A page property value, as the API returns it — only the shapes plain() flattens.
+interface NotionValue {
+	type: string;
+	title?: { plain_text: string }[];
+	rich_text?: { plain_text: string }[];
+	url?: string | null;
+	email?: string | null;
+	phone_number?: string | null;
+	number?: number | null;
+	checkbox?: boolean;
+	date?: { start: string } | null;
+	select?: { name: string } | null;
+	status?: { name: string } | null;
+	multi_select?: { name: string }[];
+}
+
+// The inverse of serialize: a property value → a plain scalar. null for types with no
+// scalar reading (relations, files, …) — they are pointers, not content.
+const plain = (v: NotionValue): string | number | boolean | null => {
+	switch (v.type) {
+		case "title":
+		case "rich_text":
+			return (v[v.type] ?? []).map((t) => t.plain_text).join("");
+		case "url":
+			return v.url ?? null;
+		case "email":
+			return v.email ?? null;
+		case "phone_number":
+			return v.phone_number ?? null;
+		case "number":
+			return v.number ?? null;
+		case "checkbox":
+			return v.checkbox ?? null;
+		case "date":
+			return v.date?.start ?? null;
+		case "select":
+		case "status":
+			return (v.type === "select" ? v.select : v.status)?.name ?? null;
+		case "multi_select":
+			return (v.multi_select ?? []).map((o) => o.name).join(", ") || null;
+		default:
+			return null;
+	}
+};
+
+// The shared lookup: resolve the model, load its live property map, and find the one
+// page whose keyProp equals value. upsert writes through it; read reads through it.
+const locate = async (
+	model: string,
+	keyProp: string,
+	value: unknown
+): Promise<{ dsId: string; ds: DataSource; page?: { id: string; properties: Record<string, NotionValue> } }> => {
+	const dsId = await resolveDsId(model);
+	const ds: DataSource = JSON.parse(await ntn(["api", `/v1/data_sources/${dsId}`]));
+	const key = ds.properties[keyProp];
+	if (!key) throw new Error(`notion: no key property "${keyProp}" on "${model}"`);
+	const filter = JSON.stringify({ property: keyProp, [key.type]: { equals: value } });
+	const { results } = JSON.parse(await ntn(["datasources", "query", dsId, "--filter", filter, "--json"]));
+	return { dsId, ds, page: results[0] };
+};
+
+// content, when given, is the page's body as Markdown — replaced wholesale on every
+// upsert, so the body converges exactly like the properties do.
 export const upsert = async (
 	model: string,
 	record: object,
-	keyProp: string
+	keyProp: string,
+	content?: string
 ): Promise<{ id: string; url: string; created: boolean }> => {
-	const dsId = await resolveDsId(model);
-	const ds: DataSource = JSON.parse(await ntn(["api", `/v1/data_sources/${dsId}`]));
 	const fields = record as Record<string, unknown>;
+	const { dsId, ds, page } = await locate(model, keyProp, fields[keyProp]);
 	const properties: Record<string, unknown> = {};
 	for (const [name, value] of Object.entries(fields)) {
 		const p = ds.properties[name];
 		if (!p) throw new Error(`notion.upsert: no property "${name}" on "${model}"`);
 		if (value != null) properties[name] = serialize(value, p);
 	}
-	const key = ds.properties[keyProp];
-	if (!key) throw new Error(`notion.upsert: no key property "${keyProp}" on "${model}"`);
-	const filter = JSON.stringify({ property: keyProp, [key.type]: { equals: fields[keyProp] } });
-	const { results } = JSON.parse(await ntn(["datasources", "query", dsId, "--filter", filter, "--json"]));
-	const page = (results as { id: string }[])[0];
 	const write = (args: string[]) => ntn(["api", ...args, "-d", JSON.stringify({ properties })]);
+	let id: string;
+	let created: boolean;
 	if (page) {
 		await write(["-X", "PATCH", `/v1/pages/${page.id}`]);
-		return { id: page.id, url: pageUrl(page.id), created: false };
+		({ id, created } = { id: page.id, created: false });
+	} else {
+		const body = { parent: { type: "data_source_id", data_source_id: dsId }, properties };
+		({ id } = JSON.parse(await ntn(["api", "-X", "POST", "/v1/pages", "-d", JSON.stringify(body)])));
+		created = true;
 	}
-	const body = { parent: { type: "data_source_id", data_source_id: dsId }, properties };
-	const { id } = JSON.parse(await ntn(["api", "-X", "POST", "/v1/pages", "-d", JSON.stringify(body)]));
-	return { id, url: pageUrl(id), created: true };
+	if (content) await ntn(["pages", "edit", id, "--content", content]);
+	return { id, url: pageUrl(id), created };
+};
+
+// read(model, keyProp, value) — the one page whose keyProp equals value, flattened to
+// plain scalars. Loud when absent: in the face of a missing record, refuse to guess.
+export const read = async (
+	model: string,
+	keyProp: string,
+	value: unknown
+): Promise<{ id: string; fields: Record<string, string | number | boolean> }> => {
+	const { page } = await locate(model, keyProp, value);
+	if (!page) throw new Error(`notion.read: no "${model}" page with ${keyProp} = ${value}`);
+	const fields: Record<string, string | number | boolean> = {};
+	for (const [name, v] of Object.entries(page.properties)) {
+		const s = plain(v);
+		if (s !== null && s !== "") fields[name] = s;
+	}
+	return { id: page.id, fields };
 };
 
 // pageTitle(pageId) — a page's title property as plain text (its "Name"). Lets a caller

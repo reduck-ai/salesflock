@@ -14,10 +14,23 @@ const program = new Command()
 	.description("LinkedIn lead-gen tools that compose reduck scripts and persist to your CRM.");
 
 program
-	.command("get-profile")
+	.command("search")
+	.argument("<query>", `Google query, e.g. site:www.linkedin.com/in "senior product manager" "UiPath"`)
+	.option("--n <count>", "max result cards", parseInt)
+	.description("Discover profiles via Google (one run); write Person stubs + Sourcing provenance + new Leads (To enrich).")
+	.action(async (query, { n }) => out(await tools.search(query, n)));
+
+program
+	.command("enrich")
 	.argument("<profile>", "profile URL or bare publicId")
-	.description("Profile + experience + education (three runs), assembled and written to Notion.")
-	.action(async (profile) => out(await tools.getProfile(profile)));
+	.description("Profile + experience (three runs) assembled into the Person; their Lead moves to To qualify.")
+	.action(async (profile) => out(await tools.enrich(profile)));
+
+program
+	.command("qualify")
+	.argument("<profile>", "profile URL or bare publicId (must be enriched)")
+	.description("Judge the person against the ICP (Gemini, from CRM evidence only); Lead moves to the human gate.")
+	.action(async (profile) => out(await tools.qualify(profile)));
 
 program
 	.command("get-company")

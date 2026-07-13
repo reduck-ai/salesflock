@@ -36,12 +36,9 @@ export interface Education {
      */
     dateRange: string | null;
     /**
-     * LinkedIn /school/ or /company/ page; null when the school has no LinkedIn page
+     * LinkedIn /school/ page; null when the school has no LinkedIn page
      */
     schoolUrl: string | null;
-    /**
-     * only parseable when a date line precedes it; null otherwise
-     */
     description: string | null;
   }[];
 }
