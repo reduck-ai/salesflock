@@ -13,7 +13,7 @@
 	<main class="grid min-h-svh place-items-center">
 		<form method="POST" action="?/signin">
 			<input type="hidden" name="providerId" value="google" />
-			<Button size="lg">Sign in with Google</Button>
+			<Button type="submit" size="lg">Sign in with Google</Button>
 		</form>
 	</main>
 {:else}
@@ -21,7 +21,7 @@
 		<header class="flex items-center justify-between">
 			<h1 class="text-2xl font-semibold">Decisions</h1>
 			<form method="POST" action="?/signout">
-				<Button variant="ghost">{data.user.email} · Sign out</Button>
+				<Button type="submit" variant="ghost">{data.user.email} · Sign out</Button>
 			</form>
 		</header>
 
