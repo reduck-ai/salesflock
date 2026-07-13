@@ -5,6 +5,13 @@
 
 import { env } from "$env/dynamic/private";
 
+const API = "https://api.notion.com/v1";
+const headers = {
+	Authorization: `Bearer ${env.NOTION_TOKEN}`,
+	"Notion-Version": "2025-09-03",
+	"Content-Type": "application/json"
+};
+
 export interface Decision {
 	id: string;
 	url: string;
@@ -44,13 +51,9 @@ const plain = (v: Value): string | null => {
 };
 
 export const decisions = async (): Promise<Decision[]> => {
-	const res = await fetch(`https://api.notion.com/v1/data_sources/${env.NOTION_DECISIONS_DS}/query`, {
+	const res = await fetch(`${API}/data_sources/${env.NOTION_DECISIONS_DS}/query`, {
 		method: "POST",
-		headers: {
-			Authorization: `Bearer ${env.NOTION_TOKEN}`,
-			"Notion-Version": "2025-09-03",
-			"Content-Type": "application/json"
-		},
+		headers,
 		body: JSON.stringify({ sorts: [{ timestamp: "last_edited_time", direction: "descending" }] })
 	});
 	if (!res.ok) throw new Error(`Notion ${res.status}: ${await res.text()}`);
@@ -68,4 +71,21 @@ export const decisions = async (): Promise<Decision[]> => {
 		}
 		return { id, url, title, fields };
 	});
+};
+
+// record(pageId, verdict, feedback) — write a human's review back onto the page:
+// "Human verdict" (a select) and, when given, "Feedback" (rich text). Idempotent by
+// nature — deciding the same card again overwrites the same two properties. Needs the
+// integration's "Update content" capability; those two properties must exist on the DB.
+export const record = async (pageId: string, verdict: "accepted" | "rejected", feedback: string) => {
+	const properties: Record<string, unknown> = {
+		"Human verdict": { select: { name: verdict === "accepted" ? "Accepted" : "Rejected" } },
+		...(feedback ? { Feedback: { rich_text: [{ text: { content: feedback } }] } } : {})
+	};
+	const res = await fetch(`${API}/pages/${pageId}`, {
+		method: "PATCH",
+		headers,
+		body: JSON.stringify({ properties })
+	});
+	if (!res.ok) throw new Error(`Notion ${res.status}: ${await res.text()}`);
 };

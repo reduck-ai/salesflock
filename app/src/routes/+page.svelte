@@ -1,12 +1,18 @@
 <script lang="ts">
-	import { Badge } from "$lib/components/ui/badge/index.js";
 	import { Button } from "$lib/components/ui/button/index.js";
-	import * as Card from "$lib/components/ui/card/index.js";
+	import CardStack from "$lib/cards/CardStack.svelte";
+	import type { Judgment } from "$lib/cards/types";
 
 	let { data } = $props();
 
-	// Fields with a dedicated slot on the card; everything else renders as a detail line.
-	const shown = new Set(["Decision", "Reasoning"]);
+	// Persist each verdict + feedback to its source record; fire-and-forget so the
+	// deck keeps its snappy feel. A failure surfaces in the console, not a blocked UI.
+	const judge = (j: Judgment) =>
+		fetch("/api/decide", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(j)
+		}).catch((e) => console.error("decide failed", e));
 </script>
 
 {#if !data.user}
@@ -29,7 +35,7 @@
 		{/if}
 	</main>
 {:else}
-	<main class="mx-auto max-w-3xl space-y-4 p-8">
+	<main class="mx-auto max-w-xl space-y-6 p-8">
 		<header class="flex items-center justify-between">
 			<h1 class="text-2xl font-semibold">Decisions</h1>
 			<form method="POST" action="?/signout">
@@ -37,27 +43,6 @@
 			</form>
 		</header>
 
-		{#each data.decisions as d (d.id)}
-			<Card.Root>
-				<Card.Header>
-					<Card.Title><a href={d.url} class="hover:underline">{d.title}</a></Card.Title>
-					{#if d.fields.Decision}
-						<Card.Action>
-							<Badge variant={d.fields.Decision === "Qualified" ? "default" : "secondary"}>
-								{d.fields.Decision}
-							</Badge>
-						</Card.Action>
-					{/if}
-				</Card.Header>
-				<Card.Content class="space-y-2 text-sm">
-					{#if d.fields.Reasoning}<p>{d.fields.Reasoning}</p>{/if}
-					{#each Object.entries(d.fields).filter(([k]) => !shown.has(k)) as [k, v] (k)}
-						<p class="text-muted-foreground"><span class="font-medium">{k}</span> · {v}</p>
-					{/each}
-				</Card.Content>
-			</Card.Root>
-		{:else}
-			<p class="text-muted-foreground">No decisions yet.</p>
-		{/each}
+		<CardStack cards={data.cards} onjudge={judge} />
 	</main>
 {/if}
