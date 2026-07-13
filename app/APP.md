@@ -44,3 +44,10 @@ If the app lives in a subdirectory of the repo (as here), set the project's
 **Root Directory** to it in Vercel → Settings. From then on every push deploys a
 preview and every merge to the default branch deploys production — that is the
 whole CI/CD story.
+
+Two one-time toggles:
+
+- `vercel git connect` needs Vercel's [GitHub App](https://github.com/apps/vercel)
+  installed on the repo's org (scope it to just this repo).
+- Vercel → Settings → Deployment Protection → turn **Vercel Authentication off**:
+  the app's own allowlist is the gate; Vercel's SSO wall would block your team.
