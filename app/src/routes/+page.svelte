@@ -11,17 +11,29 @@
 
 {#if !data.user}
 	<main class="grid min-h-svh place-items-center">
-		<form method="POST" action="?/signin">
-			<input type="hidden" name="providerId" value="google" />
-			<Button type="submit" size="lg">Sign in with Google</Button>
-		</form>
+		{#if data.mode === "oauth"}
+			<form method="POST" action="?/signin">
+				<input type="hidden" name="providerId" value="google" />
+				<Button type="submit" size="lg">Sign in with Google</Button>
+			</form>
+		{:else}
+			<form method="POST" action="?/signin" class="flex gap-2">
+				<input
+					name="key"
+					type="password"
+					placeholder="Access key"
+					class="border-input bg-background focus-visible:ring-ring rounded-md border px-3 py-2 text-sm focus-visible:ring-1 focus-visible:outline-none"
+				/>
+				<Button type="submit" size="lg">Enter</Button>
+			</form>
+		{/if}
 	</main>
 {:else}
 	<main class="mx-auto max-w-3xl space-y-4 p-8">
 		<header class="flex items-center justify-between">
 			<h1 class="text-2xl font-semibold">Decisions</h1>
 			<form method="POST" action="?/signout">
-				<Button type="submit" variant="ghost">{data.user.email} · Sign out</Button>
+				<Button type="submit" variant="ghost">{data.user.name} · Sign out</Button>
 			</form>
 		</header>
 
