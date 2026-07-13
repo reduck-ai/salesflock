@@ -54,7 +54,10 @@ export const decisions = async (): Promise<Decision[]> => {
 	const res = await fetch(`${API}/data_sources/${env.NOTION_DECISIONS_DS}/query`, {
 		method: "POST",
 		headers,
+		// Only rows still awaiting a human call: a set "Human verdict" drops it from the queue,
+		// so a decided card doesn't reappear on refresh. This is the review queue, not a log.
 		body: JSON.stringify({
+			filter: { property: "Human verdict", select: { is_empty: true } },
 			sorts: [{ timestamp: "last_edited_time", direction: "descending" }]
 		})
 	});
