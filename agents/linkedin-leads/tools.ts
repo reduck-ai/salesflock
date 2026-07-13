@@ -3,7 +3,6 @@
 // are already there. Fetch + compose lives in the Lk client; the record mapping — the
 // one model-specific bit — lives here, then goes to notion.upsert directly.
 
-import { readFile } from "node:fs/promises";
 import {
 	searchProfiles as lkSearchProfiles,
 	getProfile as lkGetProfile,
@@ -18,11 +17,11 @@ import type { Leads } from "./schema/Leads.js";
 import type { Sourcing } from "./schema/Sourcing.js";
 import type { Decisions } from "./schema/Decisions.js";
 
-// A data source, named once by env. Each destination is a distinct id; no default.
-const ds = (name: string): string => {
-	const id = process.env[name];
-	if (!id) throw new Error(`set ${name} to the destination data-source id`);
-	return id;
+// Required config, named once by env — a data source id, a prompt name. No default.
+const env = (name: string): string => {
+	const v = process.env[name];
+	if (!v) throw new Error(`set ${name}`);
+	return v;
 };
 
 // A LinkedIn company's headquarters → a one-line HQ string, or undefined if it has none.
@@ -33,8 +32,9 @@ export const tools = {
 	// search — discover LinkedIn profiles via one Google run. Per hit: a Person stub
 	// (idempotent on the canonical LinkedIn URL) and, only for a NEW person, a Lead at the
 	// pipeline start — re-searching someone already in the pipeline must not reset their
-	// Status. Then ONE Sourcing row for the run itself — an append-only log (each run is a
-	// distinct event, so Ran at is in the key) linking the People it yielded, new or not.
+	// Status. Then ONE Sourcing row for the run — an append-only log (each run is a distinct
+	// event, so the generated name carries the run time, human-readably) linking the People
+	// it yielded, new or not.
 	search: async (query: string, n?: number) => {
 		const { script, args, hits } = await lkSearchProfiles(query, n);
 		const ranAt = new Date().toISOString();
@@ -47,22 +47,23 @@ export const tools = {
 				"LinkedIn URL": hit.profileUrl,
 				Updated: ranAt
 			};
-			const p = await notion.upsert(ds("NOTION_PEOPLE_DS"), person, "LinkedIn URL");
+			const p = await notion.upsert(env("NOTION_PEOPLE_DS"), person, "LinkedIn URL");
 			personIds.push(p.id);
 			if (p.created) {
 				const lead: Leads = { Name: hit.name, Person: [p.id], Status: "To enrich" };
-				await notion.upsert(ds("NOTION_LEADS_DS"), lead, "Name");
+				await notion.upsert(env("NOTION_LEADS_DS"), lead, "Name");
 			}
 			out.push({ publicId: hit.publicId, name: hit.name, person: p.url, created: p.created });
 		}
+		const terms = query.replace(/\bsite:\S+\s*/g, "").trim();
 		const sourcing: Sourcing = {
-			Key: `${ranAt} ${script} ${query}`,
+			Name: `Google Search ${terms} — ${ranAt.slice(0, 19).replace("T", " ")}`,
 			Script: script,
 			Args: JSON.stringify(args),
 			"Ran at": ranAt,
 			People: personIds
 		};
-		await notion.upsert(ds("NOTION_SOURCING_DS"), sourcing, "Key");
+		await notion.upsert(env("NOTION_SOURCING_DS"), sourcing, "Name");
 		return out;
 	},
 
@@ -84,9 +85,9 @@ export const tools = {
 				.map((p) => [[p.title, p.company].filter(Boolean).join(" — "), p.dateRange].filter(Boolean).join(" · "))
 				.join("\n")
 		};
-		const p = await notion.upsert(ds("NOTION_PEOPLE_DS"), person, "LinkedIn URL");
+		const p = await notion.upsert(env("NOTION_PEOPLE_DS"), person, "LinkedIn URL");
 		const lead: Leads = { Name: name, Person: [p.id], Status: "To qualify" };
-		const l = await notion.upsert(ds("NOTION_LEADS_DS"), lead, "Name");
+		const l = await notion.upsert(env("NOTION_LEADS_DS"), lead, "Name");
 		return { person: p.url, lead: l.url, publicId, name, positions: experience.positions.length };
 	},
 
@@ -105,35 +106,35 @@ export const tools = {
 			Founded: c.foundedYear ?? undefined,
 			HQ: hq(c.headquarters)
 		};
-		const { id, url, created } = await notion.upsert(ds("NOTION_COMPANIES_DS"), row, "LinkedIn URL");
+		const { id, url, created } = await notion.upsert(env("NOTION_COMPANIES_DS"), row, "LinkedIn URL");
 		return { where: url, id, created, companyId: c.companyId, name: c.name };
 	},
 
 	// qualify — the judgment: a pure function of frozen context, never a fetch. Evidence is
-	// what the CRM holds for the person, rendered as Markdown; criteria are the prompt +
-	// knowledge/ files; the judge is Gemini at temperature 0. The verdict is a Decision
-	// page — "<Person> - Lead Qualification", the CURRENT decision at this gate, converging
-	// on its title. Everything is a property, for UIs to bind: Decision, Reasoning,
-	// Evidence (Markdown, for a custom card), and Prompt (with ICP; evidence stays out, so
-	// the judge's exact input reconstructs by substitution). The Lead gains the dual
-	// backlink and moves to the human gate.
+	// what the CRM holds for the person, rendered as Markdown; criteria live in the Prompts
+	// table — NOTION_QUALIFY_PROMPT names the row, and changing the prompt means a new row,
+	// so a Decision's Prompt relation always points at the exact text the judge saw. The
+	// judge's input is System prompt + Instruction + Evidence — non-overlapping, stored
+	// once each, so it reconstructs by concatenation. The verdict is a Decision page —
+	// "<Person> - Lead Qualification", the CURRENT decision at this gate, converging on its
+	// title. The Lead gains the dual backlink and moves to the human gate; Accepted,
+	// Ground truth and Feedback are the human's — never written here.
 	qualify: async (profile: string) => {
 		const publicId = publicIdOf(profile);
 		const url = `https://www.linkedin.com/in/${publicId}`;
-		const person = await notion.read(ds("NOTION_PEOPLE_DS"), "LinkedIn URL", url);
+		const person = await notion.read(env("NOTION_PEOPLE_DS"), "LinkedIn URL", url);
 		const f = person.fields;
 		const evidence = ["Name", "Headline", "Location", "About", "Experiences"]
 			.filter((k) => f[k])
 			.map((k) => `### ${k}\n\n${f[k]}`)
 			.join("\n\n");
-		const [template, company, icp] = await Promise.all(
-			["prompts/qualify.md", "knowledge/company.md", "knowledge/icp.md"].map((p) =>
-				readFile(`agents/linkedin-leads/${p}`, "utf8")
-			)
-		);
-		const prompt = template.replace("{{company}}", company).replace("{{icp}}", icp);
-		const verdict = await gemini.generate<{ reasoning: string; decision: NonNullable<Decisions["Decision"]> }>(
-			prompt.replace("{{evidence}}", evidence),
+		const prompt = await notion.read(env("NOTION_PROMPTS_DS"), "Name", env("NOTION_QUALIFY_PROMPT"));
+		const [system, instruction] = ["System prompt", "Instruction"].map((k) => {
+			if (!prompt.fields[k]) throw new Error(`prompt "${env("NOTION_QUALIFY_PROMPT")}" has no ${k}`);
+			return String(prompt.fields[k]);
+		});
+		const verdict = await gemini.generate<{ reasoning: string; decision: string }>(
+			[system, instruction, `## Evidence\n\n${evidence}`].join("\n\n"),
 			{
 				type: "object",
 				required: ["reasoning", "decision"],
@@ -145,15 +146,15 @@ export const tools = {
 		);
 		const name = String(f.Name ?? publicId);
 		const lead: Leads = { Name: name, Person: [person.id], Status: "Qualification pending approval" };
-		const l = await notion.upsert(ds("NOTION_LEADS_DS"), lead, "Name");
+		const l = await notion.upsert(env("NOTION_LEADS_DS"), lead, "Name");
 		const d = await notion.upsert(
-			ds("NOTION_DECISIONS_DS"),
+			env("NOTION_DECISIONS_DS"),
 			{
 				Name: `${name} - Lead Qualification`,
 				Decision: verdict.decision,
 				Reasoning: verdict.reasoning,
 				Evidence: evidence,
-				Prompt: prompt,
+				Prompt: [prompt.id],
 				Lead: [l.id]
 			} satisfies Decisions,
 			"Name"
@@ -171,7 +172,7 @@ export const tools = {
 			...(companyId ? { Company: [companyId] } : {}),
 			Status: "To enrich"
 		};
-		const { id, url, created } = await notion.upsert(ds("NOTION_LEADS_DS"), lead, "Name");
+		const { id, url, created } = await notion.upsert(env("NOTION_LEADS_DS"), lead, "Name");
 		return { where: url, id, created };
 	}
 };

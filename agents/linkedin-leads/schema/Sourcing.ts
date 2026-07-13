@@ -2,7 +2,7 @@
 
 export interface Sourcing {
   Args?: string;
-  Key: string;
+  Name: string;
   /**
    * relation → 180ff6c9-e29d-4853-adf5-754948a20fe4
    */
