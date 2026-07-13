@@ -57,6 +57,11 @@ npm install
 npm run dev
 ```
 
+The verdict write-back needs the Notion integration's "Update content" capability plus
+two properties on the Decisions database — `Human verdict` (select) and `Feedback`
+(rich text) — and, since a verdict also moves the linked Lead, "Update content" on the
+Leads database too.
+
 ## Deploy
 
 ```sh

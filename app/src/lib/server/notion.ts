@@ -54,7 +54,9 @@ export const decisions = async (): Promise<Decision[]> => {
 	const res = await fetch(`${API}/data_sources/${env.NOTION_DECISIONS_DS}/query`, {
 		method: "POST",
 		headers,
-		body: JSON.stringify({ sorts: [{ timestamp: "last_edited_time", direction: "descending" }] })
+		body: JSON.stringify({
+			sorts: [{ timestamp: "last_edited_time", direction: "descending" }]
+		})
 	});
 	if (!res.ok) throw new Error(`Notion ${res.status}: ${await res.text()}`);
 	const { results } = (await res.json()) as {
@@ -73,19 +75,41 @@ export const decisions = async (): Promise<Decision[]> => {
 	});
 };
 
-// record(pageId, verdict, feedback) — write a human's review back onto the page:
-// "Human verdict" (a select) and, when given, "Feedback" (rich text). Idempotent by
-// nature — deciding the same card again overwrites the same two properties. Needs the
-// integration's "Update content" capability; those two properties must exist on the DB.
-export const record = async (pageId: string, verdict: "accepted" | "rejected", feedback: string) => {
-	const properties: Record<string, unknown> = {
-		"Human verdict": { select: { name: verdict === "accepted" ? "Accepted" : "Rejected" } },
-		...(feedback ? { Feedback: { rich_text: [{ text: { content: feedback } }] } } : {})
-	};
+const patch = async (pageId: string, properties: Record<string, unknown>) => {
 	const res = await fetch(`${API}/pages/${pageId}`, {
 		method: "PATCH",
 		headers,
 		body: JSON.stringify({ properties })
 	});
 	if (!res.ok) throw new Error(`Notion ${res.status}: ${await res.text()}`);
+};
+
+// record(pageId, verdict, feedback) — a judgment writes two facts. The verdict lands on
+// the Decision page ("Human verdict" select + optional "Feedback"): the audit record of
+// what the human decided. The pipeline move lands on the linked Lead ("Status"): accept
+// advances it to "To engage", reject to "Not qualified" — the enum's own next stage past
+// the approval gate. Idempotent: re-deciding overwrites the same properties. Needs the
+// integration's "Update content" capability on BOTH the Decisions and Leads databases.
+export const record = async (
+	pageId: string,
+	verdict: "accepted" | "rejected",
+	feedback: string
+) => {
+	const accepted = verdict === "accepted";
+	await patch(pageId, {
+		"Human verdict": { select: { name: accepted ? "Accepted" : "Rejected" } },
+		...(feedback ? { Feedback: { rich_text: [{ text: { content: feedback } }] } } : {})
+	});
+
+	const res = await fetch(`${API}/pages/${pageId}`, { headers });
+	if (!res.ok) throw new Error(`Notion ${res.status}: ${await res.text()}`);
+	const { properties } = (await res.json()) as {
+		properties: { Lead?: { relation: { id: string }[] } };
+	};
+	const status = accepted ? "To engage" : "Not qualified";
+	await Promise.all(
+		(properties.Lead?.relation ?? []).map((l) =>
+			patch(l.id, { Status: { select: { name: status } } })
+		)
+	);
 };
