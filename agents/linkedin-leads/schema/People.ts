@@ -2,6 +2,7 @@
 
 export interface People {
   About?: string;
+  Activity?: string;
   Connections?: number;
   Experiences?: string;
   Followers?: number;

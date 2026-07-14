@@ -43,6 +43,90 @@ export interface Education {
   }[];
 }
 
+export interface Posts {
+  posts: {
+    /**
+     * urn:li:activity:<id>, from the card's data-urn.
+     */
+    urn: string;
+    /**
+     * Post commentary text; null when the post is media-only.
+     */
+    text?: string | null;
+    /**
+     * Display name of the entry's author (the original poster, or the repost source).
+     */
+    author?: string | null;
+    /**
+     * Permalink built from the urn.
+     */
+    postUrl: string;
+    /**
+     * Repost count as rendered; null when none.
+     */
+    reposts?: string | null;
+    /**
+     * Comment count as rendered; null when none.
+     */
+    comments?: string | null;
+    /**
+     * Author's headline/subtitle as rendered.
+     */
+    headline?: string | null;
+    /**
+     * Relative age, e.g. '2mo', '1w'; for a repost, when it was reposted, not the original time.
+     */
+    postedAgo?: string | null;
+    /**
+     * Reaction count as rendered, e.g. '27'; null when none.
+     */
+    reactions?: string | null;
+    /**
+     * Who reposted it into this profile's feed; null on an original (non-repost) entry.
+     */
+    repostedBy?: string | null;
+    /**
+     * True when the entry wraps quoted content (repost with thoughts).
+     */
+    isQuoteReshare: boolean;
+  }[];
+}
+
+export interface Comments {
+  comments: {
+    /**
+     * The post the comment was made on (from the comment's data-id, not the feed-wrapper card urn).
+     */
+    post: {
+      url: string | null;
+      /**
+       * urn:li:activity:<postActivityId>.
+       */
+      urn: string | null;
+      text?: string | null;
+      author?: string | null;
+      postedAgo?: string | null;
+      authorHeadline?: string | null;
+    };
+    /**
+     * The owner's comment text (full; null if the comment is media-only).
+     */
+    text?: string | null;
+    /**
+     * Relative age of the comment, e.g. '49m', '1d', '1w'.
+     */
+    postedAgo?: string | null;
+    /**
+     * Reaction count on the comment as rendered, e.g. '2'; null when none.
+     */
+    reactions?: string | null;
+    /**
+     * Comment identity: urn:li:comment:(activity:<postActivityId>,<commentId>).
+     */
+    commentUrn: string;
+  }[];
+}
+
 export interface Company {
   name: string;
   phone?: string | null;

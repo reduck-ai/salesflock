@@ -7,7 +7,8 @@ import {
 	searchProfiles as lkSearchProfiles,
 	getProfile as lkGetProfile,
 	getCompany as lkGetCompany,
-	publicIdOf
+	publicIdOf,
+	type Profile
 } from "../../src/clients/lk.js";
 import * as notion from "../../src/clients/notion.js";
 import * as gemini from "../../src/clients/gemini.js";
@@ -27,6 +28,26 @@ const env = (name: string): string => {
 // A LinkedIn company's headquarters → a one-line HQ string, or undefined if it has none.
 const hq = (h: { city?: string | null; geographicArea?: string | null; country?: string | null } | null | undefined) =>
 	(h && [h.city, h.geographicArea, h.country].filter(Boolean).join(", ")) || undefined;
+
+// One line per item, tight enough to read as evidence. A repost shows who authored the
+// original; a comment shows the post it replied to. Truncated to keep the field skimmable.
+const clip = (s: string | null | undefined, n: number): string =>
+	!s ? "" : s.replace(/\s+/g, " ").trim().slice(0, n) + (s.length > n ? "…" : "");
+
+// The activity lens as Markdown: what the person posts and where they comment — the ICP's
+// "entrepreneurial, active on LinkedIn" signal. undefined when they do neither.
+const activity = (posts: Profile["posts"]["posts"], comments: Profile["comments"]["comments"]): string | undefined => {
+	const p = posts.map((x) => {
+		const repost = x.repostedBy && x.author && x.author !== x.repostedBy ? `↻ ${x.author}: ` : "";
+		const meta = [x.postedAgo, x.reactions && `${x.reactions} reactions`].filter(Boolean).join(" · ");
+		return `- ${meta ? meta + " — " : ""}${repost}${clip(x.text, 240) || "(no text)"}`;
+	});
+	const c = comments.map(
+		(x) => `- ${x.postedAgo ?? ""} on ${x.post.author ?? "?"}'s post: ${clip(x.text, 180)} — re: "${clip(x.post.text, 100)}"`
+	);
+	const out = [p.length && `#### Posts\n${p.join("\n")}`, c.length && `#### Comments\n${c.join("\n")}`].filter(Boolean);
+	return out.length ? out.join("\n\n") : undefined;
+};
 
 export const tools = {
 	// search — discover LinkedIn profiles via one Google run. Per hit: a Person stub
@@ -72,7 +93,7 @@ export const tools = {
 	// and move their Lead forward to "To qualify" (created there if the person never went
 	// through search: the state converges to reality). Name-keyed Lead, like put-lead.
 	enrich: async (profile: string) => {
-		const { publicId, card, experience } = await lkGetProfile(profile);
+		const { publicId, card, experience, posts, comments } = await lkGetProfile(profile);
 		const name = card.name ?? publicId;
 		const person: People = {
 			Name: name,
@@ -82,13 +103,27 @@ export const tools = {
 			"LinkedIn URL": `https://www.linkedin.com/in/${publicId}`,
 			Updated: new Date().toISOString(),
 			Experiences: experience.positions
-				.map((p) => [[p.title, p.company].filter(Boolean).join(" — "), p.dateRange].filter(Boolean).join(" · "))
-				.join("\n")
+				.map((p) => {
+					const head = [[p.title, p.company].filter(Boolean).join(" — "), p.dateRange, p.location]
+						.filter(Boolean)
+						.join(" · ");
+					return p.description ? `${head}\n${p.description}` : head;
+				})
+				.join("\n\n"),
+			Activity: activity(posts.posts, comments.comments)
 		};
 		const p = await notion.upsert(env("NOTION_PEOPLE_DS"), person, "LinkedIn URL");
 		const lead: Leads = { Name: name, Person: [p.id], Status: "To qualify" };
 		const l = await notion.upsert(env("NOTION_LEADS_DS"), lead, "Name");
-		return { person: p.url, lead: l.url, publicId, name, positions: experience.positions.length };
+		return {
+			person: p.url,
+			lead: l.url,
+			publicId,
+			name,
+			positions: experience.positions.length,
+			posts: posts.posts.length,
+			comments: comments.comments.length
+		};
 	},
 
 	// get-company — pull the LinkedIn company (one run), map to a Company, upsert (idempotent
@@ -124,7 +159,7 @@ export const tools = {
 		const url = `https://www.linkedin.com/in/${publicId}`;
 		const person = await notion.read(env("NOTION_PEOPLE_DS"), "LinkedIn URL", url);
 		const f = person.fields;
-		const evidence = ["Name", "Headline", "Location", "About", "Experiences"]
+		const evidence = ["Name", "Headline", "Location", "About", "Experiences", "Activity"]
 			.filter((k) => f[k])
 			.map((k) => `### ${k}\n\n${f[k]}`)
 			.join("\n\n");

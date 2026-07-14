@@ -7,18 +7,33 @@ import { run, type Args } from "./reduck.js";
 import { scripts } from "./lk.scripts.js";
 import { scripts as google } from "./google.scripts.js";
 import type { Search } from "./google.schema.js";
-import type { Card, Experience, Education, Company } from "./lk.schema.js";
+import type { Card, Experience, Education, Posts, Comments, Company } from "./lk.schema.js";
 
 // LinkedIn's profile scripts key off publicId — the /in/<publicId> slug. Accept a
 // full profile URL or a bare publicId.
 export const publicIdOf = (profile: string): string => profile.match(/\/in\/([^/?]+)/)?.[1] ?? profile;
 
+// Best-effort run for the activity lens: posts/comments are enrichment, not identity, and
+// their feeds are the slowest — a timeout there must never drop the whole profile. The
+// error is explicitly silenced (logged, not thrown); the caller gets an empty result.
+const tryRun = async <T>(addr: string, args: Args, fallback: T): Promise<T> => {
+	try {
+		return await run<T>(addr, args);
+	} catch (e) {
+		console.error(`activity ${addr} skipped (best-effort): ${(e as Error).message.split("\n")[0]}`);
+		return fallback;
+	}
+};
+
 // The assembled profile — each field is its script's contract output (see lk.schema.ts).
+// posts/comments are the activity lens: what the person publishes and where they engage.
 export interface Profile {
 	publicId: string;
 	card: Card;
 	experience: Experience;
 	education: Education;
+	posts: Posts;
+	comments: Comments;
 }
 
 // A Google-discovered profile stub: the canonical identity every downstream stage joins
@@ -58,8 +73,10 @@ export const searchProfiles = async (
 	return { script: google.search, args, hits };
 };
 
-// get_profile — the three profile calls (separate runs, threaded by publicId),
-// assembled into one record.
+// get_profile — the profile calls threaded by publicId, assembled into one record. Core
+// identity (card, experience, education) is fetched together and fails loud. The activity
+// lens (posts, comments) is fetched after — best-effort, so a slow feed yields empty
+// activity instead of losing the profile, and off the core's concurrency to ease contention.
 export const getProfile = async (profile: string): Promise<Profile> => {
 	const publicId = publicIdOf(profile);
 	const [card, experience, education] = await Promise.all([
@@ -67,7 +84,11 @@ export const getProfile = async (profile: string): Promise<Profile> => {
 		run<Experience>(scripts.experience, { publicId, count: 50 }),
 		run<Education>(scripts.education, { publicId })
 	]);
-	return { publicId, card, experience, education };
+	const [posts, comments] = await Promise.all([
+		tryRun<Posts>(scripts.posts, { publicId, count: 10 }, { posts: [] }),
+		tryRun<Comments>(scripts.comments, { publicId, count: 10 }, { comments: [] })
+	]);
+	return { publicId, card, experience, education, posts, comments };
 };
 
 // get_company_info — a single run (no composition), but the Lk client owns it so the

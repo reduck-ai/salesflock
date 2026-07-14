@@ -6,6 +6,8 @@ export interface Decisions {
   Evidence?: string;
   Feedback?: string;
   "Ground truth"?: string;
+  "Human verdict"?: "Accepted" | "Rejected";
+  "Include as example"?: boolean;
   /**
    * relation → e976116e-fcf0-42d4-bc16-99fa9c801e1c
    */
