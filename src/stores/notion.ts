@@ -10,6 +10,7 @@
 // `ntn` use the logged-in person.
 
 import { spawn } from "node:child_process";
+import type { Ref, Row, Store } from "./index.js";
 
 // Strip the integration token so `ntn` falls back to the personal keychain login.
 const ntnEnv = (() => {
@@ -212,14 +213,7 @@ const locate = async (
 	return { dsId, ds, page: results[0] };
 };
 
-// content, when given, is the page's body as Markdown — replaced wholesale on every
-// upsert, so the body converges exactly like the properties do.
-export const upsert = async (
-	model: string,
-	record: object,
-	keyProp: string,
-	content?: string
-): Promise<{ id: string; url: string; created: boolean }> => {
+export const upsert = async (model: string, record: object, keyProp: string): Promise<Ref> => {
 	const fields = record as Record<string, unknown>;
 	const { dsId, ds, page } = await locate(model, keyProp, fields[keyProp]);
 	const properties: Record<string, unknown> = {};
@@ -239,17 +233,12 @@ export const upsert = async (
 		({ id } = JSON.parse(await ntn(["api", "-X", "POST", "/v1/pages", "-d", JSON.stringify(body)])));
 		created = true;
 	}
-	if (content) await ntn(["pages", "edit", id, "--content", content]);
 	return { id, url: pageUrl(id), created };
 };
 
 // read(model, keyProp, value) — the one page whose keyProp equals value, flattened to
 // plain scalars. Loud when absent: in the face of a missing record, refuse to guess.
-export const read = async (
-	model: string,
-	keyProp: string,
-	value: unknown
-): Promise<{ id: string; fields: Record<string, string | number | boolean> }> => {
+export const read = async (model: string, keyProp: string, value: unknown): Promise<Row> => {
 	const { page } = await locate(model, keyProp, value);
 	if (!page) throw new Error(`notion.read: no "${model}" page with ${keyProp} = ${value}`);
 	const fields: Record<string, string | number | boolean> = {};
@@ -260,14 +249,15 @@ export const read = async (
 	return { id: page.id, fields };
 };
 
-// pageTitle(pageId) — a page's title property as plain text (its "Name"). Lets a caller
+// title(_model, id) — a record's title property as plain text (its "Name"). Lets a caller
 // derive one record's identity from another it points at (a Lead's name from its Person).
-export const pageTitle = async (pageId: string): Promise<string> => {
-	const page = JSON.parse(await ntn(["api", `/v1/pages/${pageId}`])) as {
+// A Notion page id already implies its model, so `model` is unused.
+export const title = async (_model: string, id: string): Promise<string> => {
+	const page = JSON.parse(await ntn(["api", `/v1/pages/${id}`])) as {
 		properties: Record<string, { type: string; title?: { plain_text: string }[] }>;
 	};
-	const title = Object.values(page.properties).find((p) => p.type === "title")?.title ?? [];
-	return title.map((t) => t.plain_text).join("");
+	const t = Object.values(page.properties).find((p) => p.type === "title")?.title ?? [];
+	return t.map((x) => x.plain_text).join("");
 };
 
 // describe(model) — a JSON Schema of the model's writable properties. The data source
@@ -294,3 +284,6 @@ export const describe = async (model: string): Promise<Record<string, unknown>> 
 		properties
 	};
 };
+
+// The Store this module implements (Notion is the full System of Record).
+export const notion: Store = { describe, upsert, read, title };

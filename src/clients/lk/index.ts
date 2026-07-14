@@ -3,11 +3,11 @@
 // (three scripts threaded by publicId, assembled into one record). Pure composition
 // over reduck.run — no persistence (the agent's tool writes to the CRM).
 
-import { run, type Args } from "./reduck.js";
-import { scripts } from "./lk.scripts.js";
-import { scripts as google } from "./google.scripts.js";
-import type { Search } from "./google.schema.js";
-import type { Card, Experience, Education, Posts, Comments, Company } from "./lk.schema.js";
+import { run, type Args } from "../reduck.js";
+import { scripts } from "./scripts.js";
+import { scripts as google } from "../google/scripts.js";
+import type { Search } from "../google/schema.js";
+import type { Card, Experience, Education, Posts, Comments, Company } from "./schema.js";
 
 // LinkedIn's profile scripts key off publicId — the /in/<publicId> slug. Accept a
 // full profile URL or a bare publicId.
@@ -37,14 +37,12 @@ export interface Profile {
 }
 
 // A Google-discovered profile stub: the canonical identity every downstream stage joins
-// on (publicId → normalized /in/ URL), plus the SERP's own rendering of the top card.
+// on (publicId → normalized /in/ URL), with name/headline parsed from the SERP title.
 export interface ProfileHit {
 	publicId: string;
 	profileUrl: string;
 	name: string;
 	headline?: string;
-	title: string;
-	snippet: string;
 }
 
 // search_profiles — one Google run, filtered to /in/ results. The SERP title renders as
@@ -65,9 +63,7 @@ export const searchProfiles = async (
 			publicId,
 			profileUrl: `https://www.linkedin.com/in/${publicId}`,
 			name: name.trim(),
-			headline: rest.join(" - ").trim() || undefined,
-			title: r.title,
-			snippet: r.snippet
+			headline: rest.join(" - ").trim() || undefined
 		};
 	});
 	return { script: google.search, args, hits };

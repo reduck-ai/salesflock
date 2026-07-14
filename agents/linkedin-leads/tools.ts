@@ -1,7 +1,7 @@
 // The tools that earn a TS layer — they do what `reduck run` alone can't: fetch a
 // LinkedIn entity and write it to the CRM, or set up a Lead by joining two records that
 // are already there. Fetch + compose lives in the Lk client; the record mapping — the
-// one model-specific bit — lives here, then goes to notion.upsert directly.
+// one model-specific bit — lives here, then goes to the store's upsert directly.
 
 import {
 	searchProfiles as lkSearchProfiles,
@@ -9,21 +9,19 @@ import {
 	getCompany as lkGetCompany,
 	publicIdOf,
 	type Profile
-} from "../../src/clients/lk.js";
-import * as notion from "../../src/clients/notion.js";
-import * as gemini from "../../src/clients/gemini.js";
+} from "../../src/clients/lk/index.js";
+import { getStore } from "../../src/stores/index.js";
+import * as gemini from "../../src/ai/gemini.js";
+import config from "./config.js";
 import type { People } from "./schema/People.js";
 import type { Companies } from "./schema/Companies.js";
 import type { Leads } from "./schema/Leads.js";
 import type { Sourcing } from "./schema/Sourcing.js";
 import type { Decisions } from "./schema/Decisions.js";
 
-// Required config, named once by env — a data source id, a prompt name. No default.
-const env = (name: string): string => {
-	const v = process.env[name];
-	if (!v) throw new Error(`set ${name}`);
-	return v;
-};
+// The store this agent writes to and the tables it addresses — both chosen in config.ts
+// (notion by default). No env: the model→table map and prompt rows all live in one file.
+const store = getStore(config.destination);
 
 // A LinkedIn company's headquarters → a one-line HQ string, or undefined if it has none.
 const hq = (h: { city?: string | null; geographicArea?: string | null; country?: string | null } | null | undefined) =>
@@ -68,11 +66,11 @@ export const tools = {
 				"LinkedIn URL": hit.profileUrl,
 				Updated: ranAt
 			};
-			const p = await notion.upsert(env("NOTION_PEOPLE_DS"), person, "LinkedIn URL");
+			const p = await store.upsert(config.models.People, person, "LinkedIn URL");
 			personIds.push(p.id);
 			if (p.created) {
 				const lead: Leads = { Name: hit.name, Person: [p.id], Status: "To enrich" };
-				await notion.upsert(env("NOTION_LEADS_DS"), lead, "Name");
+				await store.upsert(config.models.Leads, lead, "Name");
 			}
 			out.push({ publicId: hit.publicId, name: hit.name, person: p.url, created: p.created });
 		}
@@ -84,7 +82,7 @@ export const tools = {
 			"Ran at": ranAt,
 			People: personIds
 		};
-		await notion.upsert(env("NOTION_SOURCING_DS"), sourcing, "Name");
+		await store.upsert(config.models.Sourcing, sourcing, "Name");
 		return out;
 	},
 
@@ -112,9 +110,9 @@ export const tools = {
 				.join("\n\n"),
 			Activity: activity(posts.posts, comments.comments)
 		};
-		const p = await notion.upsert(env("NOTION_PEOPLE_DS"), person, "LinkedIn URL");
+		const p = await store.upsert(config.models.People, person, "LinkedIn URL");
 		const lead: Leads = { Name: name, Person: [p.id], Status: "To qualify" };
-		const l = await notion.upsert(env("NOTION_LEADS_DS"), lead, "Name");
+		const l = await store.upsert(config.models.Leads, lead, "Name");
 		return {
 			person: p.url,
 			lead: l.url,
@@ -141,13 +139,13 @@ export const tools = {
 			Founded: c.foundedYear ?? undefined,
 			HQ: hq(c.headquarters)
 		};
-		const { id, url, created } = await notion.upsert(env("NOTION_COMPANIES_DS"), row, "LinkedIn URL");
+		const { id, url, created } = await store.upsert(config.models.Companies, row, "LinkedIn URL");
 		return { where: url, id, created, companyId: c.companyId, name: c.name };
 	},
 
 	// qualify — the judgment: a pure function of frozen context, never a fetch. Evidence is
 	// what the CRM holds for the person, rendered as Markdown; criteria live in the Prompts
-	// table — NOTION_QUALIFY_PROMPT names the row, and changing the prompt means a new row,
+	// table — config.prompts.qualify names the row, and changing the prompt means a new row,
 	// so a Decision's Prompt relation always points at the exact text the judge saw. The
 	// judge's input is System prompt + Instruction + Evidence — non-overlapping, stored
 	// once each, so it reconstructs by concatenation. The verdict is a Decision page —
@@ -157,15 +155,15 @@ export const tools = {
 	qualify: async (profile: string) => {
 		const publicId = publicIdOf(profile);
 		const url = `https://www.linkedin.com/in/${publicId}`;
-		const person = await notion.read(env("NOTION_PEOPLE_DS"), "LinkedIn URL", url);
+		const person = await store.read(config.models.People, "LinkedIn URL", url);
 		const f = person.fields;
 		const evidence = ["Name", "Headline", "Location", "About", "Experiences", "Activity"]
 			.filter((k) => f[k])
 			.map((k) => `### ${k}\n\n${f[k]}`)
 			.join("\n\n");
-		const prompt = await notion.read(env("NOTION_PROMPTS_DS"), "Name", env("NOTION_QUALIFY_PROMPT"));
+		const prompt = await store.read(config.models.Prompts, "Name", config.prompts.qualify);
 		const [system, instruction] = ["System prompt", "Instruction"].map((k) => {
-			if (!prompt.fields[k]) throw new Error(`prompt "${env("NOTION_QUALIFY_PROMPT")}" has no ${k}`);
+			if (!prompt.fields[k]) throw new Error(`prompt "${config.prompts.qualify}" has no ${k}`);
 			return String(prompt.fields[k]);
 		});
 		const verdict = await gemini.generate<{ reasoning: string; decision: string }>(
@@ -181,9 +179,9 @@ export const tools = {
 		);
 		const name = String(f.Name ?? publicId);
 		const lead: Leads = { Name: name, Person: [person.id], Status: "Qualification pending approval" };
-		const l = await notion.upsert(env("NOTION_LEADS_DS"), lead, "Name");
-		const d = await notion.upsert(
-			env("NOTION_DECISIONS_DS"),
+		const l = await store.upsert(config.models.Leads, lead, "Name");
+		const d = await store.upsert(
+			config.models.Decisions,
 			{
 				Name: `${name} - Lead Qualification`,
 				Decision: verdict.decision,
@@ -202,12 +200,12 @@ export const tools = {
 	// when known). Idempotent on Name. personId/companyId are the ids the get-* tools return.
 	putLead: async ({ personId, companyId }: { personId: string; companyId?: string }) => {
 		const lead: Leads = {
-			Name: await notion.pageTitle(personId),
+			Name: await store.title(config.models.People, personId),
 			Person: [personId],
 			...(companyId ? { Company: [companyId] } : {}),
 			Status: "To enrich"
 		};
-		const { id, url, created } = await notion.upsert(env("NOTION_LEADS_DS"), lead, "Name");
+		const { id, url, created } = await store.upsert(config.models.Leads, lead, "Name");
 		return { where: url, id, created };
 	}
 };

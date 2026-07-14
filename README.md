@@ -35,9 +35,10 @@ says what it does. If a fact can drift, it belongs in code, not here.
    the criteria change and fans out in parallel. Shared context is computed once and
    frozen, then handed to each per-item call; only the verdict is per-item.
 
-8. **The state seam is yours; the store is theirs.** Agents write through an adapter
-   interface; the destination (JSONL, Notion, …) is chosen by config, not code, and ships
-   with a default so an agent runs out of the box.
+8. **The state seam is yours; the store is theirs.** Agents write through the `Store`
+   interface (`src/stores/`); the destination is chosen in the agent's `config.ts` (default
+   `notion`, so it runs out of the box), never in code. Today Notion is the full store;
+   HubSpot implements the setup half (`describe`) with its write path stubbed until needed.
 
 9. **Stage, and stop early.** Work proceeds in stages; stop at the first stage that
    answers the question — don't enrich what you won't use.

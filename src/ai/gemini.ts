@@ -5,8 +5,6 @@
 const MODEL = process.env.GEMINI_MODEL ?? "gemini-3.5-flash";
 const API = "https://generativelanguage.googleapis.com/v1beta/models";
 
-export const model = (): string => MODEL;
-
 // generate(prompt, schema) — the prompt in, the schema-shaped JSON out.
 export const generate = async <T>(prompt: string, schema: object): Promise<T> => {
 	const key = process.env.GEMINI_API_KEY;
