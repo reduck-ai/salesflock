@@ -12,6 +12,7 @@ import {
 } from "../../src/clients/lk/index.js";
 import { getStore } from "../../src/stores/index.js";
 import * as gemini from "../../src/ai/gemini.js";
+import { validate, type RawStatement, type Statement } from "../../src/anchor.js";
 import config from "./config.js";
 import type { People } from "./schema/People.js";
 import type { Companies } from "./schema/Companies.js";
@@ -147,11 +148,15 @@ export const tools = {
 	// what the CRM holds for the person, rendered as Markdown; criteria live in the Prompts
 	// table — config.prompts.qualify names the row, and changing the prompt means a new row,
 	// so a Decision's Prompt relation always points at the exact text the judge saw. The
-	// judge's input is System prompt + Instruction + Evidence — non-overlapping, stored
-	// once each, so it reconstructs by concatenation. The verdict is a Decision page —
+	// judge's input is System prompt + Instruction + Evidence — non-overlapping, stored once
+	// each, so it reconstructs by concatenation. It returns a free-form Markdown verdict and
+	// a list of statements, each quoting the evidence verbatim; `anchor.validate` resolves
+	// every quote to a unique span in the frozen evidence (one retry, then loud) so the
+	// review UI can highlight each claim's proof. The verdict lands on a Decision page —
 	// "<Person> - Lead Qualification", the CURRENT decision at this gate, converging on its
-	// title. The Lead gains the dual backlink and moves to the human gate; Accepted,
-	// Ground truth and Feedback are the human's — never written here.
+	// title: `Decision` holds the Markdown, `Reasoning` the resolved statements as JSON. The
+	// Lead gains the dual backlink and moves to the human gate; Accepted, Ground truth and
+	// Feedback are the human's — never written here.
 	qualify: async (profile: string) => {
 		const publicId = publicIdOf(profile);
 		const url = `https://www.linkedin.com/in/${publicId}`;
@@ -166,17 +171,41 @@ export const tools = {
 			if (!prompt.fields[k]) throw new Error(`prompt "${config.prompts.qualify}" has no ${k}`);
 			return String(prompt.fields[k]);
 		});
-		const verdict = await gemini.generate<{ reasoning: string; decision: string }>(
-			[system, instruction, `## Evidence\n\n${evidence}`].join("\n\n"),
-			{
-				type: "object",
-				required: ["reasoning", "decision"],
-				properties: {
-					reasoning: { type: "string" },
-					decision: { type: "string", enum: ["Qualified", "Not qualified"] }
+
+		// The judge quotes the evidence; we hold it to that. A paraphrase makes a quote
+		// unresolvable, so validate throws — retry once (temperature 0 varies little, but the
+		// error text nudges it), then fail loud rather than store a dead anchor.
+		const input = [system, instruction, `## Evidence\n\n${evidence}`].join("\n\n");
+		const schema = {
+			type: "object",
+			required: ["verdict", "statements"],
+			properties: {
+				verdict: { type: "string", description: "the verdict as Markdown — an H1 headline; inline HTML allowed for colour" },
+				statements: {
+					type: "array",
+					items: {
+						type: "object",
+						required: ["claim", "quotes"],
+						properties: {
+							claim: { type: "string" },
+							quotes: { type: "array", items: { type: "string" }, description: "verbatim substrings of the evidence backing the claim" }
+						}
+					}
 				}
 			}
-		);
+		};
+		let verdict = "";
+		let statements: Statement[] | undefined;
+		for (let attempt = 1; !statements; attempt++) {
+			const out = await gemini.generate<{ verdict: string; statements: RawStatement[] }>(input, schema);
+			try {
+				statements = validate(evidence, out.statements);
+				verdict = out.verdict;
+			} catch (e) {
+				if (attempt >= 2) throw e;
+			}
+		}
+
 		const name = String(f.Name ?? publicId);
 		const lead: Leads = { Name: name, Person: [person.id], Status: "Qualification pending approval" };
 		const l = await store.upsert(config.models.Leads, lead, "Name");
@@ -184,15 +213,15 @@ export const tools = {
 			config.models.Decisions,
 			{
 				Name: `${name} - Lead Qualification`,
-				Decision: verdict.decision,
-				Reasoning: verdict.reasoning,
+				Decision: verdict,
+				Reasoning: JSON.stringify(statements),
 				Evidence: evidence,
 				Prompt: [prompt.id],
 				Lead: [l.id]
 			} satisfies Decisions,
 			"Name"
 		);
-		return { decision: verdict.decision, reasoning: verdict.reasoning, where: d.url };
+		return { verdict, claims: statements.map((s) => s.claim), where: d.url };
 	},
 
 	// put-lead — the join: a Lead is a person, so it needs only that person; its Name is

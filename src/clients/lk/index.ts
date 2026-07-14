@@ -70,17 +70,18 @@ export const searchProfiles = async (
 };
 
 // get_profile — the profile calls threaded by publicId, assembled into one record. Core
-// identity (card, experience, education) is fetched together and fails loud. The activity
-// lens (posts, comments) is fetched after — best-effort, so a slow feed yields empty
-// activity instead of losing the profile, and off the core's concurrency to ease contention.
+// identity is card + experience, fetched together and fails loud. Everything else is
+// best-effort: education (many profiles list none — its script times out waiting for a
+// school link that never appears) and the activity lens (posts, comments — slow feeds), so
+// a missing section yields empty instead of losing the whole profile.
 export const getProfile = async (profile: string): Promise<Profile> => {
 	const publicId = publicIdOf(profile);
-	const [card, experience, education] = await Promise.all([
+	const [card, experience] = await Promise.all([
 		run<Card>(scripts.card, { publicId }),
-		run<Experience>(scripts.experience, { publicId, count: 50 }),
-		run<Education>(scripts.education, { publicId })
+		run<Experience>(scripts.experience, { publicId, count: 50 })
 	]);
-	const [posts, comments] = await Promise.all([
+	const [education, posts, comments] = await Promise.all([
+		tryRun<Education>(scripts.education, { publicId }, { education: [] }),
 		tryRun<Posts>(scripts.posts, { publicId, count: 10 }, { posts: [] }),
 		tryRun<Comments>(scripts.comments, { publicId, count: 10 }, { comments: [] })
 	]);

@@ -32,3 +32,29 @@ export interface Judgment {
 	verdict: Verdict;
 	feedback: string;
 }
+
+// A quote located unambiguously in the evidence — W3C TextQuoteSelector shape. The judge's
+// quotes are resolved to these at qualify time (see salesflock/src/anchor.ts); prefix/suffix
+// carry only when the quote repeats.
+export interface Selector {
+	exact: string;
+	prefix?: string;
+	suffix?: string;
+}
+
+// One reasoning statement: a claim and the evidence spans that back it.
+export interface Statement {
+	claim: string;
+	quotes: Selector[];
+}
+
+// A richer card for a judgment that cites evidence: a free-form markdown verdict, the
+// reasoning as claim→proof statements, and the frozen evidence markdown the claims point
+// into. The review screen renders this; the flat CardModel above stays for simpler subjects.
+export interface EvidencedJudgment {
+	id: string; // stable key; what a Judgment refers back to
+	href?: string; // the source record (the Notion Decision page)
+	verdict: string; // markdown — an H1 headline, colour inline
+	statements: Statement[];
+	evidence: string; // markdown — frozen snapshot the quotes resolve against
+}

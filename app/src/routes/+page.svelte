@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Button } from "$lib/components/ui/button/index.js";
-	import CardStack from "$lib/cards/CardStack.svelte";
+	import JudgmentStack from "$lib/cards/JudgmentStack.svelte";
 	import type { Judgment } from "$lib/cards/types";
 
 	let { data } = $props();
@@ -35,7 +35,7 @@
 		{/if}
 	</main>
 {:else}
-	<main class="mx-auto max-w-xl space-y-6 p-8">
+	<main class="mx-auto max-w-3xl space-y-5 p-6">
 		<header class="flex items-center justify-between">
 			<h1 class="text-2xl font-semibold">Decisions</h1>
 			<form method="POST" action="?/signout">
@@ -43,6 +43,6 @@
 			</form>
 		</header>
 
-		<CardStack cards={data.cards} onjudge={judge} />
+		<JudgmentStack judgments={data.judgments} onjudge={judge} />
 	</main>
 {/if}
