@@ -13,6 +13,7 @@ import {
 import { getStore } from "../../src/stores/index.js";
 import * as gemini from "../../src/ai/gemini.js";
 import { validate, type RawStatement, type Statement } from "../../src/anchor.js";
+import { Ajv } from "ajv";
 import config from "./config.js";
 import type { People } from "./schema/People.js";
 import type { Companies } from "./schema/Companies.js";
@@ -29,24 +30,51 @@ const hq = (h: { city?: string | null; geographicArea?: string | null; country?:
 	(h && [h.city, h.geographicArea, h.country].filter(Boolean).join(", ")) || undefined;
 
 // One line per item, tight enough to read as evidence. A repost shows who authored the
-// original; a comment shows the post it replied to. Truncated to keep the field skimmable.
-const clip = (s: string | null | undefined, n: number): string =>
-	!s ? "" : s.replace(/\s+/g, " ").trim().slice(0, n) + (s.length > n ? "…" : "");
+// original; a comment shows the post it replied to. Full text — the judge sees everything;
+// the store's write guard fails loud if the assembled evidence overruns Notion's read cap.
+const norm = (s: string | null | undefined): string => (s ? s.replace(/\s+/g, " ").trim() : "");
 
 // The activity lens as Markdown: what the person posts and where they comment — the ICP's
-// "entrepreneurial, active on LinkedIn" signal. undefined when they do neither.
+// "entrepreneurial, active on LinkedIn" signal. undefined when they do neither. Each line
+// carries the post's permalink so the judge can ground a comment_post next step (its postUrl):
+// an authored post always has one; a commented-on post's url is best-effort (omitted when null).
 const activity = (posts: Profile["posts"]["posts"], comments: Profile["comments"]["comments"]): string | undefined => {
 	const p = posts.map((x) => {
 		const repost = x.repostedBy && x.author && x.author !== x.repostedBy ? `↻ ${x.author}: ` : "";
 		const meta = [x.postedAgo, x.reactions && `${x.reactions} reactions`].filter(Boolean).join(" · ");
-		return `- ${meta ? meta + " — " : ""}${repost}${clip(x.text, 240) || "(no text)"}`;
+		return `- ${meta ? meta + " — " : ""}${repost}${norm(x.text) || "(no text)"} (${x.postUrl})`;
 	});
-	const c = comments.map(
-		(x) => `- ${x.postedAgo ?? ""} on ${x.post.author ?? "?"}'s post: ${clip(x.text, 180)} — re: "${clip(x.post.text, 100)}"`
-	);
+	const c = comments.map((x) => {
+		const on = x.post.url ? ` (${x.post.url})` : "";
+		return `- ${x.postedAgo ?? ""} on ${x.post.author ?? "?"}'s post: ${norm(x.text)} — re: "${norm(x.post.text)}"${on}`;
+	});
 	const out = [p.length && `#### Posts\n${p.join("\n")}`, c.length && `#### Comments\n${c.join("\n")}`].filter(Boolean);
 	return out.length ? out.join("\n\n") : undefined;
 };
+
+// The judge's response envelope: the domain `output` — its shape declared by the Prompt's
+// Output schema — plus `statements`, the fixed claim→evidence anchoring layer every evidenced
+// judgment carries. The verbatim-quote contract lives here, in code, not in the per-agent prompt.
+const STATEMENTS = {
+	type: "array",
+	description: "reasoning as claim→proof: one entry per point that decided the verdict",
+	items: {
+		type: "object",
+		required: ["claim", "quotes"],
+		properties: {
+			claim: { type: "string", description: "one short sentence tying the evidence to a criterion" },
+			quotes: {
+				type: "array",
+				items: { type: "string" },
+				description:
+					"the exact text from the Evidence backing the claim, copied verbatim — character-for-character substrings, " +
+					"no paraphrase, no ellipses; the shortest that proves the point, one per distinct proof. Empty when the criterion can't be verified."
+			}
+		}
+	}
+} as const;
+
+const ajv = new Ajv();
 
 export const tools = {
 	// search — discover LinkedIn profiles via one Google run. Per hit: a Person stub
@@ -144,63 +172,72 @@ export const tools = {
 		return { where: url, id, created, companyId: c.companyId, name: c.name };
 	},
 
-	// qualify — the judgment: a pure function of frozen context, never a fetch. Evidence is
-	// what the CRM holds for the person, rendered as Markdown; criteria live in the Prompts
-	// table — config.prompts.qualify names the row, and changing the prompt means a new row,
-	// so a Decision's Prompt relation always points at the exact text the judge saw. The
-	// judge's input is System prompt + Instruction + Evidence — non-overlapping, stored once
-	// each, so it reconstructs by concatenation. It returns a free-form Markdown verdict and
-	// a list of statements, each quoting the evidence verbatim; `anchor.validate` resolves
-	// every quote to a unique span in the frozen evidence (one retry, then loud) so the
-	// review UI can highlight each claim's proof. The verdict lands on a Decision page —
-	// "<Person> - Lead Qualification", the CURRENT decision at this gate, converging on its
-	// title: `Decision` holds the Markdown, `Reasoning` the resolved statements as JSON. The
-	// Lead gains the dual backlink and moves to the human gate; Accepted, Ground truth and
-	// Feedback are the human's — never written here.
+	// qualify — the judgment: a pure function of frozen context, never a fetch. The Prompt is
+	// the judgment CONTRACT (config.prompts.qualify names the row): System prompt + Instruction
+	// (the criteria) + an Input schema (which Person fields are evidence) + an Output schema (the
+	// verdict's shape). Changing any of them means a new row, so a Decision's Prompt relation
+	// always points at the exact contract the judge saw. The Input is the Person projected onto
+	// the Input schema and rendered as Markdown; the judge returns { output ⊨ Output schema,
+	// statements }, each statement quoting the evidence verbatim. Both ends are held to their
+	// contract BEFORE the single write — ajv on input and output, anchor.validate on the quotes
+	// (one retry, then loud) — so no Decision is ever persisted with input, output, or reasoning
+	// that disagrees with the contract. The result lands on a Decision page — "<Person> - Lead
+	// Qualification", the CURRENT decision at this gate: `Output` holds the structured verdict
+	// as JSON, `Reasoning` the resolved statements, `Input` the frozen evidence. The Lead gains
+	// the dual backlink and moves to the human gate; Accepted, Ground truth and Feedback are the
+	// human's — never written here.
 	qualify: async (profile: string) => {
 		const publicId = publicIdOf(profile);
 		const url = `https://www.linkedin.com/in/${publicId}`;
 		const person = await store.read(config.models.People, "LinkedIn URL", url);
 		const f = person.fields;
-		const evidence = ["Name", "Headline", "Location", "About", "Experiences", "Activity"]
-			.filter((k) => f[k])
-			.map((k) => `### ${k}\n\n${f[k]}`)
-			.join("\n\n");
+
 		const prompt = await store.read(config.models.Prompts, "Name", config.prompts.qualify);
-		const [system, instruction] = ["System prompt", "Instruction"].map((k) => {
+		const [system, instruction] = (["System prompt", "Instruction"] as const).map((k) => {
 			if (!prompt.fields[k]) throw new Error(`prompt "${config.prompts.qualify}" has no ${k}`);
 			return String(prompt.fields[k]);
 		});
-
-		// The judge quotes the evidence; we hold it to that. A paraphrase makes a quote
-		// unresolvable, so validate throws — retry once (temperature 0 varies little, but the
-		// error text nudges it), then fail loud rather than store a dead anchor.
-		const input = [system, instruction, `## Evidence\n\n${evidence}`].join("\n\n");
-		const schema = {
-			type: "object",
-			required: ["verdict", "statements"],
-			properties: {
-				verdict: { type: "string", description: "the verdict as Markdown — an H1 headline; inline HTML allowed for colour" },
-				statements: {
-					type: "array",
-					items: {
-						type: "object",
-						required: ["claim", "quotes"],
-						properties: {
-							claim: { type: "string" },
-							quotes: { type: "array", items: { type: "string" }, description: "verbatim substrings of the evidence backing the claim" }
-						}
-					}
-				}
+		// The contract's shape. Parse loud — a malformed schema is a broken contract, not a guess.
+		const [inputSchema, outputSchema] = (["Input schema", "Output schema"] as const).map((k) => {
+			if (!prompt.fields[k]) throw new Error(`prompt "${config.prompts.qualify}" has no ${k}`);
+			try {
+				return JSON.parse(String(prompt.fields[k])) as Record<string, unknown>;
+			} catch (e) {
+				throw new Error(`prompt "${config.prompts.qualify}" ${k} is not valid JSON: ${(e as Error).message}`);
 			}
+		});
+
+		// Project the Person onto the Input schema's fields — the schema names the evidence — and
+		// hold the projection to that contract before spending a judge call: evidence must respect it.
+		const keys = Object.keys((inputSchema.properties as Record<string, unknown> | undefined) ?? {});
+		const present = keys.filter((k) => f[k]);
+		const input = Object.fromEntries(present.map((k) => [k, String(f[k])]));
+		if (!ajv.validate(inputSchema, input))
+			throw new Error(`evidence violates Input schema: ${ajv.errorsText(ajv.errors)}`);
+		const evidence = present.map((k) => `### ${k}\n\n${f[k]}`).join("\n\n");
+
+		// The judge returns { output ⊨ Output schema, statements }. responseSchema steers the
+		// model; ajv + anchor.validate then GUARANTEE the persisted artifact — an output that
+		// breaks its schema or a quote that doesn't resolve retries once (temperature 0 varies
+		// little, but the error nudges it), then fails loud rather than store an inconsistent Decision.
+		const judgePrompt = [system, instruction, `## Evidence\n\n${evidence}`].join("\n\n");
+		const responseSchema = {
+			type: "object",
+			required: ["output", "statements"],
+			properties: { output: outputSchema, statements: STATEMENTS }
 		};
-		let verdict = "";
+		let output: Record<string, unknown> | undefined;
 		let statements: Statement[] | undefined;
 		for (let attempt = 1; !statements; attempt++) {
-			const out = await gemini.generate<{ verdict: string; statements: RawStatement[] }>(input, schema);
+			const res = await gemini.generate<{ output: Record<string, unknown>; statements: RawStatement[] }>(
+				judgePrompt,
+				responseSchema
+			);
 			try {
-				statements = validate(evidence, out.statements);
-				verdict = out.verdict;
+				if (!ajv.validate(outputSchema, res.output))
+					throw new Error(`output violates Output schema: ${ajv.errorsText(ajv.errors)}`);
+				statements = validate(evidence, res.statements);
+				output = res.output;
 			} catch (e) {
 				if (attempt >= 2) throw e;
 			}
@@ -213,15 +250,15 @@ export const tools = {
 			config.models.Decisions,
 			{
 				Name: `${name} - Lead Qualification`,
-				Decision: verdict,
+				Output: JSON.stringify(output),
 				Reasoning: JSON.stringify(statements),
-				Evidence: evidence,
+				Input: evidence,
 				Prompt: [prompt.id],
 				Lead: [l.id]
 			} satisfies Decisions,
 			"Name"
 		);
-		return { verdict, claims: statements.map((s) => s.claim), where: d.url };
+		return { output, claims: statements.map((s) => s.claim), where: d.url };
 	},
 
 	// put-lead — the join: a Lead is a person, so it needs only that person; its Name is

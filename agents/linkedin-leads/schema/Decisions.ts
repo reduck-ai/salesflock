@@ -2,17 +2,17 @@
 
 export interface Decisions {
   Accepted?: "Accepted" | "Rejected";
-  Decision?: string;
-  Evidence?: string;
   Feedback?: string;
   "Ground truth"?: string;
   "Human verdict"?: "Accepted" | "Rejected";
   "Include as example"?: boolean;
+  Input?: string;
   /**
    * relation → e976116e-fcf0-42d4-bc16-99fa9c801e1c
    */
   Lead?: string[];
   Name: string;
+  Output?: string;
   /**
    * relation → 942c4138-c9db-404c-9ae0-472f8edb0712
    */
