@@ -1,0 +1,5 @@
+# salesflock is a git submodule and installs in isolation from the superproject.
+# This file makes salesflock its own pnpm workspace root, so pnpm stops walking up
+# and never attaches to (or pollutes) the parent's pnpm-lock.yaml. No members —
+# salesflock is a single package, installed with a plain `pnpm install`.
+packages: []
