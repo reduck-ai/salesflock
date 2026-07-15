@@ -2,7 +2,7 @@
 	// One evidenced judgment: the evidence is the page (it carries who), the judgment floats
 	// over it like a composer. Verdict first, reasoning as claims — hover a claim to light up
 	// the exact evidence it cites, click to scroll there. Note is progressive (pencil), the
-	// panel collapses to verdict + actions, and A/R decide while ←/→ navigate. Presentational:
+	// panel collapses to just its handle, and A/R decide while ←/→ navigate. Presentational:
 	// it owns feedback (resets on remount) and emits a verdict; meaning is the caller's.
 	import Markdown from "$lib/components/Markdown.svelte";
 	import type { EvidencedJudgment, Verdict } from "./types";
@@ -26,12 +26,11 @@
 	let noting = $state(false);
 	let collapsed = $state(false);
 	let evEl = $state<HTMLElement>();
+	let dockEl = $state<HTMLElement>();
 	let noteEl = $state<HTMLInputElement>();
 
 	// every quote, tagged with its statement index — one hover lights all of a claim's proof
-	const marks = $derived(
-		judgment.statements.flatMap((s, i) => s.quotes.map((sel) => ({ si: i, sel })))
-	);
+	const marks = $derived(judgment.statements.flatMap((s, i) => s.quotes.map((sel) => ({ si: i, sel }))));
 
 	// toggle .active on the marks of the hovered/clicked claim (marks live in {@html}, so
 	// we reach them through the container ref rather than reactive markup)
@@ -43,9 +42,13 @@
 		);
 	});
 
+	// center the proof in the band above the panel — viewport center may sit behind it
 	const goto = (i: number) => {
 		activeSi = i;
-		evEl?.querySelector(`mark.hl[data-si="${i}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+		const m = evEl?.querySelector(`mark.hl[data-si="${i}"]`);
+		if (!m || !dockEl) return;
+		const band = dockEl.getBoundingClientRect().top;
+		window.scrollBy({ top: m.getBoundingClientRect().top - band / 2, behavior: "smooth" });
 	};
 	const decide = (v: Verdict) => onjudge?.(v, feedback.trim());
 	const toggleNote = () => {
@@ -84,46 +87,83 @@
 <div class="veil"></div>
 
 <div class="dock">
-	<div class="judgment" class:collapsed>
-		<button class="handle" title="Collapse" aria-label="Collapse panel" onclick={() => (collapsed = !collapsed)}>
-			<svg class="chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6" /></svg>
+	<div class="judgment" class:collapsed bind:this={dockEl}>
+		<button
+			class="handle"
+			title="Collapse"
+			aria-label="Collapse panel"
+			onclick={() => (collapsed = !collapsed)}
+		>
+			<svg
+				class="chev"
+				width="18"
+				height="18"
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="2.2"
+				stroke-linecap="round"
+				stroke-linejoin="round"><path d="m6 9 6 6 6-6" /></svg
+			>
 		</button>
 
-		<div class="head">
-			<div class="verdict"><Markdown source={judgment.verdict} /></div>
-			<button class="icon" class:on={noting} title="Add a note" aria-label="Add a note" onclick={toggleNote}>
-				<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>
-			</button>
-		</div>
-
-		<div class="why-wrap">
-			<div class="why">
-				{#each judgment.statements as s, i (i)}
+		<div class="body">
+			<div>
+				<div class="head">
+					<div class="verdict"><Markdown source={judgment.verdict} /></div>
 					<button
-						class="claim"
-						data-si={i}
-						onmouseenter={() => (activeSi = i)}
-						onmouseleave={() => (activeSi = null)}
-						onfocus={() => (activeSi = i)}
-						onblur={() => (activeSi = null)}
-						onclick={() => goto(i)}
+						class="icon"
+						class:on={noting}
+						title="Add a note"
+						aria-label="Add a note"
+						onclick={toggleNote}
 					>
-						{s.claim}
-						{#if s.quotes.length}<span class="see">see proof ↗</span>{/if}
+						<svg
+							width="15"
+							height="15"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg
+						>
 					</button>
-				{/each}
-			</div>
-		</div>
-
-		<div class="acts-wrap">
-			<div class="note-zone" class:open={noting}>
-				<div>
-					<input bind:this={noteEl} bind:value={feedback} class="note" placeholder="Optional note — why you (dis)agree" />
 				</div>
-			</div>
-			<div class="acts">
-				<button class="btn reject" onclick={() => decide("rejected")}>Reject <kbd>R</kbd></button>
-				<button class="btn accept" onclick={() => decide("accepted")}>Accept <kbd>A</kbd></button>
+
+				<div class="why">
+					{#each judgment.statements as s, i (i)}
+						<button
+							class="claim"
+							data-si={i}
+							onmouseenter={() => (activeSi = i)}
+							onmouseleave={() => (activeSi = null)}
+							onfocus={() => (activeSi = i)}
+							onblur={() => (activeSi = null)}
+							onclick={() => goto(i)}
+						>
+							{s.claim}
+						</button>
+					{/each}
+				</div>
+
+				<div class="acts-wrap">
+					<div class="note-zone" class:open={noting}>
+						<div>
+							<input
+								bind:this={noteEl}
+								bind:value={feedback}
+								class="note"
+								placeholder="Optional note — why you (dis)agree"
+							/>
+						</div>
+					</div>
+					<div class="acts">
+						<button class="btn reject" onclick={() => decide("rejected")}>Reject <kbd>R</kbd></button>
+						<button class="btn accept" onclick={() => decide("accepted")}>Accept <kbd>A</kbd></button>
+					</div>
+				</div>
 			</div>
 		</div>
 	</div>
@@ -215,12 +255,7 @@
 	}
 
 	.handle {
-		position: absolute;
-		top: 0;
-		left: 50%;
-		transform: translateX(-50%);
-		z-index: 2;
-		width: 56px;
+		width: 100%;
 		height: 22px;
 		border: none;
 		background: transparent;
@@ -239,11 +274,24 @@
 		transform: rotate(180deg);
 	}
 
+	.body {
+		display: grid;
+		grid-template-rows: 1fr;
+		transition: grid-template-rows 0.24s ease;
+	}
+	.judgment.collapsed .body {
+		grid-template-rows: 0fr;
+	}
+	.body > div {
+		overflow: hidden;
+		min-width: 0;
+	}
+
 	.head {
 		display: flex;
 		align-items: center;
 		gap: 12px;
-		padding: 18px 18px 8px;
+		padding: 4px 18px 8px;
 	}
 	.verdict {
 		flex: 1;
@@ -279,16 +327,7 @@
 		border-color: transparent;
 	}
 
-	.why-wrap {
-		display: grid;
-		grid-template-rows: 1fr;
-		transition: grid-template-rows 0.24s ease;
-	}
-	.judgment.collapsed .why-wrap {
-		grid-template-rows: 0fr;
-	}
 	.why {
-		overflow: hidden;
 		padding: 0 18px 12px;
 		display: flex;
 		flex-direction: column;
@@ -324,21 +363,6 @@
 		background: var(--accent);
 		outline: none;
 	}
-	.see {
-		position: absolute;
-		right: 10px;
-		top: 6px;
-		font-family: ui-monospace, monospace;
-		font-size: 10px;
-		color: var(--muted-foreground);
-		opacity: 0;
-		transition: opacity 0.15s ease;
-	}
-	.claim:hover .see,
-	.claim:focus-visible .see {
-		opacity: 1;
-	}
-
 	.acts-wrap {
 		border-top: 1px solid var(--border);
 		padding: 12px 14px;
