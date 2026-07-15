@@ -111,10 +111,17 @@ const fragment = (p: NotionProp): Record<string, unknown> | null => {
 };
 
 // Notion caps one rich text item at 2000 chars; longer strings are written as a run of
-// items, so callers never truncate.
+// items, so callers never truncate. But a property returns at most 25 items on READ, so
+// past ~50k chars Notion silently drops the tail — fail loud here rather than lose data.
+const READ_CAP = 25;
 const chunks = (s: string): { text: { content: string } }[] => {
 	const out: { text: { content: string } }[] = [];
 	for (let i = 0; i < Math.max(s.length, 1); i += 2000) out.push({ text: { content: s.slice(i, i + 2000) } });
+	if (out.length > READ_CAP)
+		throw new Error(
+			`notion: ${s.length} chars is ${out.length} rich-text items, over the ${READ_CAP}-item read cap ` +
+				`(~${READ_CAP * 2000} chars) — Notion drops the tail on read. Put this field in the page body instead.`
+		);
 	return out;
 };
 
