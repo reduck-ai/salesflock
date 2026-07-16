@@ -35,7 +35,7 @@
 		{/if}
 	</main>
 {:else}
-	<main class="mx-auto max-w-3xl space-y-5 p-6">
+	<main class="mx-auto max-w-3xl space-y-5 p-6 lg:flex lg:h-dvh lg:max-w-6xl lg:flex-col lg:overflow-hidden">
 		<header class="flex items-center justify-between">
 			<h1 class="text-2xl font-semibold">Decisions</h1>
 			<form method="POST" action="?/signout">

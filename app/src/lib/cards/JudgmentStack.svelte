@@ -19,7 +19,7 @@
 
 {#if index < judgments.length}
 	{#key judgments[index].id}
-		<div in:fly={{ y: 12, duration: 200 }}>
+		<div in:fly={{ y: 12, duration: 200 }} class="lg:flex lg:min-h-0 lg:flex-1 lg:flex-col">
 			<ReviewCard
 				judgment={judgments[index]}
 				pos={index + 1}
