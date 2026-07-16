@@ -14,7 +14,9 @@ test("absent quote → null", () => {
 });
 
 test("unique quote → bare exact, no context", () => {
-	assert.deepEqual(resolve(ev, "Founding PM at AgentAchieve"), { exact: "Founding PM at AgentAchieve" });
+	assert.deepEqual(resolve(ev, "Founding PM at AgentAchieve"), {
+		exact: "Founding PM at AgentAchieve"
+	});
 });
 
 test("repeated quote → carries minimal context and re-locates uniquely", () => {
@@ -23,17 +25,35 @@ test("repeated quote → carries minimal context and re-locates uniquely", () =>
 	assert.equal(sel.exact, q);
 	assert.ok(sel.prefix || sel.suffix, "a repeated quote must carry disambiguating context");
 	const triple = (sel.prefix ?? "") + sel.exact + (sel.suffix ?? "");
-	assert.equal(ev.split(triple).length - 1, 1, "the prefix+exact+suffix triple must occur exactly once");
+	assert.equal(
+		ev.split(triple).length - 1,
+		1,
+		"the prefix+exact+suffix triple must occur exactly once"
+	);
 });
 
 test("validate throws on a paraphrase and names it", () => {
 	assert.throws(
-		() => validate(ev, [{ claim: "x", quotes: ["totally not in the evidence"] }]),
+		() =>
+			validate(ev, [
+				{ claim: "x", supporting: true, quotes: ["totally not in the evidence"] }
+			]),
 		/not found verbatim/
 	);
 });
 
-test("validate resolves a good set to Selectors", () => {
-	const out = validate(ev, [{ claim: "founder", quotes: ["Founding PM at AgentAchieve"] }]);
-	assert.deepEqual(out, [{ claim: "founder", quotes: [{ exact: "Founding PM at AgentAchieve" }] }]);
+test("validate throws on a statement with no quote and names it", () => {
+	assert.throws(
+		() => validate(ev, [{ claim: "unbacked", supporting: false, quotes: [] }]),
+		/no quote/
+	);
+});
+
+test("validate resolves a good set to Selectors, stance intact", () => {
+	const out = validate(ev, [
+		{ claim: "founder", supporting: true, quotes: ["Founding PM at AgentAchieve"] }
+	]);
+	assert.deepEqual(out, [
+		{ claim: "founder", supporting: true, quotes: [{ exact: "Founding PM at AgentAchieve" }] }
+	]);
 });

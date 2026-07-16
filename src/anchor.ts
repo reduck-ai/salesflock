@@ -15,12 +15,15 @@ export interface Selector {
 }
 
 // What the judge emits (quotes as raw strings) → what we store (quotes resolved to Selectors).
+// `supporting` is the statement's stance: for or against the verdict it argues.
 export interface RawStatement {
 	claim: string;
+	supporting: boolean;
 	quotes: string[];
 }
 export interface Statement {
 	claim: string;
+	supporting: boolean;
 	quotes: Selector[];
 }
 
@@ -58,18 +61,23 @@ export const resolve = (evidence: string, quote: string): Selector | null => {
 };
 
 // validate(evidence, statements) → statements with every quote resolved to a unique Selector.
-// Loud on failure: a quote absent from the evidence is a broken anchor, so we name the
-// offenders and throw rather than store a dead link. The caller may retry the judge once.
+// Loud on failure: a statement with no quote is an unsupported claim, and a quote absent from
+// the evidence is a broken anchor — either way we name the offenders and throw rather than
+// store a dead link. The caller may retry the judge once.
 export const validate = (evidence: string, statements: RawStatement[]): Statement[] => {
+	const unsupported = statements.filter((s) => !s.quotes.length).map((s) => s.claim);
+	if (unsupported.length)
+		throw new Error(`statements with no quote:\n- ${unsupported.join("\n- ")}`);
 	const missing: string[] = [];
 	const resolved = statements.map((s) => ({
-		claim: s.claim,
+		...s,
 		quotes: s.quotes.map((q) => {
 			const sel = resolve(evidence, q);
 			if (!sel) missing.push(q);
 			return sel;
 		})
 	}));
-	if (missing.length) throw new Error(`quotes not found verbatim in evidence:\n- ${missing.join("\n- ")}`);
+	if (missing.length)
+		throw new Error(`quotes not found verbatim in evidence:\n- ${missing.join("\n- ")}`);
 	return resolved as Statement[];
 };

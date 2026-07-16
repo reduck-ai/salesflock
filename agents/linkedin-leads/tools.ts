@@ -57,18 +57,30 @@ const activity = (posts: Profile["posts"]["posts"], comments: Profile["comments"
 // judgment carries. The verbatim-quote contract lives here, in code, not in the per-agent prompt.
 const STATEMENTS = {
 	type: "array",
-	description: "reasoning as claim→proof: one entry per point that decided the verdict",
+	description:
+		"reasoning as claim→proof: one entry per point that decided the verdict, covering both " +
+		"what supports it and what cuts against it",
 	items: {
 		type: "object",
-		required: ["claim", "quotes"],
+		required: ["claim", "supporting", "quotes"],
 		properties: {
-			claim: { type: "string", description: "one short sentence tying the evidence to a criterion" },
+			claim: {
+				type: "string",
+				description: "one short sentence tying the evidence to a criterion"
+			},
+			supporting: {
+				type: "boolean",
+				description:
+					"true if this point argues FOR qualifying the lead, false if it argues against"
+			},
 			quotes: {
 				type: "array",
+				minItems: 1,
 				items: { type: "string" },
 				description:
 					"the exact text from the Evidence backing the claim, copied verbatim — character-for-character substrings, " +
-					"no paraphrase, no ellipses; the shortest that proves the point, one per distinct proof. Empty when the criterion can't be verified."
+					"no paraphrase, no ellipses; the shortest that proves the point, one per distinct proof. " +
+					"Every claim needs at least one quote — a point the evidence can't back is not a statement."
 			}
 		}
 	}
