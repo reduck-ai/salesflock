@@ -3,14 +3,11 @@
 export interface People {
   About?: string;
   Activity?: string;
-  Connections?: number;
   Experiences?: string;
-  Followers?: number;
   Headline?: string;
   "LinkedIn URL"?: string;
   Location?: string;
   Name: string;
-  Posts?: string;
   /**
    * ISO 8601 date or date-time
    */
