@@ -5,7 +5,8 @@
 
 import "../../src/env.js";
 import { Command } from "commander";
-import { tools } from "./tools.js";
+import { readFile } from "node:fs/promises";
+import { tools, type Verdict } from "./tools.js";
 
 const out = (v: unknown) => console.log(JSON.stringify(v, null, 2));
 
@@ -15,22 +16,42 @@ const program = new Command()
 
 program
 	.command("search")
-	.argument("<query>", `Google query, e.g. site:www.linkedin.com/in "senior product manager" "UiPath"`)
+	.argument(
+		"<query>",
+		`Google query, e.g. site:www.linkedin.com/in "senior product manager" "UiPath"`
+	)
 	.option("--n <count>", "max result cards", parseInt)
-	.description("Discover profiles via Google (one run); write Person stubs + Sourcing provenance + new Leads (To enrich).")
+	.description(
+		"Discover profiles via Google (one run); write Person stubs + Sourcing provenance + new Leads (To enrich)."
+	)
 	.action(async (query, { n }) => out(await tools.search(query, n)));
 
 program
 	.command("enrich")
 	.argument("<profile>", "profile URL or bare publicId")
-	.description("Profile + experience (three runs) assembled into the Person; their Lead moves to To qualify.")
+	.description(
+		"Profile + experience (three runs) assembled into the Person; their Lead moves to To qualify."
+	)
 	.action(async (profile) => out(await tools.enrich(profile)));
 
 program
 	.command("qualify")
 	.argument("<profile>", "profile URL or bare publicId (must be enriched)")
-	.description("Judge the person against the ICP (Gemini, from CRM evidence only); Lead moves to the human gate.")
-	.action(async (profile) => out(await tools.qualify(profile)));
+	.option("--show", "print the judgment context (contract + frozen evidence); writes nothing")
+	.option(
+		"--verdict <file>",
+		`a manual judge's JSON { output, statements } ("-" = stdin), held to the same contract`
+	)
+	.description(
+		"Judge the person against the ICP (Gemini, or --verdict for a manual judge); Lead moves to the human gate."
+	)
+	.action(async (profile, { show, verdict }) => {
+		if (show) return out(await tools.context(profile));
+		const v = verdict
+			? (JSON.parse(await readFile(verdict === "-" ? 0 : verdict, "utf8")) as Verdict)
+			: undefined;
+		out(await tools.qualify(profile, v));
+	});
 
 program
 	.command("get-company")
@@ -40,10 +61,14 @@ program
 
 program
 	.command("put-lead")
-	.description("Set up a Lead (a person; Name derived from them) from ids the get-* tools returned.")
+	.description(
+		"Set up a Lead (a person; Name derived from them) from ids the get-* tools returned."
+	)
 	.requiredOption("--person <id>", "the Person's Notion page id (get-profile)")
 	.option("--company <id>", "the Company's Notion page id (get-company), when known")
-	.action(async ({ person, company }) => out(await tools.putLead({ personId: person, companyId: company })));
+	.action(async ({ person, company }) =>
+		out(await tools.putLead({ personId: person, companyId: company }))
+	);
 
 program.parseAsync().catch((e: Error) => {
 	console.error(`error: ${e.message}`);

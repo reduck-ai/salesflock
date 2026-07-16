@@ -5,7 +5,6 @@
 export const scripts = {
 	card: "reduck/linkedin.com/get_profile",
 	experience: "reduck/linkedin.com/get_profile_experience",
-	education: "reduck/linkedin.com/get_profile_education",
 	posts: "reduck/linkedin.com/get_profile_posts",
 	comments: "reduck/linkedin.com/get_profile_comments",
 	company: "reduck/linkedin.com/get_company_info"

@@ -7,11 +7,12 @@ import { run, type Args } from "../reduck.js";
 import { scripts } from "./scripts.js";
 import { scripts as google } from "../google/scripts.js";
 import type { Search } from "../google/schema.js";
-import type { Card, Experience, Education, Posts, Comments, Company } from "./schema.js";
+import type { Card, Experience, Posts, Comments, Company } from "./schema.js";
 
 // LinkedIn's profile scripts key off publicId — the /in/<publicId> slug. Accept a
 // full profile URL or a bare publicId.
-export const publicIdOf = (profile: string): string => profile.match(/\/in\/([^/?]+)/)?.[1] ?? profile;
+export const publicIdOf = (profile: string): string =>
+	profile.match(/\/in\/([^/?]+)/)?.[1] ?? profile;
 
 // Best-effort run for the activity lens: posts/comments are enrichment, not identity, and
 // their feeds are the slowest — a timeout there must never drop the whole profile. The
@@ -20,7 +21,9 @@ const tryRun = async <T>(addr: string, args: Args, fallback: T): Promise<T> => {
 	try {
 		return await run<T>(addr, args);
 	} catch (e) {
-		console.error(`activity ${addr} skipped (best-effort): ${(e as Error).message.split("\n")[0]}`);
+		console.error(
+			`activity ${addr} skipped (best-effort): ${(e as Error).message.split("\n")[0]}`
+		);
 		return fallback;
 	}
 };
@@ -31,7 +34,6 @@ export interface Profile {
 	publicId: string;
 	card: Card;
 	experience: Experience;
-	education: Education;
 	posts: Posts;
 	comments: Comments;
 }
@@ -70,26 +72,25 @@ export const searchProfiles = async (
 };
 
 // get_profile — the profile calls threaded by publicId, assembled into one record. Core
-// identity is card + experience, fetched together and fails loud. Everything else is
-// best-effort: education (many profiles list none — its script times out waiting for a
-// school link that never appears) and the activity lens (posts, comments — slow feeds), so
-// a missing section yields empty instead of losing the whole profile.
+// identity is card + experience, fetched together and fails loud. The activity lens (posts,
+// comments — slow feeds) is best-effort, so a timeout yields empty instead of losing the
+// whole profile.
 export const getProfile = async (profile: string): Promise<Profile> => {
 	const publicId = publicIdOf(profile);
 	const [card, experience] = await Promise.all([
 		run<Card>(scripts.card, { publicId }),
 		run<Experience>(scripts.experience, { publicId, count: 50 })
 	]);
-	const [education, posts, comments] = await Promise.all([
-		tryRun<Education>(scripts.education, { publicId }, { education: [] }),
+	const [posts, comments] = await Promise.all([
 		tryRun<Posts>(scripts.posts, { publicId, count: 10 }, { posts: [] }),
 		tryRun<Comments>(scripts.comments, { publicId, count: 10 }, { comments: [] })
 	]);
-	return { publicId, card, experience, education, posts, comments };
+	return { publicId, card, experience, posts, comments };
 };
 
 // get_company_info — a single run (no composition), but the Lk client owns it so the
 // agent's tool speaks one client. Accepts a company URL or a bare slug (the script's own
 // contract). Re-exports the Company type as the tool's persisted shape.
 export type { Company };
-export const getCompany = (company: string): Promise<Company> => run<Company>(scripts.company, { url: company });
+export const getCompany = (company: string): Promise<Company> =>
+	run<Company>(scripts.company, { url: company });
