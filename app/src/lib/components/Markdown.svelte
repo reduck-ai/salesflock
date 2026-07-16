@@ -60,4 +60,10 @@
 		background: var(--hl-bg, #fff3c4);
 		box-shadow: inset 2px 0 0 var(--hl-bar, #e9c96a);
 	}
+	/* the one quote the cursor is on — its claim's other proofs stay softly lit around it */
+	.md :global(mark.hl.current) {
+		box-shadow:
+			inset 2px 0 0 var(--hl-bar, #e9c96a),
+			0 0 0 2px var(--hl-bar, #e9c96a);
+	}
 </style>

@@ -4,9 +4,11 @@
 	// like a composer. The reading order is verdict → statements → CTA: each statement's dot
 	// takes its stance's colour (green for, red against); hover a claim to light up the exact
 	// evidence it cites, click (or Tab / Shift+Tab) to scroll there. The judge's prose rationale
-	// hides behind a discreet toggle. The note sits above the buttons; A/R decide, ←/→ navigate.
+	// hides behind a discreet toggle. The note sits above the buttons; ⏎ accepts, Esc rejects,
+	// ←/→ navigate.
 	// Presentational: it owns feedback (resets on remount) and emits a verdict; meaning is the
 	// caller's.
+	import { fade } from "svelte/transition";
 	import Markdown from "$lib/components/Markdown.svelte";
 	import type { EvidencedJudgment, Verdict } from "./types";
 
@@ -25,33 +27,41 @@
 	} = $props();
 
 	let feedback = $state("");
-	let activeSi = $state<number | null>(null);
+	let activeMi = $state<number | null>(null); // the cursor: one quote (a mark index)
 	let collapsed = $state(false);
 	let unfolded = $state(false); // the rationale prose, folded away by default
 	let evEl = $state<HTMLElement>();
 	let panelEl = $state<HTMLElement>();
 
-	// every quote, tagged with its statement index — one hover lights all of a claim's proof
+	// every quote in claim order, tagged with its statement index — the flat list the cursor
+	// walks; a claim's marks are adjacent, so stepping reads claim by claim, proof by proof
 	const marks = $derived(judgment.statements.flatMap((s, i) => s.quotes.map((sel) => ({ si: i, sel }))));
+	// the mark index of a statement's first quote — how the claim list addresses the cursor
+	const miOf = (si: number) => judgment.statements.slice(0, si).reduce((n, s) => n + s.quotes.length, 0);
 	// the tally: how contested the verdict is, before reading a word
 	const nFor = $derived(judgment.statements.filter((s) => s.supporting).length);
 	const nAgainst = $derived(judgment.statements.length - nFor);
+	// the cursor's claim, floated over the evidence so claim and proof are read together
+	const activeSi = $derived(activeMi === null ? null : marks[activeMi].si);
+	const active = $derived(activeSi === null ? null : judgment.statements[activeSi]);
 
-	// toggle .active on the marks of the hovered/clicked claim (marks live in {@html}, so
-	// we reach them through the container ref rather than reactive markup)
+	// toggle .active on the cursor claim's marks and .current on the cursor's own (marks live
+	// in {@html}, so we reach them through the container ref rather than reactive markup)
 	$effect(() => {
 		const el = evEl;
 		const si = activeSi;
-		el?.querySelectorAll("mark.hl").forEach((m) =>
-			m.classList.toggle("active", si !== null && m.getAttribute("data-si") === String(si))
-		);
+		const mi = activeMi;
+		el?.querySelectorAll("mark.hl").forEach((m) => {
+			m.classList.toggle("active", si !== null && m.getAttribute("data-si") === String(si));
+			m.classList.toggle("current", mi !== null && m.getAttribute("data-mi") === String(mi));
+		});
 	});
 
 	// center the proof in whatever scrolls: the evidence column when it scrolls itself
 	// (laptop), else the window — in the band left visible above the floating panel (mobile)
 	const goto = (i: number) => {
-		activeSi = i;
-		const m = evEl?.querySelector(`mark.hl[data-si="${i}"]`);
+		activeMi = i;
+		const m = evEl?.querySelector(`mark.hl[data-mi="${i}"]`);
 		if (!m || !evEl || !panelEl) return;
 		if (getComputedStyle(evEl).overflowY === "auto") {
 			const ev = evEl.getBoundingClientRect();
@@ -66,19 +76,20 @@
 	};
 	const decide = (v: Verdict) => onjudge?.(v, feedback.trim());
 
-	// A/R decide, ←/→ navigate, Tab / Shift+Tab step through proofs — ignored while typing
+	// Enter accepts, Esc rejects, ←/→ navigate, Tab / Shift+Tab step through proofs — ignored while typing
 	$effect(() => {
 		const onkey = (e: KeyboardEvent) => {
 			if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-			if (e.key === "a" || e.key === "A") decide("accepted");
-			else if (e.key === "r" || e.key === "R") decide("rejected");
+			// a focused button already turns Enter into its own click — don't decide twice
+			if (e.key === "Enter" && !(e.target instanceof HTMLButtonElement)) decide("accepted");
+			else if (e.key === "Escape") decide("rejected");
 			else if (e.key === "ArrowRight") onnav?.(1);
 			else if (e.key === "ArrowLeft") onnav?.(-1);
 			else if (e.key === "Tab") {
 				e.preventDefault();
-				const n = judgment.statements.length;
+				const n = marks.length;
 				if (!n) return;
-				const at = activeSi ?? -1;
+				const at = activeMi ?? -1;
 				goto(e.shiftKey ? ((at <= 0 ? n : at) - 1) % n : (at + 1) % n);
 			}
 		};
@@ -94,8 +105,8 @@
 	<div class="meta">
 		<span>{pos} / {total}</span>
 		<span class="hint">
-			<kbd>←</kbd><kbd>→</kbd> navigate · <kbd>Tab</kbd> proof · <kbd>A</kbd> accept ·
-			<kbd>R</kbd> reject
+			<kbd>←</kbd><kbd>→</kbd> navigate · <kbd>Tab</kbd> proof · <kbd>⏎</kbd> accept ·
+			<kbd>Esc</kbd> reject
 		</span>
 	</div>
 
@@ -167,9 +178,9 @@
 									class:active={activeSi === i}
 									class:against={!s.supporting}
 									data-si={i}
-									onmouseenter={() => (activeSi = i)}
-									onfocus={() => (activeSi = i)}
-									onclick={() => goto(i)}
+									onmouseenter={() => (activeMi = miOf(i))}
+									onfocus={() => (activeMi = miOf(i))}
+									onclick={() => goto(miOf(i))}
 								>
 									<svg
 										class="mark"
@@ -202,8 +213,8 @@
 					<div class="acts-wrap">
 						<input bind:value={feedback} class="note" placeholder="Optional note — why you (dis)agree" />
 						<div class="acts">
-							<button class="btn reject" onclick={() => decide("rejected")}>Reject <kbd>R</kbd></button>
-							<button class="btn accept" onclick={() => decide("accepted")}>Accept <kbd>A</kbd></button>
+							<button class="btn reject" onclick={() => decide("rejected")}>Reject <kbd>Esc</kbd></button>
+							<button class="btn accept" onclick={() => decide("accepted")}>Accept <kbd>⏎</kbd></button>
 						</div>
 					</div>
 				</div>
@@ -211,6 +222,20 @@
 		</div>
 
 		<div class="ev-card" bind:this={evEl}>
+			{#if active}
+				<div class="float-wrap">
+					{#key activeSi}
+						<div class="float-claim" in:fade={{ duration: 120 }}>
+							<span class="dots" aria-label={`claim ${(activeSi ?? 0) + 1} of ${judgment.statements.length}`}>
+								{#each judgment.statements as s, i (i)}
+									<span class="dot" class:against={!s.supporting} class:on={activeSi === i}></span>
+								{/each}
+							</span>
+							<span>{active.claim}</span>
+						</div>
+					{/key}
+				</div>
+			{/if}
 			<Markdown source={judgment.evidence} highlights={marks} class="evidence" />
 		</div>
 	</div>
@@ -272,6 +297,59 @@
 	.ev-card :global(pre) {
 		white-space: pre-wrap; /* YAML evidence blocks wrap instead of bleeding past the card */
 		overflow-wrap: anywhere;
+	}
+
+	/* the active claim, floating over the evidence — same surface family as .proposal.
+	   The wrap is a zero-height sticky anchor, so the caption overlays the text without
+	   shifting it when a claim (de)activates. */
+	.float-wrap {
+		position: sticky;
+		top: 8px;
+		height: 0;
+		z-index: 5;
+	}
+	.float-claim {
+		display: flex;
+		align-items: flex-start;
+		gap: 9px;
+		padding: 9px 13px;
+		font-size: 13px;
+		line-height: 1.5;
+		background: color-mix(in oklch, var(--card) 88%, transparent);
+		backdrop-filter: blur(16px) saturate(1.4);
+		border: 1px solid var(--border);
+		border-radius: 12px;
+		box-shadow:
+			0 2px 6px rgb(0 0 0 / 0.08),
+			0 12px 32px -12px rgb(0 0 0 / 0.24);
+	}
+	/* one dot per claim, stance-coloured; the ring is the cursor. Quotes get no chrome —
+	   the .current mark in the evidence is the quote-level indicator. */
+	.float-claim .dots {
+		flex: none;
+		display: inline-flex;
+		align-items: center;
+		gap: 7px;
+		height: 19.5px; /* one text line — keeps the dots centred on the first line */
+		margin-right: 2px;
+	}
+	.float-claim .dot {
+		width: 7px;
+		height: 7px;
+		border-radius: 50%;
+		background: #16a34a;
+	}
+	.float-claim .dot.against {
+		background: #dc2626;
+	}
+	.float-claim .dot.on {
+		box-shadow:
+			0 0 0 2px var(--card),
+			0 0 0 3.5px currentColor;
+		color: #16a34a;
+	}
+	.float-claim .dot.against.on {
+		color: #dc2626;
 	}
 
 	.veil {
