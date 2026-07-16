@@ -31,23 +31,26 @@ const nextStepLine = (n: NextStep): string => {
 		case "comment_post":
 			return `**Next step — comment on [a post](${n.postUrl})**\n\n_"${n.comment}"_`;
 		case "send_invite":
-			return n.note ? `**Next step — send invite**\n\n_"${n.note}"_` : "**Next step — send invite** _(no note)_";
+			return n.note
+				? `**Next step — send invite**\n\n_"${n.note}"_`
+				: "**Next step — send invite** _(no note)_";
 		default:
 			return "";
 	}
 };
 
-// The Output → the card's markdown verdict: a tier-coloured headline, the engagement note, and
-// the planned first action. Reasoning (claims) and evidence render as before.
-const verdictOf = (o: Output): string =>
-	[`# <span style="color:${TIER_COLOUR[o.tier]}">${o.tier}</span>`, o.engagement_strategy, nextStepLine(o.next_step)]
-		.filter(Boolean)
-		.join("\n\n");
-
-export const decisionToJudgment = (d: Decision): EvidencedJudgment => ({
-	id: d.id,
-	href: d.url,
-	verdict: verdictOf(JSON.parse(d.fields.Output) as Output),
-	statements: JSON.parse(d.fields.Reasoning) as Statement[],
-	evidence: d.fields.Input
-});
+// The Output, unfused onto the card: the tier is the headline, the engagement note is the
+// rationale (prose, shown on demand), the planned first action is the CTA. The statements
+// between them are the primary reading.
+export const decisionToJudgment = (d: Decision): EvidencedJudgment => {
+	const o = JSON.parse(d.fields.Output) as Output;
+	return {
+		id: d.id,
+		href: d.url,
+		verdict: `# <span style="color:${TIER_COLOUR[o.tier]}">${o.tier}</span>`,
+		rationale: o.engagement_strategy,
+		cta: nextStepLine(o.next_step) || undefined,
+		statements: JSON.parse(d.fields.Reasoning) as Statement[],
+		evidence: d.fields.Input
+	};
+};

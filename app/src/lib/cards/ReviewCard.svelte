@@ -1,9 +1,10 @@
 <script lang="ts">
 	// One evidenced judgment: the AI proposal beside its evidence. On a laptop they are two
 	// columns (proposal left, evidence right); on mobile the proposal floats over the evidence
-	// like a composer. Verdict first, reasoning as claims — hover a claim to light up the exact
-	// evidence it cites, click (or Tab / Shift+Tab) to scroll there; a hollow dot marks a claim
-	// with no verbatim quote. The note sits above the buttons; A/R decide, ←/→ navigate.
+	// like a composer. The reading order is verdict → statements → CTA: each statement's dot
+	// takes its stance's colour (green for, red against); hover a claim to light up the exact
+	// evidence it cites, click (or Tab / Shift+Tab) to scroll there. The judge's prose rationale
+	// hides behind a discreet toggle. The note sits above the buttons; A/R decide, ←/→ navigate.
 	// Presentational: it owns feedback (resets on remount) and emits a verdict; meaning is the
 	// caller's.
 	import Markdown from "$lib/components/Markdown.svelte";
@@ -26,13 +27,15 @@
 	let feedback = $state("");
 	let activeSi = $state<number | null>(null);
 	let collapsed = $state(false);
+	let unfolded = $state(false); // the rationale prose, folded away by default
 	let evEl = $state<HTMLElement>();
 	let panelEl = $state<HTMLElement>();
 
 	// every quote, tagged with its statement index — one hover lights all of a claim's proof
 	const marks = $derived(judgment.statements.flatMap((s, i) => s.quotes.map((sel) => ({ si: i, sel }))));
-	// the claims that actually cite evidence — the Tab cycle's stops
-	const proven = $derived(judgment.statements.flatMap((s, i) => (s.quotes.length ? [i] : [])));
+	// the tally: how contested the verdict is, before reading a word
+	const nFor = $derived(judgment.statements.filter((s) => s.supporting).length);
+	const nAgainst = $derived(judgment.statements.length - nFor);
 
 	// toggle .active on the marks of the hovered/clicked claim (marks live in {@html}, so
 	// we reach them through the container ref rather than reactive markup)
@@ -73,12 +76,10 @@
 			else if (e.key === "ArrowLeft") onnav?.(-1);
 			else if (e.key === "Tab") {
 				e.preventDefault();
-				if (!proven.length) return;
-				const at = proven.indexOf(activeSi ?? -1);
-				const next = e.shiftKey
-					? proven[(at <= 0 ? proven.length : at) - 1]
-					: proven[(at + 1) % proven.length];
-				goto(next);
+				const n = judgment.statements.length;
+				if (!n) return;
+				const at = activeSi ?? -1;
+				goto(e.shiftKey ? ((at <= 0 ? n : at) - 1) % n : (at + 1) % n);
 			}
 		};
 		window.addEventListener("keydown", onkey);
@@ -122,24 +123,80 @@
 			<div class="body">
 				<div>
 					<div class="scroll">
-						<div class="verdict"><Markdown source={judgment.verdict} /></div>
+						<div class="head">
+							<div class="verdict"><Markdown source={judgment.verdict} /></div>
+							{#if judgment.statements.length}
+								<span class="tally" title={`${nFor} for · ${nAgainst} against`}>
+									<span class="for">{nFor}✓</span><span class="agn">{nAgainst}✕</span>
+								</span>
+							{/if}
+							{#if judgment.rationale}
+								<button
+									class="icon"
+									class:on={unfolded}
+									title="The judge's rationale"
+									aria-label="The judge's rationale"
+									aria-expanded={unfolded}
+									onclick={() => (unfolded = !unfolded)}
+								>
+									<svg
+										width="15"
+										height="15"
+										viewBox="0 0 24 24"
+										fill="none"
+										stroke="currentColor"
+										stroke-width="2"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										><circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" /></svg
+									>
+								</button>
+							{/if}
+						</div>
+
+						{#if judgment.rationale}
+							<div class="rationale" class:open={unfolded}>
+								<div><Markdown source={judgment.rationale} /></div>
+							</div>
+						{/if}
 
 						<div class="why">
 							{#each judgment.statements as s, i (i)}
 								<button
 									class="claim"
 									class:active={activeSi === i}
-									class:unproven={!s.quotes.length}
-									title={s.quotes.length ? undefined : "No verbatim quote in the evidence"}
+									class:against={!s.supporting}
 									data-si={i}
 									onmouseenter={() => (activeSi = i)}
 									onfocus={() => (activeSi = i)}
 									onclick={() => goto(i)}
 								>
-									{s.claim}
+									<svg
+										class="mark"
+										width="13"
+										height="13"
+										viewBox="0 0 24 24"
+										fill="none"
+										stroke="currentColor"
+										stroke-width="3"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										aria-label={s.supporting ? "supports the verdict" : "argues against the verdict"}
+									>
+										{#if s.supporting}
+											<path d="M20 6 9 17l-5-5" />
+										{:else}
+											<path d="M18 6 6 18" /><path d="m6 6 12 12" />
+										{/if}
+									</svg>
+									<span>{s.claim}</span>
 								</button>
 							{/each}
 						</div>
+
+						{#if judgment.cta}
+							<div class="cta"><Markdown source={judgment.cta} /></div>
+						{/if}
 					</div>
 
 					<div class="acts-wrap">
@@ -279,14 +336,80 @@
 		min-width: 0;
 	}
 
-	.verdict {
+	.head {
+		display: flex;
+		align-items: center;
+		gap: 12px;
 		padding: 4px 18px 8px;
+	}
+	.verdict {
+		flex: 1;
+		min-width: 0;
 	}
 	.verdict :global(h1) {
 		margin: 0;
 		font-size: 20px;
 		font-weight: 720;
 		letter-spacing: -0.02em;
+	}
+	/* how contested the verdict is, before reading a word */
+	.tally {
+		flex: none;
+		display: inline-flex;
+		gap: 7px;
+		font-family: ui-monospace, monospace;
+		font-size: 11px;
+		font-weight: 600;
+	}
+	.tally .for {
+		color: #16a34a;
+	}
+	.tally .agn {
+		color: #dc2626;
+	}
+	.icon {
+		flex: none;
+		width: 26px;
+		height: 26px;
+		border-radius: 8px;
+		border: none;
+		background: transparent;
+		color: var(--muted-foreground);
+		cursor: pointer;
+		display: grid;
+		place-items: center;
+		transition:
+			background 0.15s ease,
+			color 0.15s ease;
+	}
+	.icon:hover {
+		color: var(--foreground);
+	}
+	.icon.on {
+		color: var(--foreground);
+		background: var(--accent);
+	}
+
+	/* the judge's prose — folded away until asked for */
+	.rationale {
+		display: grid;
+		grid-template-rows: 0fr;
+		opacity: 0;
+		transition:
+			grid-template-rows 0.22s ease,
+			opacity 0.18s ease;
+	}
+	.rationale > div {
+		overflow: hidden;
+		padding: 0 18px;
+		font-size: 13px;
+		line-height: 1.55;
+		color: var(--muted-foreground);
+	}
+	.rationale.open {
+		grid-template-rows: 1fr;
+		opacity: 1;
+		margin-bottom: 10px;
 	}
 
 	.why {
@@ -296,7 +419,9 @@
 		gap: 2px;
 	}
 	.claim {
-		position: relative;
+		display: flex;
+		align-items: flex-start;
+		gap: 9px;
 		width: 100%;
 		text-align: left;
 		font: inherit;
@@ -305,25 +430,19 @@
 		color: var(--foreground);
 		background: none;
 		border: none;
-		padding: 6px 10px 6px 26px;
+		padding: 6px 10px;
 		border-radius: 9px;
 		cursor: pointer;
 		transition: background 0.15s ease;
 	}
-	.claim::before {
-		content: "";
-		position: absolute;
-		left: 11px;
-		top: 12px;
-		width: 5px;
-		height: 5px;
-		border-radius: 50%;
-		background: var(--muted-foreground);
+	/* the stance mark: ✓ argues for the verdict, ✕ against — shape first, colour second */
+	.claim .mark {
+		flex: none;
+		margin-top: 3px;
+		color: #16a34a;
 	}
-	/* a claim with no verbatim quote: hollow dot — nothing to light up in the evidence */
-	.claim.unproven::before {
-		background: transparent;
-		border: 1px solid var(--muted-foreground);
+	.claim.against .mark {
+		color: #dc2626;
 	}
 	.claim:hover,
 	.claim:focus-visible,
@@ -331,6 +450,15 @@
 		background: var(--accent);
 		outline: none;
 	}
+	/* the proposed next action — the last thing read before deciding */
+	.cta {
+		margin: 4px 18px 14px;
+		padding-top: 10px;
+		border-top: 1px solid var(--border);
+		font-size: 13px;
+		line-height: 1.55;
+	}
+
 	.acts-wrap {
 		border-top: 1px solid var(--border);
 		padding: 12px 14px;
@@ -449,7 +577,7 @@
 		.veil {
 			display: none;
 		}
-		.verdict {
+		.head {
 			padding-top: 16px;
 		}
 	}

@@ -42,19 +42,24 @@ export interface Selector {
 	suffix?: string;
 }
 
-// One reasoning statement: a claim and the evidence spans that back it.
+// One reasoning statement: a claim, its stance (for or against the verdict), and the
+// evidence spans that back it — at least one; an unbacked claim is not a statement.
 export interface Statement {
 	claim: string;
+	supporting: boolean;
 	quotes: Selector[];
 }
 
-// A richer card for a judgment that cites evidence: a free-form markdown verdict, the
-// reasoning as claim→proof statements, and the frozen evidence markdown the claims point
-// into. The review screen renders this; the flat CardModel above stays for simpler subjects.
+// A richer card for a judgment that cites evidence: a markdown verdict headline, the
+// reasoning as claim→proof statements, an optional call to action, and the frozen evidence
+// markdown the claims point into. `rationale` is the judge's prose — secondary, shown on
+// demand. The review screen renders this; the flat CardModel above stays for simpler subjects.
 export interface EvidencedJudgment {
 	id: string; // stable key; what a Judgment refers back to
 	href?: string; // the source record (the Notion Decision page)
 	verdict: string; // markdown — an H1 headline, colour inline
+	rationale?: string; // markdown — the judge's prose, behind a discreet toggle
+	cta?: string; // markdown — the proposed next action
 	statements: Statement[];
 	evidence: string; // markdown — frozen snapshot the quotes resolve against
 }
