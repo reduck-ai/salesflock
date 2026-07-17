@@ -62,6 +62,7 @@ export const decisionToJudgment = (d: Decision): EvidencedJudgment => {
 				};
 	return {
 		id: d.id,
+		title: d.title,
 		href: d.url,
 		...head,
 		statements: (JSON.parse(d.fields.Reasoning) as Statement[]).map((s) => ({

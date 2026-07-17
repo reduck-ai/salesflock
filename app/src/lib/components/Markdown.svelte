@@ -68,9 +68,13 @@
 		font-family: ui-monospace, monospace;
 		font-size: 0.85em;
 	}
-	/* a claim's proof: invisible until its claim is active, then a soft spotlight */
+	/* a claim's proof: always lit, subtly, in its stance's colour — light wash plus a darker
+	   left bar. The cursor's claim (.active) deepens; the cursor's own quote (.current) gets
+	   the ring. Stance is the claim's (.against set by the card), green by default. */
 	.md :global(mark.hl) {
-		background: transparent;
+		--hl: #16a34a;
+		background: color-mix(in oklch, var(--hl) 9%, transparent);
+		box-shadow: inset 2px 0 0 color-mix(in oklch, var(--hl) 55%, transparent);
 		color: inherit;
 		border-radius: 3px;
 		padding: 0 1px;
@@ -78,14 +82,16 @@
 			background 0.18s ease,
 			box-shadow 0.18s ease;
 	}
-	.md :global(mark.hl.active) {
-		background: var(--hl-bg, #fff3c4);
-		box-shadow: inset 2px 0 0 var(--hl-bar, #e9c96a);
+	.md :global(mark.hl.against) {
+		--hl: #dc2626;
 	}
-	/* the one quote the cursor is on — its claim's other proofs stay softly lit around it */
+	.md :global(mark.hl.active) {
+		background: color-mix(in oklch, var(--hl) 18%, transparent);
+		box-shadow: inset 2px 0 0 var(--hl);
+	}
 	.md :global(mark.hl.current) {
 		box-shadow:
-			inset 2px 0 0 var(--hl-bar, #e9c96a),
-			0 0 0 2px var(--hl-bar, #e9c96a);
+			inset 2px 0 0 var(--hl),
+			0 0 0 1.5px color-mix(in oklch, var(--hl) 70%, transparent);
 	}
 </style>

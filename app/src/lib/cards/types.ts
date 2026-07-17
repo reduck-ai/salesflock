@@ -69,6 +69,7 @@ export interface Cta {
 // CardModel above stays for simpler subjects.
 export interface EvidencedJudgment {
 	id: string; // stable key; what a Judgment refers back to
+	title: string; // the source record's name — what a decided card's receipt line reads
 	href?: string; // the source record (the Notion Decision page)
 	verdict: string; // markdown — an H1 headline, colour inline
 	rationale?: string; // markdown — the judge's prose, behind a discreet toggle

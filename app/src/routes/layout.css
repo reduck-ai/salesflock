@@ -22,8 +22,6 @@
 	--border: oklch(0.922 0 0);
 	--input: oklch(0.922 0 0);
 	--ring: oklch(0.708 0 0);
-	--hl-bg: #fff3c4;
-	--hl-bar: #e0b528;
 }
 
 .dark {
@@ -45,8 +43,6 @@
 	--border: oklch(1 0 0 / 10%);
 	--input: oklch(1 0 0 / 15%);
 	--ring: oklch(0.556 0 0);
-	--hl-bg: oklch(0.42 0.09 85);
-	--hl-bar: oklch(0.72 0.13 85);
 }
 
 @theme inline {
