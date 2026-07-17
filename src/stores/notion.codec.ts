@@ -16,7 +16,12 @@ export interface NotionValue {
 	select?: { name: string } | null;
 	status?: { name: string } | null;
 	multi_select?: { name: string }[];
+	relation?: { id: string }[]; // a pointer, not content — plain() reads it as null
 }
+
+// A relation property's target page ids ([] when absent) — the one non-scalar a
+// reader needs: relations are how Decisions point at their Lead, Prompt and upstreams.
+export const relation = (v?: NotionValue): string[] => v?.relation?.map((r) => r.id) ?? [];
 
 // A property value → a plain scalar. null for types with no scalar reading (relations,
 // files, …) — they are pointers, not content. Reads need nothing more: current API

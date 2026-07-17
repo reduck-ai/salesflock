@@ -29,12 +29,22 @@ export const STORES = { notion, hubspot } as const;
 
 export const getStore = (name: keyof typeof STORES): Store => STORES[name];
 
+// A prompt row and its pipeline effect: the Lead Status while its decision awaits the
+// human gate, and where each verdict moves it. The one map of decision kind → pipeline
+// semantics, read by both sides of the gate: the runtime (decide) and the review app (record).
+export interface PromptSpec {
+	name: string; // the Prompt row's Name
+	pending: string; // Lead Status while the decision awaits the human gate
+	onAccept: string; // Lead Status when the human accepts
+	onReject: string; // Lead Status when the human rejects
+}
+
 // The one thing an agent needs to run (besides secrets): which store, which table each
-// logical model maps to, and its named prompt rows. Lives in agents/<id>/config.ts; the
+// logical model maps to, and its prompt specs. Lives in agents/<id>/config.ts; the
 // same file `sflock pull` reads. destination defaults to "notion" in config.ts.example, so
 // an agent runs out of the box.
 export interface AgentConfig {
 	destination: keyof typeof STORES;
 	models: Record<string, string>; // logical model name → store table/object id
-	prompts?: Record<string, string>; // named prompt rows (e.g. qualify)
+	prompts?: Record<string, PromptSpec>; // decision kind (e.g. qualify) → its contract row + transitions
 }

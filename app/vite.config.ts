@@ -13,8 +13,10 @@ export default defineConfig({
 			},
 			adapter: adapter(),
 			// The parent repo's core — shared primitives the app must not re-implement
-			// (first user: the Notion codec). See APP.md → Deploy for the Vercel toggle.
-			alias: { $core: "../src" }
+			// (first user: the Notion codec) — and the agent's config, the one map of
+			// decision kind → pipeline semantics (its store imports are type-only, so the
+			// app pulls in pure data). See APP.md → Deploy for the Vercel toggle.
+			alias: { $core: "../src", $agent: "../agents/linkedin-leads" }
 		})
 	]
 });

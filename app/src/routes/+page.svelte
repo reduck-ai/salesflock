@@ -9,14 +9,14 @@
 	// Persist each verdict + feedback to its source record; fire-and-forget so the
 	// deck keeps its snappy feel. A failure surfaces in the console, not a blocked UI.
 	// An edited CTA is re-fused into the judge's Output (the adapter's inverse) and
-	// travels as groundTruth — the human's corrected Output, same contract.
+	// travels as finalOutput — the output as the human accepted it, same contract.
 	const judge = (j: Judgment) => {
 		const output = data.judgments.find((x) => x.id === j.id)?.output;
-		const groundTruth = j.cta && output ? JSON.stringify(correct(output, j.cta)) : undefined;
+		const finalOutput = j.cta && output ? JSON.stringify(correct(output, j.cta)) : undefined;
 		fetch("/api/decide", {
 			method: "POST",
 			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ id: j.id, verdict: j.verdict, feedback: j.feedback, groundTruth })
+			body: JSON.stringify({ id: j.id, verdict: j.verdict, feedback: j.feedback, finalOutput })
 		}).catch((e) => console.error("decide failed", e));
 	};
 </script>

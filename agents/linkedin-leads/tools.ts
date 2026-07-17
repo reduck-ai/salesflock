@@ -23,8 +23,11 @@ import type { Sourcing } from "./schema/Sourcing.js";
 import type { Decisions } from "./schema/Decisions.js";
 
 // The store this agent writes to and the tables it addresses — both chosen in config.ts
-// (notion by default). No env: the model→table map and prompt rows all live in one file.
+// (notion by default). No env: the model→table map and prompt specs all live in one file.
 const store = getStore(config.destination);
+
+// The decision kinds this agent can produce — the keys of config.prompts.
+type PromptKey = keyof typeof config.prompts;
 
 // A LinkedIn company's headquarters → a one-line HQ string, or undefined if it has none.
 const hq = (
@@ -79,26 +82,27 @@ export interface Verdict {
 
 // The judgment context: the Prompt row's full contract plus the Person's frozen evidence —
 // everything a judge needs, nothing written. Both judges read the exact same context:
-// Gemini gets it as its prompt, a manual judge via `qualify --show`.
-const qualifyContext = async (profile: string) => {
+// Gemini gets it as its prompt, a manual judge via `--show`.
+const judgmentContext = async (key: PromptKey, profile: string) => {
+	const spec = config.prompts[key];
 	const publicId = publicIdOf(profile);
 	const url = `https://www.linkedin.com/in/${publicId}`;
 	const person = await store.read(config.models.People, "LinkedIn URL", url);
 	const f = person.fields;
 
-	const prompt = await store.read(config.models.Prompts, "Name", config.prompts.qualify);
+	const prompt = await store.read(config.models.Prompts, "Name", spec.name);
 	const [system, instruction] = (["System prompt", "Instruction"] as const).map((k) => {
-		if (!prompt.fields[k]) throw new Error(`prompt "${config.prompts.qualify}" has no ${k}`);
+		if (!prompt.fields[k]) throw new Error(`prompt "${spec.name}" has no ${k}`);
 		return String(prompt.fields[k]);
 	});
 	// The contract's shape. Parse loud — a malformed schema is a broken contract, not a guess.
 	const [inputSchema, outputSchema] = (["Input schema", "Output schema"] as const).map((k) => {
-		if (!prompt.fields[k]) throw new Error(`prompt "${config.prompts.qualify}" has no ${k}`);
+		if (!prompt.fields[k]) throw new Error(`prompt "${spec.name}" has no ${k}`);
 		try {
 			return JSON.parse(String(prompt.fields[k])) as Record<string, unknown>;
 		} catch (e) {
 			throw new Error(
-				`prompt "${config.prompts.qualify}" ${k} is not valid JSON: ${(e as Error).message}`
+				`prompt "${spec.name}" ${k} is not valid JSON: ${(e as Error).message}`
 			);
 		}
 	});
@@ -119,6 +123,7 @@ const qualifyContext = async (profile: string) => {
 		properties: { output: outputSchema, statements: STATEMENTS }
 	};
 	return {
+		spec,
 		publicId,
 		person,
 		prompt,
@@ -128,6 +133,80 @@ const qualifyContext = async (profile: string) => {
 		evidence,
 		responseSchema
 	};
+};
+
+// decide — the one judgment machine, whatever the contract: judge the person against a
+// Prompt row (Gemini, or a manual verdict) and persist one Decision. The judge is pluggable:
+// without a verdict, Gemini judges (one retry — temperature 0 varies little, but the error
+// nudges it); with one (the manual path, `--verdict`), the caller already judged and a
+// violation fails loud immediately — the calling agent is the retry loop. Either way the
+// verdict is held to the same contract BEFORE the single write — ajv on the output,
+// anchor.validate on the verbatim quotes — so no Decision is ever persisted with input,
+// output, or reasoning that disagrees with the contract. Decisions are an append-only log:
+// each run is a distinct event, so the page Name carries the run time (like Sourcing) and
+// the latest row at a gate is the live one. `Output` holds the structured verdict as JSON,
+// `Reasoning` the resolved statements, `Input` the frozen evidence.
+//
+// dependsOn makes the Decision a DAG node: it is reviewable only once every upstream
+// Decision is Accepted (derived by the review app, never stored). A dependency-free
+// decision moves its Lead to the prompt's pending gate; a dependent one leaves Status
+// alone — the upstream gate owns it. Human verdict, Final output and Feedback are the
+// human's — never written here.
+const decide = async (
+	key: PromptKey,
+	profile: string,
+	{ dependsOn, verdict }: { dependsOn?: string[]; verdict?: Verdict } = {}
+) => {
+	const ctx = await judgmentContext(key, profile);
+	const check = (v: Verdict): Statement[] => {
+		if (!ajv.validate(ctx.outputSchema, v.output))
+			throw new Error(`output violates Output schema: ${ajv.errorsText(ajv.errors)}`);
+		resolveQuotes(ctx.evidence, v.output); // output quotes persist resolved, like Reasoning's
+		return validate(ctx.evidence, v.statements);
+	};
+
+	let output: Record<string, unknown> | undefined;
+	let statements: Statement[] | undefined;
+	if (verdict) {
+		statements = check(verdict);
+		output = verdict.output;
+	} else {
+		const judgePrompt = [ctx.system, ctx.instruction, `## Evidence\n\n${ctx.evidence}`].join(
+			"\n\n"
+		);
+		for (let attempt = 1; !statements; attempt++) {
+			const res = await gemini.generate<Verdict>(judgePrompt, ctx.responseSchema);
+			try {
+				statements = check(res);
+				output = res.output;
+			} catch (e) {
+				if (attempt >= 2) throw e;
+			}
+		}
+	}
+
+	const name = String(ctx.person.fields.Name ?? ctx.publicId);
+	const ranAt = new Date().toISOString();
+	const lead: Leads = {
+		Name: name,
+		Person: [ctx.person.id],
+		...(dependsOn?.length ? {} : { Status: ctx.spec.pending })
+	};
+	const l = await store.upsert(config.models.Leads, lead, "Name");
+	const d = await store.upsert(
+		config.models.Decisions,
+		{
+			Name: `${name} - ${ctx.spec.name} — ${ranAt.slice(0, 19).replace("T", " ")}`,
+			Output: JSON.stringify(output),
+			Reasoning: JSON.stringify(statements),
+			Input: ctx.evidence,
+			Prompt: [ctx.prompt.id],
+			Lead: [l.id],
+			...(dependsOn?.length ? { "Depends on": dependsOn } : {})
+		} satisfies Decisions,
+		"Name"
+	);
+	return { id: d.id, output, claims: statements.map((s) => s.claim), where: d.url };
 };
 
 export const tools = {
@@ -235,79 +314,28 @@ export const tools = {
 		return { where: url, id, created, companyId: c.companyId, name: c.name };
 	},
 
-	// context — the read half of qualify, exposed so a manual judge (a human, or the calling
-	// agent) reads the exact context Gemini would: the contract plus the frozen evidence,
-	// with the response's expected shape. `qualify --show` prints this; nothing is written.
-	context: async (profile: string) => {
-		const { system, instruction, evidence, responseSchema } = await qualifyContext(profile);
+	// context — the read half of a decision, exposed so a manual judge (a human, or the
+	// calling agent) reads the exact context Gemini would: the contract plus the frozen
+	// evidence, with the response's expected shape. `--show` prints this; nothing is written.
+	context: async (key: PromptKey, profile: string) => {
+		const { system, instruction, evidence, responseSchema } = await judgmentContext(
+			key,
+			profile
+		);
 		return { system, instruction, evidence, responseSchema };
 	},
 
-	// qualify — the judgment: a pure function of frozen context (qualifyContext), never a
-	// fetch. The judge is pluggable: without a verdict, Gemini judges (one retry — temperature
-	// 0 varies little, but the error nudges it); with one (the manual path, `--verdict`), the
-	// caller already judged and a violation fails loud immediately — the calling agent is the
-	// retry loop. Either way the verdict is held to the same contract BEFORE the single write —
-	// ajv on the output, anchor.validate on the verbatim quotes — so no Decision is ever
-	// persisted with input, output, or reasoning that disagrees with the contract. Decisions
-	// are an append-only log: each run is a distinct event, so the page Name carries the run
-	// time (like Sourcing) and the latest row at this gate is the live one. `Output` holds the
-	// structured verdict as JSON, `Reasoning` the resolved statements, `Input` the frozen
-	// evidence. The Lead gains the backlink and moves to the human gate; Accepted, Ground
-	// truth and Feedback are the human's — never written here.
-	qualify: async (profile: string, verdict?: Verdict) => {
-		const ctx = await qualifyContext(profile);
-		const check = (v: Verdict): Statement[] => {
-			if (!ajv.validate(ctx.outputSchema, v.output))
-				throw new Error(`output violates Output schema: ${ajv.errorsText(ajv.errors)}`);
-			resolveQuotes(ctx.evidence, v.output); // output quotes persist resolved, like Reasoning's
-			return validate(ctx.evidence, v.statements);
-		};
+	// qualify — one decide against the qualification contract: does this person fit the ICP?
+	// Internal effect only (CRM state); dependency-free, so it opens its own human gate.
+	qualify: (profile: string, verdict?: Verdict) => decide("qualify", profile, { verdict }),
 
-		let output: Record<string, unknown> | undefined;
-		let statements: Statement[] | undefined;
-		if (verdict) {
-			statements = check(verdict);
-			output = verdict.output;
-		} else {
-			const judgePrompt = [
-				ctx.system,
-				ctx.instruction,
-				`## Evidence\n\n${ctx.evidence}`
-			].join("\n\n");
-			for (let attempt = 1; !statements; attempt++) {
-				const res = await gemini.generate<Verdict>(judgePrompt, ctx.responseSchema);
-				try {
-					statements = check(res);
-					output = res.output;
-				} catch (e) {
-					if (attempt >= 2) throw e;
-				}
-			}
-		}
-
-		const name = String(ctx.person.fields.Name ?? ctx.publicId);
-		const ranAt = new Date().toISOString();
-		const lead: Leads = {
-			Name: name,
-			Person: [ctx.person.id],
-			Status: "Qualification pending approval"
-		};
-		const l = await store.upsert(config.models.Leads, lead, "Name");
-		const d = await store.upsert(
-			config.models.Decisions,
-			{
-				Name: `${name} - Lead Qualification — ${ranAt.slice(0, 19).replace("T", " ")}`,
-				Output: JSON.stringify(output),
-				Reasoning: JSON.stringify(statements),
-				Input: ctx.evidence,
-				Prompt: [ctx.prompt.id],
-				Lead: [l.id]
-			} satisfies Decisions,
-			"Name"
-		);
-		return { output, claims: statements.map((s) => s.claim), where: d.url };
-	},
+	// engage — one decide against the engagement contract: how to open the relationship
+	// (the drafted action is the Output). Its effect is outward, so when it follows a
+	// qualification in the same run, dependsOn carries that Decision's id and the review
+	// app holds this one back until the upstream is Accepted. Without dependsOn it stands
+	// alone — engage-directly, no qualification gate.
+	engage: (profile: string, opts: { dependsOn?: string[]; verdict?: Verdict } = {}) =>
+		decide("engage", profile, opts),
 
 	// put-lead — the join: a Lead is a person, so it needs only that person; its Name is
 	// derived from the Person it points at. companyId is optional (the person's company,

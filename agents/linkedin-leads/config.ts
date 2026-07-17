@@ -15,5 +15,18 @@ export default {
 		Decisions: "eddcfaaf-e6f1-4cea-a112-2b9d98426eb4",
 		Prompts: "942c4138-c9db-404c-9ae0-472f8edb0712"
 	},
-	prompts: { qualify: "Lead Qualification" }
-} satisfies AgentConfig;
+	prompts: {
+		qualify: {
+			name: "Lead Qualification",
+			pending: "Qualification pending approval",
+			onAccept: "To engage",
+			onReject: "Not qualified"
+		},
+		engage: {
+			name: "Lead Engagement",
+			pending: "Engagement pending approval",
+			onAccept: "Engaged - waiting for lead",
+			onReject: "To engage"
+		}
+	}
+} as const satisfies AgentConfig;

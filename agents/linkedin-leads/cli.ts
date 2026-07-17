@@ -6,6 +6,7 @@
 import "../../src/env.js";
 import { Command } from "commander";
 import { readFile } from "node:fs/promises";
+import { text } from "node:stream/consumers";
 import { tools, type Verdict } from "./tools.js";
 
 const out = (v: unknown) => console.log(JSON.stringify(v, null, 2));
@@ -34,6 +35,13 @@ program
 	)
 	.action(async (profile) => out(await tools.enrich(profile)));
 
+// A manual judge's verdict file ("-" = stdin), parsed; undefined when Gemini judges.
+const verdictOf = async (file?: string): Promise<Verdict | undefined> => {
+	if (!file) return undefined;
+	const json = file === "-" ? await text(process.stdin) : await readFile(file, "utf8");
+	return JSON.parse(json) as Verdict;
+};
+
 program
 	.command("qualify")
 	.argument("<profile>", "profile URL or bare publicId (must be enriched)")
@@ -46,11 +54,28 @@ program
 		"Judge the person against the ICP (Gemini, or --verdict for a manual judge); Lead moves to the human gate."
 	)
 	.action(async (profile, { show, verdict }) => {
-		if (show) return out(await tools.context(profile));
-		const v = verdict
-			? (JSON.parse(await readFile(verdict === "-" ? 0 : verdict, "utf8")) as Verdict)
-			: undefined;
-		out(await tools.qualify(profile, v));
+		if (show) return out(await tools.context("qualify", profile));
+		out(await tools.qualify(profile, await verdictOf(verdict)));
+	});
+
+program
+	.command("engage")
+	.argument("<profile>", "profile URL or bare publicId (must be enriched)")
+	.option(
+		"--depends-on <decisionId...>",
+		"upstream Decision id(s) — e.g. the qualification this engagement is conditioned on; held back until they are Accepted"
+	)
+	.option("--show", "print the judgment context (contract + frozen evidence); writes nothing")
+	.option(
+		"--verdict <file>",
+		`a manual judge's JSON { output, statements } ("-" = stdin), held to the same contract`
+	)
+	.description(
+		"Draft how to open the relationship (comment or invite) as its own Decision; standalone, or gated behind --depends-on."
+	)
+	.action(async (profile, { show, verdict, dependsOn }) => {
+		if (show) return out(await tools.context("engage", profile));
+		out(await tools.engage(profile, { dependsOn, verdict: await verdictOf(verdict) }));
 	});
 
 program

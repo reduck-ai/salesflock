@@ -65,7 +65,7 @@ export interface Cta {
 // reasoning as claim→proof statements, an optional call to action, and the frozen evidence
 // markdown the claims point into. `rationale` is the judge's prose — secondary, shown on
 // demand. `output` is the judge's raw structured verdict, kept so a human edit can be
-// re-fused into a corrected copy (Ground truth). The review screen renders this; the flat
+// re-fused into a corrected copy (Final output). The review screen renders this; the flat
 // CardModel above stays for simpler subjects.
 export interface EvidencedJudgment {
 	id: string; // stable key; what a Judgment refers back to

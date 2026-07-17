@@ -58,9 +58,11 @@ npm run dev
 ```
 
 The verdict write-back needs the Notion integration's "Update content" capability plus
-two properties on the Decisions database — `Human verdict` (select) and `Feedback`
-(rich text) — and, since a verdict also moves the linked Lead, "Update content" on the
-Leads database too.
+three properties on the Decisions database — `Human verdict` (select), `Feedback`
+(rich text) and `Final output` (rich text, the output as the human accepted it) — and,
+since a verdict also moves the linked Lead, "Update content" on the Leads database too.
+Which Status each verdict moves the Lead to is the agent's config (`config.prompts`,
+imported via the `$agent` alias), not app code.
 
 ## Deploy
 
