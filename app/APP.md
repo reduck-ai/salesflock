@@ -71,7 +71,10 @@ npx vercel git connect # binds the GitHub repo → push-to-deploy
 ```
 
 If the app lives in a subdirectory of the repo (as here), set the project's
-**Root Directory** to it in Vercel → Settings. From then on every push deploys a
+**Root Directory** to it in Vercel → Settings. The app shares the parent repo's
+core rather than re-implementing it (the `$core` alias in `vite.config.ts` →
+`../src`; first user: the Notion codec), so leave **Include source files outside
+of the Root Directory** enabled (the default). From then on every push deploys a
 preview and every merge to the default branch deploys production — that is the
 whole CI/CD story.
 

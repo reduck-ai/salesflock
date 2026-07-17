@@ -10,6 +10,7 @@
 // `ntn` use the logged-in person.
 
 import { spawn } from "node:child_process";
+import { chunks, plain, type NotionValue } from "./notion.codec.js";
 import type { Ref, Row, Store } from "./index.js";
 
 // Strip the integration token so `ntn` falls back to the personal keychain login.
@@ -29,7 +30,9 @@ const ntn = (args: string[]): Promise<string> =>
 		child.stderr.on("data", (d) => (err += d));
 		child.on("error", reject);
 		child.on("close", (code) =>
-			code === 0 ? resolve(out) : reject(new Error(`ntn ${args.join(" ")} → exit ${code}: ${err.trim()}`))
+			code === 0
+				? resolve(out)
+				: reject(new Error(`ntn ${args.join(" ")} → exit ${code}: ${err.trim()}`))
 		);
 	});
 
@@ -110,21 +113,6 @@ const fragment = (p: NotionProp): Record<string, unknown> | null => {
 	}
 };
 
-// Notion caps one rich text item at 2000 chars; longer strings are written as a run of
-// items, so callers never truncate. But a property returns at most 25 items on READ, so
-// past ~50k chars Notion silently drops the tail — fail loud here rather than lose data.
-const READ_CAP = 25;
-const chunks = (s: string): { text: { content: string } }[] => {
-	const out: { text: { content: string } }[] = [];
-	for (let i = 0; i < Math.max(s.length, 1); i += 2000) out.push({ text: { content: s.slice(i, i + 2000) } });
-	if (out.length > READ_CAP)
-		throw new Error(
-			`notion: ${s.length} chars is ${out.length} rich-text items, over the ${READ_CAP}-item read cap ` +
-				`(~${READ_CAP * 2000} chars) — Notion drops the tail on read. Put this field in the page body instead.`
-		);
-	return out;
-};
-
 // Inverse of fragment: a value + its Notion property type → the API write payload. Covers
 // the writable scalar types; relation/people need id resolution, so we refuse them loudly
 // rather than write a wrong shape silently.
@@ -159,64 +147,25 @@ const serialize = (value: unknown, p: NotionProp): Record<string, unknown> => {
 // id, its url, and whether it was created.
 const pageUrl = (id: string): string => `https://www.notion.so/${id.replace(/-/g, "")}`;
 
-// A page property value, as the API returns it — only the shapes plain() flattens.
-interface NotionValue {
-	type: string;
-	title?: { plain_text: string }[];
-	rich_text?: { plain_text: string }[];
-	url?: string | null;
-	email?: string | null;
-	phone_number?: string | null;
-	number?: number | null;
-	checkbox?: boolean;
-	date?: { start: string } | null;
-	select?: { name: string } | null;
-	status?: { name: string } | null;
-	multi_select?: { name: string }[];
-}
-
-// The inverse of serialize: a property value → a plain scalar. null for types with no
-// scalar reading (relations, files, …) — they are pointers, not content.
-const plain = (v: NotionValue): string | number | boolean | null => {
-	switch (v.type) {
-		case "title":
-		case "rich_text":
-			return (v[v.type] ?? []).map((t) => t.plain_text).join("");
-		case "url":
-			return v.url ?? null;
-		case "email":
-			return v.email ?? null;
-		case "phone_number":
-			return v.phone_number ?? null;
-		case "number":
-			return v.number ?? null;
-		case "checkbox":
-			return v.checkbox ?? null;
-		case "date":
-			return v.date?.start ?? null;
-		case "select":
-		case "status":
-			return (v.type === "select" ? v.select : v.status)?.name ?? null;
-		case "multi_select":
-			return (v.multi_select ?? []).map((o) => o.name).join(", ") || null;
-		default:
-			return null;
-	}
-};
-
 // The shared lookup: resolve the model, load its live property map, and find the one
 // page whose keyProp equals value. upsert writes through it; read reads through it.
 const locate = async (
 	model: string,
 	keyProp: string,
 	value: unknown
-): Promise<{ dsId: string; ds: DataSource; page?: { id: string; properties: Record<string, NotionValue> } }> => {
+): Promise<{
+	dsId: string;
+	ds: DataSource;
+	page?: { id: string; properties: Record<string, NotionValue> };
+}> => {
 	const dsId = await resolveDsId(model);
 	const ds: DataSource = JSON.parse(await ntn(["api", `/v1/data_sources/${dsId}`]));
 	const key = ds.properties[keyProp];
 	if (!key) throw new Error(`notion: no key property "${keyProp}" on "${model}"`);
 	const filter = JSON.stringify({ property: keyProp, [key.type]: { equals: value } });
-	const { results } = JSON.parse(await ntn(["datasources", "query", dsId, "--filter", filter, "--json"]));
+	const { results } = JSON.parse(
+		await ntn(["datasources", "query", dsId, "--filter", filter, "--json"])
+	);
 	return { dsId, ds, page: results[0] };
 };
 
@@ -237,7 +186,9 @@ export const upsert = async (model: string, record: object, keyProp: string): Pr
 		({ id, created } = { id: page.id, created: false });
 	} else {
 		const body = { parent: { type: "data_source_id", data_source_id: dsId }, properties };
-		({ id } = JSON.parse(await ntn(["api", "-X", "POST", "/v1/pages", "-d", JSON.stringify(body)])));
+		({ id } = JSON.parse(
+			await ntn(["api", "-X", "POST", "/v1/pages", "-d", JSON.stringify(body)])
+		));
 		created = true;
 	}
 	return { id, url: pageUrl(id), created };
@@ -271,11 +222,15 @@ export const title = async (_model: string, id: string): Promise<string> => {
 // id rides in `$id` so a writer can recover it; `title` names the dump file. Properties
 // are sorted by name so the file is stable and `git diff` reads as a changelog.
 export const describe = async (model: string): Promise<Record<string, unknown>> => {
-	const ds: DataSource = JSON.parse(await ntn(["api", `/v1/data_sources/${await resolveDsId(model)}`]));
+	const ds: DataSource = JSON.parse(
+		await ntn(["api", `/v1/data_sources/${await resolveDsId(model)}`])
+	);
 	const title = ds.title.map((t) => t.plain_text).join("") || ds.id;
 	const properties: Record<string, unknown> = {};
 	const required: string[] = [];
-	for (const [name, p] of Object.entries(ds.properties).sort((a, b) => a[0].localeCompare(b[0]))) {
+	for (const [name, p] of Object.entries(ds.properties).sort((a, b) =>
+		a[0].localeCompare(b[0])
+	)) {
 		const frag = fragment(p);
 		if (!frag) continue;
 		properties[name] = frag;
