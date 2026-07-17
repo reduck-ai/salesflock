@@ -10,8 +10,8 @@
 
 	let index = $state(0);
 
-	const judge = (verdict: Verdict, feedback: string) => {
-		onjudge?.({ id: judgments[index].id, verdict, feedback });
+	const judge = (verdict: Verdict, feedback: string, cta?: string) => {
+		onjudge?.({ id: judgments[index].id, verdict, feedback, cta });
 		index += 1;
 	};
 	const nav = (dir: -1 | 1) => (index = Math.min(judgments.length - 1, Math.max(0, index + dir)));

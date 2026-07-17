@@ -14,7 +14,29 @@
 		highlights
 	}: { source: string; class?: string; highlights?: { si: number; sel: Selector }[] } = $props();
 
-	const html = $derived(highlights ? highlightEvidence(source, highlights) : snarkdown(source));
+	// snarkdown only links [text](url); our sources carry bare URLs (evidence is raw field
+	// values). Linkify them in the rendered HTML's text segments — never inside a tag or an
+	// existing anchor — so a URL stays clickable even when a highlight <mark> wraps it.
+	const linkify = (html: string): string => {
+		let inAnchor = 0;
+		return html
+			.split(/(<[^>]+>)/)
+			.map((seg) => {
+				if (seg.startsWith("<")) {
+					if (/^<a[\s>]/i.test(seg)) inAnchor++;
+					else if (/^<\/a>/i.test(seg)) inAnchor--;
+					return seg;
+				}
+				if (inAnchor) return seg;
+				return seg.replace(
+					/https?:\/\/[^\s<>)]+[^\s<>).,;:!?]/g,
+					(u) => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`
+				);
+			})
+			.join("");
+	};
+
+	const html = $derived(linkify(highlights ? highlightEvidence(source, highlights) : snarkdown(source)));
 </script>
 
 <div class="md {klass}">{@html html}</div>

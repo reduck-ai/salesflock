@@ -22,11 +22,12 @@
 		judgment: EvidencedJudgment;
 		pos: number;
 		total: number;
-		onjudge?: (verdict: Verdict, feedback: string) => void;
+		onjudge?: (verdict: Verdict, feedback: string, cta?: string) => void;
 		onnav?: (dir: -1 | 1) => void;
 	} = $props();
 
 	let feedback = $state("");
+	let ctaText = $state(judgment.cta?.text ?? ""); // the human's CTA edit (card remounts per id)
 	let activeMi = $state<number | null>(null); // the cursor: one quote (a mark index)
 	let collapsed = $state(false);
 	let unfolded = $state(false); // the rationale prose, folded away by default
@@ -34,16 +35,27 @@
 	let panelEl = $state<HTMLElement>();
 
 	// every quote in claim order, tagged with its statement index — the flat list the cursor
-	// walks; a claim's marks are adjacent, so stepping reads claim by claim, proof by proof
-	const marks = $derived(judgment.statements.flatMap((s, i) => s.quotes.map((sel) => ({ si: i, sel }))));
+	// walks; a claim's marks are adjacent, so stepping reads claim by claim, proof by proof.
+	// The CTA's quotes ride last, under the virtual index statements.length: one more claim
+	// to the cursor, so Tab, miOf and the highlight machinery need no special case.
+	const CTA_SI = $derived(judgment.statements.length);
+	const marks = $derived([
+		...judgment.statements.flatMap((s, i) => s.quotes.map((sel) => ({ si: i, sel }))),
+		...(judgment.cta?.quotes ?? []).map((sel) => ({ si: CTA_SI, sel }))
+	]);
 	// the mark index of a statement's first quote — how the claim list addresses the cursor
 	const miOf = (si: number) => judgment.statements.slice(0, si).reduce((n, s) => n + s.quotes.length, 0);
 	// the tally: how contested the verdict is, before reading a word
 	const nFor = $derived(judgment.statements.filter((s) => s.supporting).length);
 	const nAgainst = $derived(judgment.statements.length - nFor);
-	// the cursor's claim, floated over the evidence so claim and proof are read together
+	// the cursor's claim, floated over the evidence so claim and proof are read together;
+	// on the CTA's index it reads as the proposed action itself
 	const activeSi = $derived(activeMi === null ? null : marks[activeMi].si);
-	const active = $derived(activeSi === null ? null : judgment.statements[activeSi]);
+	const active = $derived(
+		activeSi === null
+			? null
+			: (judgment.statements[activeSi] ?? { claim: ctaText || "Proposed next step", supporting: true })
+	);
 
 	// toggle .active on the cursor claim's marks and .current on the cursor's own (marks live
 	// in {@html}, so we reach them through the container ref rather than reactive markup)
@@ -74,7 +86,12 @@
 			window.scrollBy({ top: m.getBoundingClientRect().top - band / 2, behavior: "smooth" });
 		}
 	};
-	const decide = (v: Verdict) => onjudge?.(v, feedback.trim());
+	// the CTA edit travels only when it changed something — the judge's text stays canonical
+	const ctaEdit = () => {
+		const t = ctaText.trim();
+		return judgment.cta?.text !== undefined && t && t !== judgment.cta.text ? t : undefined;
+	};
+	const decide = (v: Verdict) => onjudge?.(v, feedback.trim(), ctaEdit());
 
 	// Enter accepts, Esc rejects, ←/→ navigate, Tab / Shift+Tab step through proofs — ignored while typing
 	$effect(() => {
@@ -206,7 +223,18 @@
 						</div>
 
 						{#if judgment.cta}
-							<div class="cta"><Markdown source={judgment.cta} /></div>
+							<!-- svelte-ignore a11y_no_static_element_interactions -->
+							<div
+								class="cta"
+								class:active={activeSi === CTA_SI}
+								onmouseenter={() => judgment.cta && (activeMi = miOf(CTA_SI))}
+							>
+								<Markdown source={judgment.cta.head} />
+								{#if judgment.cta.text !== undefined}
+									<textarea class="cta-text" bind:value={ctaText} rows="1" onfocus={() => goto(miOf(CTA_SI))}
+									></textarea>
+								{/if}
+							</div>
 						{/if}
 					</div>
 
@@ -230,6 +258,9 @@
 								{#each judgment.statements as s, i (i)}
 									<span class="dot" class:against={!s.supporting} class:on={activeSi === i}></span>
 								{/each}
+								{#if judgment.cta}
+									<span class="dot cta" class:on={activeSi === CTA_SI}></span>
+								{/if}
 							</span>
 							<span>{active.claim}</span>
 						</div>
@@ -350,6 +381,13 @@
 	}
 	.float-claim .dot.against.on {
 		color: #dc2626;
+	}
+	/* the CTA's dot: an action, not a stance — neutral */
+	.float-claim .dot.cta {
+		background: var(--muted-foreground);
+	}
+	.float-claim .dot.cta.on {
+		color: var(--muted-foreground);
 	}
 
 	.veil {
@@ -528,13 +566,41 @@
 		background: var(--accent);
 		outline: none;
 	}
-	/* the proposed next action — the last thing read before deciding */
+	/* the proposed next action — the last thing read before deciding. Active like a claim
+	   when the cursor is on its quotes; the body is the human's to edit in place. */
 	.cta {
-		margin: 4px 18px 14px;
-		padding-top: 10px;
+		margin: 4px 8px 14px;
+		padding: 10px 10px 0;
 		border-top: 1px solid var(--border);
+		border-radius: 9px;
 		font-size: 13px;
 		line-height: 1.55;
+		transition: background 0.15s ease;
+	}
+	.cta.active {
+		background: var(--accent);
+	}
+	.cta-text {
+		width: 100%;
+		margin-top: 4px;
+		padding: 6px 9px;
+		border: 1px solid transparent;
+		border-radius: 9px;
+		background: transparent;
+		font: inherit;
+		font-style: italic;
+		color: var(--foreground);
+		resize: none;
+		field-sizing: content; /* grows with the edit */
+	}
+	.cta-text:hover {
+		border-color: var(--input);
+	}
+	.cta-text:focus {
+		outline: none;
+		border-color: var(--ring);
+		background: var(--card);
+		box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring) 30%, transparent);
 	}
 
 	.acts-wrap {

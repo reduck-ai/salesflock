@@ -11,7 +11,7 @@ import {
 } from "../../src/clients/lk/index.js";
 import { getStore } from "../../src/stores/index.js";
 import * as gemini from "../../src/ai/gemini.js";
-import { validate, type RawStatement, type Statement } from "../../src/anchor.js";
+import { resolveQuotes, validate, type RawStatement, type Statement } from "../../src/anchor.js";
 import { markdown } from "../../src/markdown.js";
 import { Ajv } from "ajv";
 import { stringify } from "yaml";
@@ -260,6 +260,7 @@ export const tools = {
 		const check = (v: Verdict): Statement[] => {
 			if (!ajv.validate(ctx.outputSchema, v.output))
 				throw new Error(`output violates Output schema: ${ajv.errorsText(ajv.errors)}`);
+			resolveQuotes(ctx.evidence, v.output); // output quotes persist resolved, like Reasoning's
 			return validate(ctx.evidence, v.statements);
 		};
 

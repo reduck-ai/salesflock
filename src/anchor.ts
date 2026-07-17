@@ -60,6 +60,25 @@ export const resolve = (evidence: string, quote: string): Selector | null => {
 	return { exact: quote };
 };
 
+// resolveQuotes(evidence, value) — deep-walk a judge's structured output and resolve every
+// `quotes: string[]` field to Selectors, in place. The statements rule, generalized: in a
+// verdict, ANY field named `quotes` cites the evidence verbatim, so persistence always
+// stores resolved anchors — never raw strings. Loud on a missing quote, like validate.
+export const resolveQuotes = (evidence: string, value: unknown): void => {
+	if (!value || typeof value !== "object") return;
+	for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+		if (k === "quotes" && Array.isArray(v) && v.every((q) => typeof q === "string")) {
+			const sels = (v as string[]).map((q) => resolve(evidence, q));
+			const missing = (v as string[]).filter((_, i) => !sels[i]);
+			if (missing.length)
+				throw new Error(
+					`quotes not found verbatim in evidence:\n- ${missing.join("\n- ")}`
+				);
+			(value as Record<string, unknown>)[k] = sels;
+		} else resolveQuotes(evidence, v);
+	}
+};
+
 // validate(evidence, statements) → statements with every quote resolved to a unique Selector.
 // Loud on failure: a statement with no quote is an unsupported claim, and a quote absent from
 // the evidence is a broken anchor — either way we name the offenders and throw rather than

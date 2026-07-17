@@ -1,18 +1,24 @@
 <script lang="ts">
 	import { Button } from "$lib/components/ui/button/index.js";
 	import JudgmentStack from "$lib/cards/JudgmentStack.svelte";
+	import { correct } from "$lib/cards/decision";
 	import type { Judgment } from "$lib/cards/types";
 
 	let { data } = $props();
 
 	// Persist each verdict + feedback to its source record; fire-and-forget so the
 	// deck keeps its snappy feel. A failure surfaces in the console, not a blocked UI.
-	const judge = (j: Judgment) =>
+	// An edited CTA is re-fused into the judge's Output (the adapter's inverse) and
+	// travels as groundTruth — the human's corrected Output, same contract.
+	const judge = (j: Judgment) => {
+		const output = data.judgments.find((x) => x.id === j.id)?.output;
+		const groundTruth = j.cta && output ? JSON.stringify(correct(output, j.cta)) : undefined;
 		fetch("/api/decide", {
 			method: "POST",
 			headers: { "content-type": "application/json" },
-			body: JSON.stringify(j)
+			body: JSON.stringify({ id: j.id, verdict: j.verdict, feedback: j.feedback, groundTruth })
 		}).catch((e) => console.error("decide failed", e));
+	};
 </script>
 
 {#if !data.user}

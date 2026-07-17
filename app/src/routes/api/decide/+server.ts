@@ -9,12 +9,13 @@ import type { RequestHandler } from "./$types";
 
 export const POST: RequestHandler = async ({ request, locals }) => {
 	if (!locals.user) throw error(401, "not signed in");
-	const { id, verdict, feedback } = (await request.json()) as {
+	const { id, verdict, feedback, groundTruth } = (await request.json()) as {
 		id: string;
 		verdict: Verdict;
 		feedback?: string;
+		groundTruth?: string; // the human's corrected output — opaque here, card-type-agnostic
 	};
 	if (!id || (verdict !== "accepted" && verdict !== "rejected")) throw error(400, "bad judgment");
-	await record(id, verdict, feedback ?? "");
+	await record(id, verdict, feedback ?? "", groundTruth);
 	return json({ ok: true });
 };

@@ -26,11 +26,13 @@ export interface CardModel {
 
 export type Verdict = "accepted" | "rejected";
 
-// The output of reviewing one card: the human's call plus optional free-text.
+// The output of reviewing one card: the human's call plus optional free-text. `cta` is the
+// human's edited next-step text — present only when it differs from the judge's.
 export interface Judgment {
 	id: string;
 	verdict: Verdict;
 	feedback: string;
+	cta?: string;
 }
 
 // A quote located unambiguously in the evidence — W3C TextQuoteSelector shape. The judge's
@@ -50,16 +52,28 @@ export interface Statement {
 	quotes: Selector[];
 }
 
+// The proposed next action, structured like a statement so it anchors into the evidence
+// and the human can edit it: a fixed markdown head, the editable body text, and the quotes
+// tying the action to what it responds to — at least one, like a statement's.
+export interface Cta {
+	head: string; // markdown — "Next step — …", never edited
+	text?: string; // the judge's comment/note — the one editable field
+	quotes: Selector[];
+}
+
 // A richer card for a judgment that cites evidence: a markdown verdict headline, the
 // reasoning as claim→proof statements, an optional call to action, and the frozen evidence
 // markdown the claims point into. `rationale` is the judge's prose — secondary, shown on
-// demand. The review screen renders this; the flat CardModel above stays for simpler subjects.
+// demand. `output` is the judge's raw structured verdict, kept so a human edit can be
+// re-fused into a corrected copy (Ground truth). The review screen renders this; the flat
+// CardModel above stays for simpler subjects.
 export interface EvidencedJudgment {
 	id: string; // stable key; what a Judgment refers back to
 	href?: string; // the source record (the Notion Decision page)
 	verdict: string; // markdown — an H1 headline, colour inline
 	rationale?: string; // markdown — the judge's prose, behind a discreet toggle
-	cta?: string; // markdown — the proposed next action
+	cta?: Cta;
 	statements: Statement[];
 	evidence: string; // markdown — frozen snapshot the quotes resolve against
+	output: Record<string, unknown>; // the judge's Output, verbatim — Ground truth's base
 }
