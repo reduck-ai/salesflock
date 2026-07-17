@@ -16,7 +16,6 @@ export interface Leads {
     | "Qualification pending approval"
     | "Not qualified"
     | "To engage"
-    | "Validate engagement strategy"
     | "Engagement pending approval"
     | "Engaged - waiting for lead"
     | "Meeting booked";

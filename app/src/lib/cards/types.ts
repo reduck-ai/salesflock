@@ -75,5 +75,5 @@ export interface EvidencedJudgment {
 	cta?: Cta;
 	statements: Statement[];
 	evidence: string; // markdown — frozen snapshot the quotes resolve against
-	output: Record<string, unknown>; // the judge's Output, verbatim — Ground truth's base
+	output: Record<string, unknown>; // the judge's Output, verbatim — Final output's base
 }
