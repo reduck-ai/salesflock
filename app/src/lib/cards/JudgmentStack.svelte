@@ -5,16 +5,16 @@
 	// the caller's. ←/→ navigate without deciding.
 	import { fly } from "svelte/transition";
 	import ReviewCard from "./ReviewCard.svelte";
-	import type { EvidencedJudgment, Judgment, Verdict } from "./types";
+	import type { EvidencedJudgment, Judgment, Statement, Verdict } from "./types";
 
 	let { judgments, onjudge }: { judgments: EvidencedJudgment[]; onjudge?: (j: Judgment) => void } = $props();
 
 	let index = $state(0);
 	let receipts = $state<{ verdict: Verdict; title: string; href?: string }[]>([]);
 
-	const judge = (verdict: Verdict, feedback: string, cta?: string) => {
+	const judge = (verdict: Verdict, feedback: string, cta?: string, reasoning?: Statement[]) => {
 		const j = judgments[index];
-		onjudge?.({ id: j.id, verdict, feedback, cta });
+		onjudge?.({ id: j.id, verdict, feedback, cta, reasoning });
 		receipts.push({ verdict, title: j.title, href: j.href });
 		index += 1;
 	};

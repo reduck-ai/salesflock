@@ -7,10 +7,15 @@
 	// pinned in the right margin like a doc comment. One cursor: click a claim, a dot, or a
 	// margin note — or press Tab/Shift+Tab — to focus a quote and scroll it into view.
 	// ⏎ accepts, Esc rejects, ←/→ navigate.
+	// The human can also talk back at the reasoning: a comment on any claim, and a
+	// Notion-style selection menu over the evidence to add a new claim (✓/✕) or attach the
+	// quote to an existing one — all edits to a local copy of the statements; the judge's
+	// stay canonical and the copy travels with the verdict only when it differs.
 	// Presentational: it owns feedback (resets on remount) and emits a verdict; meaning is the
 	// caller's.
 	import Markdown from "$lib/components/Markdown.svelte";
-	import type { EvidencedJudgment, Verdict } from "./types";
+	import { resolve } from "$core/anchor";
+	import type { EvidencedJudgment, Selector, Statement, Verdict } from "./types";
 
 	let {
 		judgment,
@@ -22,13 +27,22 @@
 		judgment: EvidencedJudgment;
 		pos: number;
 		total: number;
-		onjudge?: (verdict: Verdict, feedback: string, cta?: string) => void;
+		onjudge?: (verdict: Verdict, feedback: string, cta?: string, reasoning?: Statement[]) => void;
 		onnav?: (dir: -1 | 1) => void;
 	} = $props();
 
 	let feedback = $state("");
 	let noting = $state(false); // the optional note field, folded away until asked for
 	let ctaText = $state(judgment.cta?.text ?? ""); // the human's CTA edit (card remounts per id)
+	// the human's editable copy of the reasoning — comments and added claims/quotes land here;
+	// the judge's statements stay canonical on the prop (the card remounts per id)
+	let statements = $state<Statement[]>(structuredClone(judgment.statements));
+	// the selection menu — its selector is minted at mouseup: verbatim-or-refuse, the judge's contract
+	let menu = $state<{ selector: Selector | null; x: number; y: number } | null>(null);
+	let menuMode = $state<"acts" | "claim" | "attach">("acts");
+	let stance = $state(true); // the new claim's stance, picked before its text is typed
+	let claimText = $state("");
+	let menuEl = $state<HTMLElement>();
 	let activeMi = $state<number | null>(null); // the cursor: one quote (a mark index)
 	let unfolded = $state(false); // the rationale prose, folded away by default
 	let evEl = $state<HTMLElement>();
@@ -37,9 +51,9 @@
 	// every quote in claim order, tagged with its statement index — the flat list the cursor
 	// walks; a claim's marks are adjacent, so stepping reads claim by claim, proof by proof.
 	// The CTA is not on the walk: it IS the draft in the dock, not a claim to verify.
-	const marks = $derived(judgment.statements.flatMap((s, i) => s.quotes.map((sel) => ({ si: i, sel }))));
+	const marks = $derived(statements.flatMap((s, i) => s.quotes.map((sel) => ({ si: i, sel }))));
 	// the mark index of a statement's first quote — how the claim list addresses the cursor
-	const miOf = (si: number) => judgment.statements.slice(0, si).reduce((n, s) => n + s.quotes.length, 0);
+	const miOf = (si: number) => statements.slice(0, si).reduce((n, s) => n + s.quotes.length, 0);
 	const activeSi = $derived(activeMi === null ? null : marks[activeMi].si);
 
 	// stance and focus onto the rendered marks (they live in {@html}, so we reach them through
@@ -50,39 +64,46 @@
 		const si = activeSi;
 		const mi = activeMi;
 		el?.querySelectorAll("mark.hl").forEach((m) => {
-			const s = judgment.statements[Number(m.getAttribute("data-si"))];
+			const s = statements[Number(m.getAttribute("data-si"))];
 			m.classList.toggle("against", s ? !s.supporting : false);
 			m.classList.toggle("active", si !== null && m.getAttribute("data-si") === String(si));
 			m.classList.toggle("current", mi !== null && m.getAttribute("data-mi") === String(mi));
 		});
 	});
 
-	// the margin notes — each claim pinned beside its first proof, doc-comment style. Measured
-	// from the rendered marks, stacked downward so neighbours never overlap; re-measured on
-	// resize (line wrapping moves the marks).
-	const NOTE_H = 72; // estimated note height for stacking (clamped to 3 lines)
+	// the margin notes — each claim pinned beside its first proof, doc-comment style. A pin's
+	// top is a pure function of its anchor mark's top and the MEASURED heights of the pins
+	// above it (bind:clientHeight — reactive, so expansion/replies re-stack and overlap is
+	// impossible by construction; no estimated height). Anchors re-measure on resize (line
+	// wrapping moves the marks); heights depend only on content and the gutter's fixed width,
+	// never on top, so measure→place settles in one pass.
+	const GAP = 10;
 	let vw = $state(0);
-	let notes = $state<{ si: number; top: number }[]>([]);
+	let anchors = $state<{ si: number; top: number }[]>([]);
+	let heights = $state<Record<number, number>>({});
 	$effect(() => {
 		void vw;
 		const el = evEl;
 		if (!el || !marks.length) {
-			notes = [];
+			anchors = [];
 			return;
 		}
 		const base = el.getBoundingClientRect().top;
 		// pin each claim beside its first proof, in document order (claims and quotes are
-		// ordered independently), pushing a note down only past the one pinned just above
-		const measured = judgment.statements
+		// ordered independently)
+		anchors = statements
 			.flatMap((_, si) => {
 				const m = el.querySelector(`mark.hl[data-si="${si}"]`);
 				return m ? { si, top: m.getBoundingClientRect().top - base } : [];
 			})
 			.sort((a, b) => a.top - b.top);
+	});
+	// the floor walk: each pin lands at its anchor, pushed down only past the one just above
+	const notes = $derived.by(() => {
 		let floor = 0;
-		notes = measured.map(({ si, top }) => {
+		return anchors.map(({ si, top }) => {
 			const at = Math.max(top, floor);
-			floor = at + NOTE_H + 10;
+			floor = at + (heights[si] ?? 0) + GAP;
 			return { si, top: at };
 		});
 	});
@@ -100,7 +121,46 @@
 		const t = ctaText.trim();
 		return judgment.cta?.text !== undefined && t && t !== judgment.cta.text ? t : undefined;
 	};
-	const decide = (v: Verdict) => onjudge?.(v, feedback.trim(), ctaEdit());
+	// likewise the reasoning: the edited copy travels only when it differs from the judge's.
+	// Empty comments are dropped, so an opened-then-abandoned field is not an edit.
+	const reasoningEdit = (): Statement[] | undefined => {
+		const edited = $state
+			.snapshot(statements)
+			.map(({ comment, ...s }) => (comment?.trim() ? { ...s, comment: comment.trim() } : s));
+		return JSON.stringify(edited) !== JSON.stringify(judgment.statements) ? edited : undefined;
+	};
+	const decide = (v: Verdict) => onjudge?.(v, feedback.trim(), ctaEdit(), reasoningEdit());
+
+	// the selection menu opens on mouseup over a selection inside the evidence; the selector
+	// is minted right away — an unresolvable selection (markdown syntax in the span) shows a
+	// hint instead of actions, never a guessed anchor.
+	const onselect = (e: MouseEvent) => {
+		if (menuEl?.contains(e.target as Node)) return;
+		const s = window.getSelection();
+		const text = s && !s.isCollapsed ? s.toString().trim() : "";
+		if (!text || !evEl?.contains(s!.anchorNode)) {
+			menu = null;
+			return;
+		}
+		const r = s!.getRangeAt(0).getBoundingClientRect();
+		menuMode = "acts";
+		claimText = "";
+		menu = { selector: resolve(judgment.evidence, text), x: r.left + r.width / 2, y: r.top };
+	};
+	const closeMenu = () => {
+		menu = null;
+		window.getSelection()?.removeAllRanges();
+	};
+	const addClaim = () => {
+		const claim = claimText.trim();
+		if (!claim || !menu?.selector) return;
+		statements.push({ claim, supporting: stance, quotes: [menu.selector] });
+		closeMenu();
+	};
+	const attach = (si: number) => {
+		if (menu?.selector) statements[si].quotes.push(menu.selector);
+		closeMenu();
+	};
 
 	// the window scroll is shared chrome — each card starts at the top of its evidence
 	$effect(() => window.scrollTo(0, 0));
@@ -110,6 +170,11 @@
 	$effect(() => {
 		const onkey = (e: KeyboardEvent) => {
 			if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+			// the selection menu owns the keys while open — Esc closes it, nothing else fires
+			if (menu) {
+				if (e.key === "Escape") closeMenu();
+				return;
+			}
 			// a focused button already turns Enter into its own click — don't decide twice
 			if (e.key === "Enter" && !(e.target instanceof HTMLButtonElement)) decide("accepted");
 			else if (e.key === "Escape") decide("rejected");
@@ -128,7 +193,19 @@
 	});
 </script>
 
-<svelte:window bind:innerWidth={vw} />
+<svelte:window
+	bind:innerWidth={vw}
+	onmouseup={onselect}
+	onmousedown={(e) => menu && !menuEl?.contains(e.target as Node) && (menu = null)}
+	onclick={(e) => {
+		// a quote is clickable, à la Notion: focus it and its margin comment expands.
+		// A click anywhere else — outside a quote, its pin, or a dock claim — unselects.
+		const t = e.target as Element;
+		const m = t.closest?.("mark.hl");
+		if (m && evEl?.contains(m)) activeMi = Number(m.getAttribute("data-mi"));
+		else if (!t.closest?.(".note-pin, .claim, .selmenu")) activeMi = null;
+	}}
+/>
 
 <div class="page">
 	<div class="rail" title={`${pos} / ${total}`}>
@@ -146,21 +223,63 @@
 		<Markdown source={judgment.evidence} highlights={marks} class="evidence" />
 		<div class="gutter">
 			{#each notes as n (n.si)}
-				<button
+				<div
 					class="note-pin"
-					class:against={!judgment.statements[n.si].supporting}
+					class:against={!statements[n.si].supporting}
 					class:on={activeSi === n.si}
 					style={`top:${n.top}px`}
-					onclick={() => goto(miOf(n.si))}
+					bind:clientHeight={heights[n.si]}
 				>
-					<span>{judgment.statements[n.si].claim}</span>
-				</button>
+					<button onclick={() => goto(miOf(n.si))}>
+						<span>{statements[n.si].claim}</span>
+					</button>
+					{#if activeSi === n.si}
+						<input
+							class="reply"
+							bind:value={statements[n.si].comment}
+							placeholder="Reply…"
+							onkeydown={(e) => (e.key === "Enter" || e.key === "Escape") && e.currentTarget.blur()}
+						/>
+					{:else if statements[n.si].comment}
+						<div class="cmt">{statements[n.si].comment}</div>
+					{/if}
+				</div>
 			{/each}
 		</div>
 	</div>
 </div>
 
 <div class="veil"></div>
+
+{#if menu}
+	<div class="selmenu" bind:this={menuEl} style={`left:${menu.x}px; top:${menu.y}px`}>
+		{#if !menu.selector}
+			<span class="nohit">Can't anchor — select the text verbatim, within one block</span>
+		{:else if menuMode === "acts"}
+			<button class="act for" onclick={() => ((stance = true), (menuMode = "claim"))}> ✓ New claim </button>
+			<button class="act against" onclick={() => ((stance = false), (menuMode = "claim"))}>
+				✕ New claim
+			</button>
+			<button class="act" onclick={() => (menuMode = "attach")}>Add to claim…</button>
+		{:else if menuMode === "claim"}
+			<input
+				class="claim-in"
+				bind:value={claimText}
+				placeholder={stance ? "The claim this supports…" : "The claim this cuts against…"}
+				{@attach (el: HTMLInputElement) => el.focus()}
+				onkeydown={(e) => (e.key === "Enter" ? addClaim() : e.key === "Escape" && closeMenu())}
+			/>
+		{:else}
+			<div class="attach">
+				{#each statements as s, i (i)}
+					<button class="pick" class:against={!s.supporting} onclick={() => attach(i)}>
+						<span class="glyph">{s.supporting ? "✓" : "✕"}</span><span>{s.claim}</span>
+					</button>
+				{/each}
+			</div>
+		{/if}
+	</div>
+{/if}
 
 <div class="dock" bind:this={dockEl}>
 	<div class="head">
@@ -196,7 +315,7 @@
 	{/if}
 
 	<div class="why">
-		{#each judgment.statements as s, i (i)}
+		{#each statements as s, i (i)}
 			<button
 				class="claim"
 				class:active={activeSi === i}
@@ -344,8 +463,6 @@
 	.note-pin {
 		position: absolute;
 		width: 100%;
-		text-align: left;
-		font: inherit;
 		font-size: 12px;
 		line-height: 1.45;
 		color: var(--muted-foreground);
@@ -354,14 +471,24 @@
 		border-left: 2.5px solid #16a34a;
 		border-radius: 10px;
 		padding: 7px 10px;
-		cursor: pointer;
 		box-shadow: 0 1px 3px rgb(0 0 0 / 0.07);
 		transition:
 			color 0.15s ease,
 			border-color 0.15s ease,
 			box-shadow 0.15s ease;
 	}
-	.note-pin > span {
+	.note-pin button {
+		display: block;
+		width: 100%;
+		text-align: left;
+		font: inherit;
+		color: inherit;
+		background: none;
+		border: none;
+		padding: 0;
+		cursor: pointer;
+	}
+	.note-pin button > span {
 		display: -webkit-box;
 		-webkit-line-clamp: 3;
 		line-clamp: 3;
@@ -369,9 +496,37 @@
 		overflow: hidden;
 	}
 	/* the open comment reads in full, floating over its neighbours — Notion's expand */
-	.note-pin.on > span {
+	.note-pin.on button > span {
 		-webkit-line-clamp: unset;
 		line-clamp: unset;
+	}
+	/* the human's side of the thread: the note, or the Reply field while the pin is open */
+	.note-pin .reply,
+	.note-pin .cmt {
+		width: 100%;
+		margin-top: 6px;
+		padding: 5px 0 0;
+		border-top: 1px solid var(--border);
+		font: inherit;
+		font-size: 12px;
+		color: var(--foreground);
+	}
+	.note-pin .reply {
+		border-left: none;
+		border-right: none;
+		border-bottom: none;
+		background: none;
+		outline: none;
+	}
+	.note-pin .reply::placeholder {
+		color: var(--muted-foreground);
+	}
+	.note-pin .cmt {
+		display: -webkit-box;
+		-webkit-line-clamp: 2;
+		line-clamp: 2;
+		-webkit-box-orient: vertical;
+		overflow: hidden;
 	}
 	.note-pin.on {
 		z-index: 1;
@@ -406,6 +561,92 @@
 		height: 230px;
 		pointer-events: none;
 		background: linear-gradient(to top, var(--background) 36%, transparent);
+	}
+
+	/* the selection menu — Notion-style, floated just above the highlighted text */
+	.selmenu {
+		position: fixed;
+		transform: translate(-50%, calc(-100% - 10px));
+		z-index: 30;
+		display: flex;
+		align-items: stretch;
+		gap: 2px;
+		padding: 4px;
+		background: var(--card);
+		border: 1px solid var(--border);
+		border-radius: 12px;
+		box-shadow: 0 8px 30px rgb(0 0 0 / 0.16);
+		max-width: min(440px, calc(100vw - 24px));
+	}
+	.selmenu .nohit {
+		font-size: 12px;
+		color: var(--muted-foreground);
+		padding: 4px 8px;
+		white-space: nowrap;
+	}
+	.selmenu .act {
+		border: none;
+		background: none;
+		cursor: pointer;
+		font: inherit;
+		font-size: 12.5px;
+		font-weight: 550;
+		color: var(--foreground);
+		padding: 5px 9px;
+		border-radius: 8px;
+		white-space: nowrap;
+	}
+	.selmenu .act:hover {
+		background: var(--accent);
+	}
+	.selmenu .act.for {
+		color: #16a34a;
+	}
+	.selmenu .act.against {
+		color: #dc2626;
+	}
+	.selmenu .claim-in {
+		width: 320px;
+		max-width: calc(100vw - 60px);
+		border: none;
+		background: none;
+		outline: none;
+		font: inherit;
+		font-size: 13px;
+		padding: 5px 8px;
+		color: var(--foreground);
+	}
+	.selmenu .attach {
+		display: flex;
+		flex-direction: column;
+		max-height: 40vh;
+		overflow-y: auto;
+		min-width: 260px;
+	}
+	.selmenu .pick {
+		display: flex;
+		gap: 7px;
+		align-items: flex-start;
+		border: none;
+		background: none;
+		cursor: pointer;
+		text-align: left;
+		font: inherit;
+		font-size: 12.5px;
+		line-height: 1.45;
+		padding: 6px 8px;
+		border-radius: 8px;
+		color: var(--foreground);
+	}
+	.selmenu .pick:hover {
+		background: var(--accent);
+	}
+	.selmenu .pick .glyph {
+		color: #16a34a;
+		font-weight: 700;
+	}
+	.selmenu .pick.against .glyph {
+		color: #dc2626;
 	}
 
 	/* the dock — the composer: the one surface where opinion lives */
@@ -544,19 +785,17 @@
 		width: 6px;
 		height: 6px;
 		border-radius: 50%;
-		background: color-mix(in oklch, #16a34a 55%, var(--card));
+		background: #16a34a;
 	}
 	.claim.against .dot {
-		background: color-mix(in oklch, #dc2626 55%, var(--card));
+		background: #dc2626;
 	}
 	.claim .dot.on {
-		background: #16a34a;
 		box-shadow:
 			0 0 0 2px var(--card),
 			0 0 0 3px #16a34a;
 	}
 	.claim.against .dot.on {
-		background: #dc2626;
 		box-shadow:
 			0 0 0 2px var(--card),
 			0 0 0 3px #dc2626;

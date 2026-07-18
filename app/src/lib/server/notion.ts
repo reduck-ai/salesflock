@@ -77,9 +77,11 @@ const patch = async (pageId: string, properties: Record<string, unknown>) => {
 	if (!res.ok) throw new Error(`Notion ${res.status}: ${await res.text()}`);
 };
 
-// record(pageId, verdict, feedback, finalOutput?) — a judgment writes the human-owned
-// columns. The verdict lands on the Decision page ("Human verdict" select + optional
-// "Feedback" + optional "Final output", the output as the human accepted/sent it): the
+// record(pageId, verdict, feedback, finalOutput?, finalReasoning?) — a judgment writes the
+// human-owned columns. The verdict lands on the Decision page ("Human verdict" select +
+// optional "Feedback" + optional "Final output", the output as the human accepted/sent it,
+// + optional "Final reasoning", the statements as the human accepted them — comments and
+// added claims included; "Reasoning" stays the judge's, verbatim): the
 // audit record of what the human decided. The pipeline move lands on the linked Lead
 // ("Status") and is the Prompt's to declare, not ours: the Decision's Prompt row names its
 // spec in config.prompts, and the verdict picks onAccept/onReject. An unknown prompt gets
@@ -90,13 +92,15 @@ export const record = async (
 	pageId: string,
 	verdict: "accepted" | "rejected",
 	feedback: string,
-	finalOutput?: string
+	finalOutput?: string,
+	finalReasoning?: string
 ) => {
 	const accepted = verdict === "accepted";
 	await patch(pageId, {
 		"Human verdict": { select: { name: accepted ? "Accepted" : "Rejected" } },
 		...(feedback ? { Feedback: { rich_text: chunks(feedback) } } : {}),
-		...(finalOutput ? { "Final output": { rich_text: chunks(finalOutput) } } : {})
+		...(finalOutput ? { "Final output": { rich_text: chunks(finalOutput) } } : {}),
+		...(finalReasoning ? { "Final reasoning": { rich_text: chunks(finalReasoning) } } : {})
 	});
 
 	const { properties } = await page(pageId);

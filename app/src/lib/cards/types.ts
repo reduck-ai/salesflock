@@ -27,12 +27,14 @@ export interface CardModel {
 export type Verdict = "accepted" | "rejected";
 
 // The output of reviewing one card: the human's call plus optional free-text. `cta` is the
-// human's edited next-step text — present only when it differs from the judge's.
+// human's edited next-step text, `reasoning` the human's edited statements (comments and
+// added claims/quotes) — each present only when it differs from the judge's.
 export interface Judgment {
 	id: string;
 	verdict: Verdict;
 	feedback: string;
 	cta?: string;
+	reasoning?: Statement[];
 }
 
 // A quote located unambiguously in the evidence — W3C TextQuoteSelector shape. The judge's
@@ -46,10 +48,12 @@ export interface Selector {
 
 // One reasoning statement: a claim, its stance (for or against the verdict), and the
 // evidence spans that back it — at least one; an unbacked claim is not a statement.
+// `comment` is the human's — a note on why the claim is wrong (or right), never the judge's.
 export interface Statement {
 	claim: string;
 	supporting: boolean;
 	quotes: Selector[];
+	comment?: string;
 }
 
 // The proposed next action, structured like a statement so it anchors into the evidence

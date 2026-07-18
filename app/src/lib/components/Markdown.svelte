@@ -78,6 +78,7 @@
 		color: inherit;
 		border-radius: 3px;
 		padding: 0 1px;
+		cursor: pointer; /* clicking a quote focuses it — its margin comment expands */
 		transition:
 			background 0.18s ease,
 			box-shadow 0.18s ease;
