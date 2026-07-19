@@ -1,39 +1,71 @@
 <script lang="ts">
 	// The OUTPUT zone — the agent's proposal rendered from its Prompt Output schema, editable in
-	// place. The committed value IS the decision. Minimal controls: enum → segmented, string →
-	// textarea, number/boolean → input — driven by the schema (for enums) and the value (for
-	// shape). Anchoring/discriminator fields (quotes, action) aren't the human's to edit; a URL
-	// shows as a link. Self-contained: swap these controls for a schema-form library without
-	// touching the dock. Deep $state makes nested mutation reactive — no effects, no bind gymnastics.
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	type Schema = { properties?: Record<string, any>; format?: string; enum?: unknown[] };
+	// place. The committed value IS the decision. The schema alone decides what's editable: a field
+	// is the human's unless it is `readOnly` or pinned to a `const`. Read-only scalars show as
+	// context (a URL as a link); read-only arrays/objects (anchoring metadata like `quotes`) are
+	// omitted — they live as highlights in the evidence. No field names in here; the contract
+	// governs. Enforcement is the caller's (ReviewCard runs the shared `schemaError` gate). A
+	// self-contained render seam — swap for a schema-form library without touching the dock. Deep
+	// $state makes nested mutation reactive; no effects, no bind gymnastics.
+	type Schema = {
+		properties?: Record<string, Schema>;
+		anyOf?: Schema[];
+		format?: string;
+		enum?: unknown[];
+		const?: unknown;
+		readOnly?: boolean;
+	};
 	let { schema, value = $bindable() }: { schema?: Schema; value: Record<string, unknown> } = $props();
 
 	const label = (k: string) => k.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
-	const hidden = (k: string) => k === "quotes" || k === "action";
-	const propOf = (s: Schema | undefined, k: string): Schema | undefined => s?.properties?.[k];
+	// the human's to edit unless the schema pins it to one value: readOnly, a const, or a
+	// single-option enum (a discriminator like `action`)
+	const fixed = (p?: Schema) =>
+		!!p?.readOnly || p?.const !== undefined || (Array.isArray(p?.enum) && p.enum.length === 1);
+	const editable = (p?: Schema) => !fixed(p);
+	const isUrl = (p: Schema | undefined, v: unknown) =>
+		p?.format === "uri" || (typeof v === "string" && /^https?:\/\//.test(v));
+	// resolve a discriminated union to the branch matching the value (by const / single-enum), so
+	// readOnly markers inside a branch are reachable; a plain object schema passes through.
+	const branch = (p: Schema | undefined, v: Record<string, unknown>): Schema | undefined => {
+		if (!p?.anyOf) return p;
+		return (
+			p.anyOf.find((b) =>
+				Object.entries(b.properties ?? {}).every(([k, s]) => {
+					const fixed = s.const ?? (s.enum?.length === 1 ? s.enum[0] : undefined);
+					return fixed === undefined || fixed === v?.[k];
+				})
+			) ?? p
+		);
+	};
+	const propOf = (p: Schema | undefined, k: string): Schema | undefined => p?.properties?.[k];
 </script>
 
-<!-- eslint-disable @typescript-eslint/no-explicit-any -->
-{#snippet field(obj: Record<string, any>, key: string, prop: Schema | undefined)}
+{#snippet field(obj: Record<string, unknown>, key: string, prop: Schema | undefined)}
 	{@const v = obj[key]}
-	{#if hidden(key)}
-		<!-- anchoring / discriminator — not editable -->
+	{#if !editable(prop)}
+		{#if v !== null && typeof v === "object"}
+			<!-- read-only array/object (e.g. quotes) — not shown; it lives in the evidence -->
+		{:else}
+			<div class="row">
+				<span class="lbl">{label(key)}</span>
+				{#if isUrl(prop, v)}
+					<a class="link" href={String(v)} target="_blank" rel="noopener">{v}</a>
+				{:else}
+					<span class="ro">{v}</span>
+				{/if}
+			</div>
+		{/if}
 	{:else if Array.isArray(prop?.enum)}
 		<div class="row">
 			<span class="lbl">{label(key)}</span>
 			<div class="seg">
-				{#each prop.enum as opt (opt)}
+				{#each prop?.enum ?? [] as opt (opt)}
 					<button type="button" class="opt" class:on={v === opt} onclick={() => (obj[key] = opt)}>
 						{opt}
 					</button>
 				{/each}
 			</div>
-		</div>
-	{:else if key === "postUrl" || prop?.format === "uri"}
-		<div class="row">
-			<span class="lbl">{label(key)}</span>
-			<a class="link" href={String(v)} target="_blank" rel="noopener">{v}</a>
 		</div>
 	{:else if typeof v === "string"}
 		<label class="row">
@@ -56,10 +88,11 @@
 			<span class="lbl">{label(key)}</span>
 		</label>
 	{:else if v && typeof v === "object"}
+		{@const s = branch(prop, v as Record<string, unknown>)}
 		<fieldset class="grp">
 			<legend>{label(key)}</legend>
 			{#each Object.keys(v) as k (k)}
-				{@render field(v, k, propOf(prop, k))}
+				{@render field(v as Record<string, unknown>, k, propOf(s, k))}
 			{/each}
 		</fieldset>
 	{/if}
@@ -90,6 +123,10 @@
 		letter-spacing: 0.06em;
 		text-transform: uppercase;
 		color: var(--muted-foreground);
+	}
+	/* a read-only scalar — context, not an input */
+	.ro {
+		color: var(--foreground);
 	}
 	/* enum → segmented control; the seeded pick reads at a glance (no separate headline) */
 	.seg {

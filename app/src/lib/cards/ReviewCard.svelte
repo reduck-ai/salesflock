@@ -17,6 +17,7 @@
 	import Markdown from "$lib/components/Markdown.svelte";
 	import OutputForm from "./OutputForm.svelte";
 	import { resolveVisible, quoteKey } from "$core/anchor";
+	import { schemaError } from "$core/output";
 	import type { EvidencedJudgment, Selector, Statement } from "./types";
 
 	let {
@@ -196,9 +197,15 @@
 			.map(({ comment, ...s }) => (comment?.trim() ? { ...s, comment: comment.trim() } : s));
 		return JSON.stringify(edited) !== JSON.stringify(judgment.statements) ? edited : undefined;
 	};
+	// the human is a judge too: the committed output is held to the same Prompt Output schema the
+	// LLM's was (the shared gate). Confirm is inert while it violates — derived, no effect.
+	const outputError = $derived(judgment.outputSchema ? schemaError(judgment.outputSchema, output) : null);
 	// commit = the committed output (the decision), which advances the deck; save (no output) =
 	// the same judgment with the decision withheld. The parent persists either way.
-	const commit = () => onjudge?.($state.snapshot(output), feedback.trim(), reasoningEdit());
+	const commit = () => {
+		if (outputError) return;
+		onjudge?.($state.snapshot(output), feedback.trim(), reasoningEdit());
+	};
 	export function save() {
 		onjudge?.(undefined, feedback.trim(), reasoningEdit());
 	}
@@ -463,11 +470,16 @@
 	<!-- OUTPUT — the agent's proposal, editable within its schema; committing it IS the decision -->
 	<div class="output">
 		<OutputForm schema={judgment.outputSchema} bind:value={output} />
+		{#if outputError}
+			<p class="err">{outputError}</p>
+		{/if}
 	</div>
 
 	<div class="acts-wrap">
 		<div class="acts">
-			<button class="btn confirm" onclick={commit}>Confirm <kbd>⏎</kbd></button>
+			<button class="btn confirm" onclick={commit} disabled={!!outputError}>
+				Confirm <kbd>⏎</kbd>
+			</button>
 			<button
 				class="btn-note"
 				class:on={noting}
@@ -1057,6 +1069,11 @@
 	.btn:hover {
 		filter: brightness(1.06);
 	}
+	.btn:disabled {
+		opacity: 0.45;
+		cursor: not-allowed;
+		filter: none;
+	}
 	.btn kbd {
 		font-family: ui-monospace, monospace;
 		font-size: 10.5px;
@@ -1068,6 +1085,13 @@
 	}
 	.btn.confirm {
 		background: #16a34a;
+	}
+	/* the schema violation — why Confirm is inert; the shared gate's own message */
+	.err {
+		margin: 6px 2px 0;
+		font-size: 12px;
+		line-height: 1.4;
+		color: #dc2626;
 	}
 
 	@media (prefers-reduced-motion: reduce) {

@@ -29,6 +29,7 @@
 	"dependencies": {
 		"@auth/sveltekit": "^1.11.2",
 		"@sveltejs/adapter-vercel": "^6.3.4",
+		"ajv": "8.20.0",
 		"clsx": "^2.1.1",
 		"marked": "^18.0.6",
 		"tailwind-merge": "^3.6.0",

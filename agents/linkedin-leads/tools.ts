@@ -14,7 +14,7 @@ import { idOf } from "../../src/stores/notion.js";
 import { reviewOf } from "../../src/review.js";
 import * as llm from "../../src/ai/llm.js";
 import { resolveQuotes, validate, type RawStatement } from "../../src/anchor.js";
-import { Ajv } from "ajv";
+import { schemaError } from "../../src/output.js";
 import { stringify } from "yaml";
 import config from "./config.js";
 import { renderEvidence } from "./evidence.js";
@@ -85,8 +85,6 @@ const STATEMENTS = {
 	}
 } as const;
 
-const ajv = new Ajv();
-
 // A judgment, whoever judged: the domain output plus its claim→proof statements. What
 // the LLM returns, and what a manual judge hands to `qualify` via --verdict.
 export interface Verdict {
@@ -151,7 +149,7 @@ const judgmentContext = async (key: PromptKey, profile: string) => {
 // without a verdict, the LLM judges (one retry — temperature 0 varies little, but the error
 // nudges it); with one (the manual path, `--verdict`), the caller already judged and a
 // violation fails loud immediately — the calling agent is the retry loop. Either way the
-// verdict is held to the same contract BEFORE the single write — ajv on the output,
+// verdict is held to the same contract BEFORE the single write — schemaError on the output,
 // anchor.validate on the verbatim quotes — so no Decision is ever persisted with input,
 // output, or reasoning that disagrees with the contract. Decisions are an append-only log:
 // each run is a distinct event, so the page Name carries the run time (like Sourcing) and
@@ -172,13 +170,13 @@ const decide = async (
 	{ dependsOn, verdict }: { dependsOn?: string[]; verdict?: Verdict } = {}
 ) => {
 	const ctx = await judgmentContext(key, profile);
-	// Hold the verdict to the contract before the single write — ajv on the output, anchor on the
-	// verbatim quotes (statements' and any in the output) — but keep the RAW quote strings: the
+	// Hold the verdict to the contract before the single write — schemaError on the output, anchor
+	// on the verbatim quotes (statements' and any in the output) — but keep the RAW quote strings: the
 	// Decision freezes the words, the app re-derives the anchor live. resolveQuotes mutates, so
 	// validate output quotes on a clone; validate() returns the resolved form, which we discard.
 	const check = (v: Verdict): void => {
-		if (!ajv.validate(ctx.outputSchema, v.output))
-			throw new Error(`output violates Output schema: ${ajv.errorsText(ajv.errors)}`);
+		const err = schemaError(ctx.outputSchema, v.output);
+		if (err) throw new Error(`output violates Output schema: ${err}`);
 		resolveQuotes(ctx.evidence, structuredClone(v.output));
 		validate(ctx.evidence, v.statements);
 	};

@@ -4,8 +4,10 @@
 // prompt's `resolve` maps a committed output → its pipeline move + polarity, shared with the
 // runtime. NOTION_TOKEN is an internal-integration token the databases are shared with.
 
+import { error } from "@sveltejs/kit";
 import { env } from "$env/dynamic/private";
 import { chunks, plain, relation, type NotionValue } from "$core/stores/notion.codec";
+import { schemaError } from "$core/output";
 import config from "$agent/config";
 
 const API = "https://api.notion.com/v1";
@@ -176,7 +178,14 @@ export const record = async (
 
 	const { properties } = await page(pageId);
 	const promptId = relation(properties.Prompt)[0];
-	const spec = promptId ? specByName((await promptInfo(promptId)).name) : undefined;
+	const { name, outputSchema } = promptId
+		? await promptInfo(promptId)
+		: { name: "", outputSchema: undefined };
+	// The same gate the LLM passes: a committed output that violates its Prompt schema is refused
+	// (defense behind the client's own check) — nothing is persisted.
+	const invalid = outputSchema && schemaError(outputSchema, committedOutput);
+	if (invalid) throw error(400, `output violates Output schema: ${invalid}`);
+	const spec = specByName(name);
 	// Resolve BEFORE the write so a malformed output fails loud, persisting nothing.
 	const status = spec?.resolve(committedOutput as Record<string, unknown>).status;
 	await patch(pageId, {
