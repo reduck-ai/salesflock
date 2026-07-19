@@ -2,8 +2,13 @@ import tailwindcss from "@tailwindcss/vite";
 import adapter from "@sveltejs/adapter-vercel";
 import { sveltekit } from "@sveltejs/kit/vite";
 import { defineConfig } from "vite";
+import { fileURLToPath } from "node:url";
 
 export default defineConfig({
+	// Shared files under ../src and ../agents `import "yaml"`, but on Vercel only
+	// app/node_modules is installed — Rolldown resolves the bare specifier from the
+	// importing file's dir (outside the app root) and misses it. Pin it to the app's copy.
+	resolve: { alias: { yaml: fileURLToPath(new URL("./node_modules/yaml", import.meta.url)) } },
 	plugins: [
 		tailwindcss(),
 		sveltekit({
