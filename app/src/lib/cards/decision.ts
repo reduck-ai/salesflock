@@ -1,19 +1,21 @@
 // The worked example: a Notion Decision → an EvidencedJudgment. This is the ONLY place that
 // knows a Decision's shape — the structured verdict is JSON (`Output`), the reasoning is the
-// statements JSON (`Reasoning`), and the frozen evidence markdown (`Input`) is what the
-// claims' quotes resolve against. All three are written by `leads qualify` / `leads engage`
-// against the Prompt's contract, so we parse, not guess. Two contracts, one discriminator:
-// a qualification Output carries `tier`, an engagement Output carries `next_step`.
+// statements JSON (`Reasoning`, quotes as verbatim strings), and `Input` is the lossless data
+// map the judge saw. We render the evidence live (the shared `renderEvidence`) and resolve each
+// quote's anchor against it here — so improving the renderer reflows every Decision, no re-judge.
+// Two contracts, one discriminator: a qualification Output carries `tier`, engagement `next_step`.
 
 import type { Decision } from "$lib/server/notion";
+import { renderEvidence } from "$agent/evidence";
+import { resolve, type RawStatement } from "$core/anchor";
 import { locate } from "./highlight";
 import type { Cta, EvidencedJudgment, Selector, Statement } from "./types";
 
 // Mirrors the engagement Prompt's anyOf: an actionable step always cites what it responds
 // to (quotes, resolved at decide time like a statement's).
 type NextStep =
-	| { action: "comment_post"; postUrl: string; comment: string; quotes: Selector[] }
-	| { action: "send_invite"; note?: string; quotes: Selector[] };
+	| { action: "comment_post"; postUrl: string; comment: string; quotes: string[] }
+	| { action: "send_invite"; note?: string; quotes: string[] };
 type QualifyOutput = { tier: "T1" | "T2" | "Not qualified" };
 type EngageOutput = { engagement_strategy: string; next_step: NextStep };
 
@@ -26,7 +28,7 @@ const TIER_COLOUR: Record<QualifyOutput["tier"], string> = {
 // The structured next step → a Cta: a fixed head, the editable body, its quotes. The
 // lead's profileUrl is context, not shown here.
 const toCta = (evidence: string, n: NextStep): Cta => {
-	const quotes = byAppearance(evidence, n.quotes);
+	const quotes = resolveQuotes(evidence, n.quotes);
 	return n.action === "comment_post"
 		? { head: `**Next step — comment on [a post](${n.postUrl})**`, text: n.comment, quotes }
 		: n.note
@@ -46,12 +48,20 @@ const byAppearance = (evidence: string, quotes: Selector[]): Selector[] =>
 		return pos(a) - pos(b);
 	});
 
+// Raw quote strings → ordered Selectors, the anchor derived live against the rendered evidence.
+// An unresolvable quote (the renderer moved under it) drops — it simply won't highlight.
+const resolveQuotes = (evidence: string, quotes: string[]): Selector[] =>
+	byAppearance(
+		evidence,
+		quotes.map((q) => resolve(evidence, q)).filter((s): s is Selector => s !== null)
+	);
+
 // The Output onto the card, by contract. Qualification: the tier is the headline, nothing
 // else — the statements are the whole reading. Engagement: the action is the headline, the
 // strategy note the rationale (prose, shown on demand), the drafted action the CTA.
 export const decisionToJudgment = (d: Decision): EvidencedJudgment => {
 	const o = JSON.parse(d.fields.Output) as Record<string, unknown>;
-	const evidence = d.fields.Input;
+	const evidence = renderEvidence(JSON.parse(d.fields.Input) as Record<string, string>);
 	const head =
 		"tier" in o
 			? { verdict: tierHeadline((o as QualifyOutput).tier) }
@@ -60,7 +70,8 @@ export const decisionToJudgment = (d: Decision): EvidencedJudgment => {
 					rationale: (o as EngageOutput).engagement_strategy,
 					cta: toCta(evidence, (o as EngageOutput).next_step)
 				};
-	const order = (ss: Statement[]) => ss.map((s) => ({ ...s, quotes: byAppearance(evidence, s.quotes) }));
+	const order = (ss: (RawStatement & { comment?: string })[]): Statement[] =>
+		ss.map((s) => ({ ...s, quotes: resolveQuotes(evidence, s.quotes) }));
 	// a saved-but-undecided draft, when the human has already checkpointed work on this row:
 	// their edited statements ("Final reasoning") and note ("Feedback"). Only present until a
 	// verdict is set (a decided row leaves the queue). Quotes ordered like the judge's.
@@ -68,14 +79,19 @@ export const decisionToJudgment = (d: Decision): EvidencedJudgment => {
 	const draftReasoning = d.fields["Final reasoning"];
 	const draft =
 		draftReasoning || feedback
-			? { feedback, reasoning: draftReasoning ? order(JSON.parse(draftReasoning) as Statement[]) : undefined }
+			? {
+					feedback,
+					reasoning: draftReasoning
+						? order(JSON.parse(draftReasoning) as (RawStatement & { comment?: string })[])
+						: undefined
+				}
 			: undefined;
 	return {
 		id: d.id,
 		title: d.title,
 		href: d.url,
 		...head,
-		statements: order(JSON.parse(d.fields.Reasoning) as Statement[]),
+		statements: order(JSON.parse(d.fields.Reasoning) as RawStatement[]),
 		evidence,
 		output: o,
 		draft

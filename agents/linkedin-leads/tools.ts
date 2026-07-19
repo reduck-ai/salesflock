@@ -13,11 +13,11 @@ import { getStore } from "../../src/stores/index.js";
 import { idOf } from "../../src/stores/notion.js";
 import { reviewOf } from "../../src/review.js";
 import * as llm from "../../src/ai/llm.js";
-import { resolveQuotes, validate, type RawStatement, type Statement } from "../../src/anchor.js";
-import { markdown } from "../../src/markdown.js";
+import { resolveQuotes, validate, type RawStatement } from "../../src/anchor.js";
 import { Ajv } from "ajv";
 import { stringify } from "yaml";
 import config from "./config.js";
+import { projectInput, renderEvidence } from "./evidence.js";
 import type { People } from "./schema/People.js";
 import type { Companies } from "./schema/Companies.js";
 import type { Leads } from "./schema/Leads.js";
@@ -120,15 +120,11 @@ const judgmentContext = async (key: PromptKey, profile: string) => {
 		}
 	});
 
-	// Project the Person onto the Input schema's fields — the schema names the evidence — and
-	// hold the projection to that contract before judging: evidence must respect it. Each
-	// field renders as Markdown (structured YAML → bullets) so the evidence reads as one document.
-	const keys = Object.keys((inputSchema.properties as Record<string, unknown> | undefined) ?? {});
-	const present = keys.filter((k) => f[k]);
-	const input = Object.fromEntries(present.map((k) => [k, String(f[k])]));
-	if (!ajv.validate(inputSchema, input))
-		throw new Error(`evidence violates Input schema: ${ajv.errorsText(ajv.errors)}`);
-	const evidence = present.map((k) => `### ${k}\n\n${markdown(String(f[k]))}`).join("\n\n");
+	// Project the Person onto the Input schema (the schema names the evidence) — the lossless map
+	// the Decision freezes as `Input` — then render it for the judge. The app renders the same map
+	// from the frozen data, so improving `renderEvidence` reflows every Decision with no re-judge.
+	const input = projectInput(f, inputSchema);
+	const evidence = renderEvidence(input);
 
 	const responseSchema = {
 		type: "object",
@@ -143,6 +139,7 @@ const judgmentContext = async (key: PromptKey, profile: string) => {
 		system,
 		instruction,
 		outputSchema,
+		input,
 		evidence,
 		responseSchema
 	};
@@ -157,9 +154,11 @@ const judgmentContext = async (key: PromptKey, profile: string) => {
 // anchor.validate on the verbatim quotes — so no Decision is ever persisted with input,
 // output, or reasoning that disagrees with the contract. Decisions are an append-only log:
 // each run is a distinct event, so the page Name carries the run time (like Sourcing) and
-// the latest row at a gate is the live one. `Output` holds the structured verdict as JSON,
-// `Reasoning` the resolved statements, `Input` the frozen evidence, `Model` the model that
-// judged (its AI SDK id, or "manual" for a supplied verdict).
+// the latest row at a gate is the live one. The Decision freezes the SEED, not the flower:
+// `Input` the lossless projected data (JSON map), `Reasoning` the statements with verbatim quote
+// STRINGS, `Output` the structured verdict (its quotes strings too), `Model` the model that judged
+// (its AI SDK id, or "manual"). The review app renders the evidence and re-derives each quote's
+// anchor live, so this renderer can improve without re-judging.
 //
 // dependsOn makes the Decision a DAG node: it is reviewable only once every upstream
 // Decision is Accepted (derived by the review app, never stored). A dependency-free
@@ -172,18 +171,22 @@ const decide = async (
 	{ dependsOn, verdict }: { dependsOn?: string[]; verdict?: Verdict } = {}
 ) => {
 	const ctx = await judgmentContext(key, profile);
-	const check = (v: Verdict): Statement[] => {
+	// Hold the verdict to the contract before the single write — ajv on the output, anchor on the
+	// verbatim quotes (statements' and any in the output) — but keep the RAW quote strings: the
+	// Decision freezes the words, the app re-derives the anchor live. resolveQuotes mutates, so
+	// validate output quotes on a clone; validate() returns the resolved form, which we discard.
+	const check = (v: Verdict): void => {
 		if (!ajv.validate(ctx.outputSchema, v.output))
 			throw new Error(`output violates Output schema: ${ajv.errorsText(ajv.errors)}`);
-		resolveQuotes(ctx.evidence, v.output); // output quotes persist resolved, like Reasoning's
-		return validate(ctx.evidence, v.statements);
+		resolveQuotes(ctx.evidence, structuredClone(v.output));
+		validate(ctx.evidence, v.statements);
 	};
 
 	let output: Record<string, unknown> | undefined;
-	let statements: Statement[] | undefined;
+	let statements: RawStatement[] | undefined;
 	if (verdict) {
-		statements = check(verdict);
-		output = verdict.output;
+		check(verdict);
+		({ output, statements } = verdict);
 	} else {
 		const judgePrompt = [ctx.system, ctx.instruction, `## Evidence\n\n${ctx.evidence}`].join(
 			"\n\n"
@@ -191,8 +194,8 @@ const decide = async (
 		for (let attempt = 1; !statements; attempt++) {
 			const res = await llm.generate<Verdict>(judgePrompt, ctx.responseSchema);
 			try {
-				statements = check(res);
-				output = res.output;
+				check(res);
+				({ output, statements } = res);
 			} catch (e) {
 				if (attempt >= 2) throw e;
 			}
@@ -213,7 +216,7 @@ const decide = async (
 			Name: `${name} - ${ctx.spec.name} — ${ranAt.slice(0, 19).replace("T", " ")}`,
 			Output: JSON.stringify(output),
 			Reasoning: JSON.stringify(statements),
-			Input: ctx.evidence,
+			Input: JSON.stringify(ctx.input),
 			Model: verdict ? "manual" : llm.MODEL,
 			Prompt: [ctx.prompt.id],
 			Lead: [l.id],

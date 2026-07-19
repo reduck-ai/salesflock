@@ -20,7 +20,11 @@
 	const judge = (j: Judgment) => {
 		const output = data.judgments.find((x) => x.id === j.id)?.output;
 		const finalOutput = j.cta && output ? JSON.stringify(correct(output, j.cta)) : undefined;
-		const finalReasoning = j.reasoning ? JSON.stringify(j.reasoning) : undefined;
+		// store the human's reasoning like the judge's: quotes as verbatim strings, not resolved
+		// Selectors — the anchor is derived live on read (decision.ts), never frozen.
+		const finalReasoning = j.reasoning
+			? JSON.stringify(j.reasoning.map((s) => ({ ...s, quotes: s.quotes.map((q) => q.exact) })))
+			: undefined;
 		fetch("/api/decide", {
 			method: "POST",
 			headers: { "content-type": "application/json" },
