@@ -1,9 +1,11 @@
-// Text anchoring — tie a claim to the exact evidence it cites. The judge quotes the
-// evidence verbatim; this resolves each quote to a W3C-style TextQuoteSelector that matches
-// EXACTLY one span. The evidence is frozen onto the Decision and highlighted against that
-// same snapshot, so there is no document drift — uniqueness of the exact quote is necessary
-// and sufficient. No char offsets, no fuzzy matching: that machinery only earns its keep
-// under drift (add an exact→fuzzy fallback the day evidence is ever highlighted live).
+// Text anchoring — tie a claim to the exact evidence it cites. The judge quotes the evidence
+// verbatim; this resolves each quote to a W3C-style TextQuoteSelector that matches EXACTLY one
+// span. A Decision freezes the quote TEXT and the input DATA — not the rendered evidence: the
+// evidence is re-rendered deterministically from that data by the one renderer, and each quote
+// is resolved against it live at read. No drift, because that render is deterministic over the
+// frozen data and keeps cited value text verbatim; a quote a renderer change moves under simply
+// fails to resolve and drops from the highlight. No char offsets, no fuzzy matching: uniqueness
+// of the exact quote is necessary and sufficient.
 
 // A quote located unambiguously: `exact`, plus just enough neighbouring text (prefix/suffix)
 // to single out one occurrence when the quote repeats. Shape follows the W3C Web Annotation
