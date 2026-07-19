@@ -11,7 +11,11 @@
 		"build": "tsc"
 	},
 	"dependencies": {
+		"@ai-sdk/amazon-bedrock": "^5.0.24",
+		"@ai-sdk/google": "^4.0.18",
+		"@aws-sdk/credential-providers": "^3.1090.0",
 		"@reduck-ai/cli": "^2.0.32",
+		"ai": "^7.0.31",
 		"ajv": "8.20.0",
 		"commander": "^12.1.0",
 		"yaml": "^2.9.0"

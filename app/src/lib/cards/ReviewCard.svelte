@@ -14,7 +14,7 @@
 	// Presentational: it owns feedback (resets on remount) and emits a verdict; meaning is the
 	// caller's.
 	import Markdown from "$lib/components/Markdown.svelte";
-	import { resolve } from "$core/anchor";
+	import { resolveVisible, quoteKey } from "$core/anchor";
 	import type { EvidencedJudgment, Selector, Statement, Verdict } from "./types";
 
 	let {
@@ -55,6 +55,31 @@
 	// the mark index of a statement's first quote — how the claim list addresses the cursor
 	const miOf = (si: number) => statements.slice(0, si).reduce((n, s) => n + s.quotes.length, 0);
 	const activeSi = $derived(activeMi === null ? null : marks[activeMi].si);
+
+	// provenance, derived from the canonical prop — never stored. A claim or quote is the
+	// human's iff it isn't in the judge's frozen judgment; the judge's stay immutable
+	// labelling data, only the human's are editable. Same identity `diffStatements` uses.
+	const original = $derived(
+		new Map(judgment.statements.map((s) => [s.claim, new Set(s.quotes.map(quoteKey))]))
+	);
+	const isUserClaim = (claim: string) => !original.has(claim);
+	const isUserQuote = (claim: string, sel: Selector) => !original.get(claim)?.has(quoteKey(sel));
+	// the focused quote is the human's — the one removal predicate the ✕ and ⌫ both gate on
+	const canRemove = (mi: number | null): boolean => {
+		if (mi === null) return false;
+		const { si } = marks[mi];
+		return isUserQuote(statements[si].claim, statements[si].quotes[mi - miOf(si)]);
+	};
+	// remove the focused quote; when it was the last quote of a human claim, the claim goes
+	// with it (a claim without proof is not a statement). The judge's quotes never qualify.
+	const removeFocused = () => {
+		if (!canRemove(activeMi)) return;
+		const si = marks[activeMi!].si;
+		const s = statements[si];
+		if (s.quotes.length > 1) s.quotes.splice(activeMi! - miOf(si), 1);
+		else statements.splice(si, 1);
+		activeMi = null;
+	};
 
 	// stance and focus onto the rendered marks (they live in {@html}, so we reach them through
 	// the container ref): .against colours a quote by its claim's stance, .active lights up the
@@ -145,7 +170,7 @@
 		const r = s!.getRangeAt(0).getBoundingClientRect();
 		menuMode = "acts";
 		claimText = "";
-		menu = { selector: resolve(judgment.evidence, text), x: r.left + r.width / 2, y: r.top };
+		menu = { selector: resolveVisible(judgment.evidence, text), x: r.left + r.width / 2, y: r.top };
 	};
 	const closeMenu = () => {
 		menu = null;
@@ -180,7 +205,10 @@
 			else if (e.key === "Escape") decide("rejected");
 			else if (e.key === "ArrowRight") onnav?.(1);
 			else if (e.key === "ArrowLeft") onnav?.(-1);
-			else if (e.key === "Tab") {
+			else if ((e.key === "Backspace" || e.key === "Delete") && canRemove(activeMi)) {
+				e.preventDefault();
+				removeFocused();
+			} else if (e.key === "Tab") {
 				e.preventDefault();
 				const n = marks.length;
 				if (!n) return;
@@ -316,12 +344,7 @@
 
 	<div class="why">
 		{#each statements as s, i (i)}
-			<button
-				class="claim"
-				class:active={activeSi === i}
-				class:against={!s.supporting}
-				onclick={() => goto(miOf(i))}
-			>
+			<div class="claim" class:active={activeSi === i} class:against={!s.supporting}>
 				<svg
 					class="mark"
 					width="13"
@@ -340,13 +363,32 @@
 						<path d="M18 6 6 18" /><path d="m6 6 12 12" />
 					{/if}
 				</svg>
-				<span class="text">{s.claim}</span>
+				<!-- the judge's claims are read-only labelling data; the human's own are editable -->
+				{#if isUserClaim(s.claim)}
+					<input
+						class="text edit"
+						aria-label="Edit claim"
+						bind:value={statements[i].claim}
+						onkeydown={(e) => (e.key === "Enter" || e.key === "Escape") && e.currentTarget.blur()}
+					/>
+				{:else}
+					<button class="text" onclick={() => goto(miOf(i))}>{s.claim}</button>
+				{/if}
 				<span class="dots">
-					{#each s.quotes as _, j (j)}
-						<span class="dot" class:on={activeMi === miOf(i) + j}></span>
+					{#each s.quotes as sel, j (j)}
+						<button
+							class="dot"
+							class:on={activeMi === miOf(i) + j}
+							class:userq={isUserQuote(s.claim, sel)}
+							aria-label="proof"
+							onclick={() => goto(miOf(i) + j)}
+						></button>
 					{/each}
 				</span>
-			</button>
+				{#if activeSi === i && canRemove(activeMi)}
+					<button class="rm" title="Remove this quote (⌫)" aria-label="Remove this quote" onclick={removeFocused}>✕</button>
+				{/if}
+			</div>
 		{/each}
 	</div>
 
@@ -743,27 +785,55 @@
 		align-items: flex-start;
 		gap: 9px;
 		width: 100%;
-		text-align: left;
-		font: inherit;
 		font-size: 13px;
 		line-height: 1.5;
 		color: var(--foreground);
-		background: none;
-		border: none;
 		padding: 5px 8px;
 		border-radius: 9px;
-		cursor: pointer;
 		transition: background 0.15s ease;
 	}
 	.claim:hover,
-	.claim:focus-visible,
 	.claim.active {
 		background: var(--accent);
-		outline: none;
 	}
+	/* the claim text: the judge's is a button (click to focus its proof), the human's an
+	   inline-editable input — same look, so only the affordance differs */
 	.claim .text {
 		flex: 1;
 		min-width: 0;
+		font: inherit;
+		text-align: left;
+		color: inherit;
+		background: none;
+		border: none;
+		padding: 0;
+	}
+	.claim button.text {
+		cursor: pointer;
+	}
+	.claim .text.edit {
+		outline: none;
+		border-radius: 5px;
+	}
+	.claim .text.edit:hover,
+	.claim .text.edit:focus {
+		box-shadow: inset 0 0 0 1px var(--input);
+	}
+	/* the ✕ removes the focused human quote (its claim too, if it was the last proof) */
+	.claim .rm {
+		flex: none;
+		border: none;
+		background: none;
+		cursor: pointer;
+		color: var(--muted-foreground);
+		font-size: 12px;
+		line-height: 1;
+		padding: 2px 3px;
+		border-radius: 5px;
+	}
+	.claim .rm:hover {
+		color: #dc2626;
+		background: color-mix(in oklch, #dc2626 12%, transparent);
 	}
 	/* the stance mark: ✓ argues for the verdict, ✕ against — shape first, colour second */
 	.claim .mark {
@@ -786,9 +856,21 @@
 		height: 6px;
 		border-radius: 50%;
 		background: #16a34a;
+		padding: 0;
+		border: none;
+		appearance: none;
+		cursor: pointer;
 	}
 	.claim.against .dot {
 		background: #dc2626;
+	}
+	/* a human-attached proof reads hollow — the judge's are solid (labelling data) */
+	.claim .dot.userq {
+		background: transparent;
+		box-shadow: inset 0 0 0 1.5px #16a34a;
+	}
+	.claim.against .dot.userq {
+		box-shadow: inset 0 0 0 1.5px #dc2626;
 	}
 	.claim .dot.on {
 		box-shadow:
@@ -797,6 +879,18 @@
 	}
 	.claim.against .dot.on {
 		box-shadow:
+			0 0 0 2px var(--card),
+			0 0 0 3px #dc2626;
+	}
+	.claim .dot.userq.on {
+		box-shadow:
+			inset 0 0 0 1.5px #16a34a,
+			0 0 0 2px var(--card),
+			0 0 0 3px #16a34a;
+	}
+	.claim.against .dot.userq.on {
+		box-shadow:
+			inset 0 0 0 1.5px #dc2626,
 			0 0 0 2px var(--card),
 			0 0 0 3px #dc2626;
 	}

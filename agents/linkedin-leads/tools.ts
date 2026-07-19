@@ -10,7 +10,8 @@ import {
 	publicIdOf
 } from "../../src/clients/lk/index.js";
 import { getStore } from "../../src/stores/index.js";
-import * as gemini from "../../src/ai/gemini.js";
+import { reviewOf } from "../../src/review.js";
+import * as llm from "../../src/ai/llm.js";
 import { resolveQuotes, validate, type RawStatement, type Statement } from "../../src/anchor.js";
 import { markdown } from "../../src/markdown.js";
 import { Ajv } from "ajv";
@@ -74,7 +75,7 @@ const STATEMENTS = {
 const ajv = new Ajv();
 
 // A judgment, whoever judged: the domain output plus its claim→proof statements. What
-// Gemini returns, and what a manual judge hands to `qualify` via --verdict.
+// the LLM returns, and what a manual judge hands to `qualify` via --verdict.
 export interface Verdict {
 	output: Record<string, unknown>;
 	statements: RawStatement[];
@@ -82,7 +83,7 @@ export interface Verdict {
 
 // The judgment context: the Prompt row's full contract plus the Person's frozen evidence —
 // everything a judge needs, nothing written. Both judges read the exact same context:
-// Gemini gets it as its prompt, a manual judge via `--show`.
+// the LLM gets it as its prompt, a manual judge via `--show`.
 const judgmentContext = async (key: PromptKey, profile: string) => {
 	const spec = config.prompts[key];
 	const publicId = publicIdOf(profile);
@@ -136,8 +137,8 @@ const judgmentContext = async (key: PromptKey, profile: string) => {
 };
 
 // decide — the one judgment machine, whatever the contract: judge the person against a
-// Prompt row (Gemini, or a manual verdict) and persist one Decision. The judge is pluggable:
-// without a verdict, Gemini judges (one retry — temperature 0 varies little, but the error
+// Prompt row (the LLM, or a manual verdict) and persist one Decision. The judge is pluggable:
+// without a verdict, the LLM judges (one retry — temperature 0 varies little, but the error
 // nudges it); with one (the manual path, `--verdict`), the caller already judged and a
 // violation fails loud immediately — the calling agent is the retry loop. Either way the
 // verdict is held to the same contract BEFORE the single write — ajv on the output,
@@ -145,7 +146,8 @@ const judgmentContext = async (key: PromptKey, profile: string) => {
 // output, or reasoning that disagrees with the contract. Decisions are an append-only log:
 // each run is a distinct event, so the page Name carries the run time (like Sourcing) and
 // the latest row at a gate is the live one. `Output` holds the structured verdict as JSON,
-// `Reasoning` the resolved statements, `Input` the frozen evidence.
+// `Reasoning` the resolved statements, `Input` the frozen evidence, `Model` the model that
+// judged (its AI SDK id, or "manual" for a supplied verdict).
 //
 // dependsOn makes the Decision a DAG node: it is reviewable only once every upstream
 // Decision is Accepted (derived by the review app, never stored). A dependency-free
@@ -175,7 +177,7 @@ const decide = async (
 			"\n\n"
 		);
 		for (let attempt = 1; !statements; attempt++) {
-			const res = await gemini.generate<Verdict>(judgePrompt, ctx.responseSchema);
+			const res = await llm.generate<Verdict>(judgePrompt, ctx.responseSchema);
 			try {
 				statements = check(res);
 				output = res.output;
@@ -200,6 +202,7 @@ const decide = async (
 			Output: JSON.stringify(output),
 			Reasoning: JSON.stringify(statements),
 			Input: ctx.evidence,
+			Model: verdict ? "manual" : llm.MODEL,
 			Prompt: [ctx.prompt.id],
 			Lead: [l.id],
 			...(dependsOn?.length ? { "Depends on": dependsOn } : {})
@@ -315,7 +318,7 @@ export const tools = {
 	},
 
 	// context — the read half of a decision, exposed so a manual judge (a human, or the
-	// calling agent) reads the exact context Gemini would: the contract plus the frozen
+	// calling agent) reads the exact context the LLM would: the contract plus the frozen
 	// evidence, with the response's expected shape. `--show` prints this; nothing is written.
 	context: async (key: PromptKey, profile: string) => {
 		const { system, instruction, evidence, responseSchema } = await judgmentContext(
@@ -323,6 +326,16 @@ export const tools = {
 			profile
 		);
 		return { system, instruction, evidence, responseSchema };
+	},
+
+	// review — a human-reviewed Decision (by its page Name) → the judge's judgment plus the
+	// human's diff, the few-shot signal. Pure projection over the row (src/review.ts); the
+	// Prompt this example trains is recovered from the Name against the known specs. Reads
+	// only — throws (loud) if the Decision hasn't been reviewed.
+	review: async (name: string) => {
+		const { fields } = await store.read(config.models.Decisions, "Name", name);
+		const prompt = Object.values(config.prompts).find((s) => name.includes(s.name))?.name;
+		return { name, prompt, ...reviewOf(fields) };
 	},
 
 	// qualify — one decide against the qualification contract: does this person fit the ICP?

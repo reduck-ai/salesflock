@@ -79,6 +79,14 @@ program
 	});
 
 program
+	.command("review")
+	.argument("<name>", "the reviewed Decision's full page Name (its title)")
+	.description(
+		"A human-reviewed Decision → the judge's judgment + the human's diff (few-shot data)."
+	)
+	.action(async (name) => out(await tools.review(name)));
+
+program
 	.command("get-company")
 	.argument("<company>", "company LinkedIn URL or bare slug")
 	.description("LinkedIn company info (one run), written to Notion (idempotent on LinkedIn URL).")

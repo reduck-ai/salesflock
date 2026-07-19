@@ -27,6 +27,12 @@ export interface Statement {
 	quotes: Selector[];
 }
 
+// The order-insensitive identity of a quote — the one place a Selector's equality is defined.
+// Shared by both sides of a review: the app derives "the human's vs the judge's" as a set
+// difference against the frozen judgment, and `diffStatements` recovers the same delta for
+// learning. Lives with Selector so there is a single definition.
+export const quoteKey = (s: Selector): string => `${s.exact} ${s.prefix ?? ""} ${s.suffix ?? ""}`;
+
 // Every start index of `needle` in `haystack`.
 const indicesOf = (haystack: string, needle: string): number[] => {
 	const out: number[] = [];
@@ -58,6 +64,34 @@ export const resolve = (evidence: string, quote: string): Selector | null => {
 	// Identical text with identical surroundings throughout — every occurrence is equal
 	// proof, so any single one is a valid anchor.
 	return { exact: quote };
+};
+
+// resolveVisible(evidence, selection) — the HUMAN seam. A DOM selection is a
+// whitespace-collapsed VIEW of the source (leading indentation dropped inside code blocks,
+// newlines injected across blocks), so an exact match against the raw evidence fails — this
+// is a coordinate mismatch, not a bad quote. Canonicalize away exactly what the render
+// collapses (runs of whitespace → one space), match in canon space, map the span back to raw
+// offsets, then defer to `resolve` for uniqueness. So a human quote is a real source span
+// like the judge's and everything downstream (locate, diff, labelling) is untouched. null
+// when the text is genuinely absent from the source — a true "can't anchor", never a guess.
+export const resolveVisible = (evidence: string, selection: string): Selector | null => {
+	// canon(evidence) + at[k] = the raw index of canon[k], in one pass. A whitespace run
+	// becomes a single space (never leading); the endpoints we read back are always the
+	// selection's non-space edges, so their raw indices are exact.
+	let canon = "";
+	const at: number[] = [];
+	for (let i = 0; i < evidence.length; i++) {
+		if (/\s/.test(evidence[i])) {
+			if (canon && canon[canon.length - 1] !== " ") (canon += " "), at.push(i);
+		} else (canon += evidence[i]), at.push(i);
+	}
+	if (canon.endsWith(" ")) (canon = canon.slice(0, -1), at.pop());
+
+	const needle = selection.replace(/\s+/g, " ").trim();
+	if (!needle) return null;
+	const cs = canon.indexOf(needle);
+	if (cs < 0) return null;
+	return resolve(evidence, evidence.slice(at[cs], at[cs + needle.length - 1] + 1));
 };
 
 // resolveQuotes(evidence, value) — deep-walk a judge's structured output and resolve every

@@ -7,6 +7,7 @@ export interface Decisions {
   "Depends on"?: string[];
   Feedback?: string;
   "Final output"?: string;
+  "Final reasoning"?: string;
   "Human verdict"?: "Accepted" | "Rejected";
   "Include as example"?: boolean;
   Input?: string;
@@ -14,6 +15,7 @@ export interface Decisions {
    * relation → e976116e-fcf0-42d4-bc16-99fa9c801e1c
    */
   Lead?: string[];
+  Model?: string;
   Name: string;
   Output?: string;
   /**
