@@ -5,7 +5,7 @@
 	// the caller's. ←/→ navigate without deciding.
 	import { fly } from "svelte/transition";
 	import ReviewCard from "./ReviewCard.svelte";
-	import type { EvidencedJudgment, Judgment, Statement, Verdict } from "./types";
+	import type { EvidencedJudgment, Judgment, Statement } from "./types";
 
 	let {
 		judgments,
@@ -22,7 +22,9 @@
 	const bare = (id: string) => id.replace(/-/g, "");
 	// open on the URL's decision when it's in the deck, else the top
 	let index = $state(Math.max(0, start ? judgments.findIndex((j) => bare(j.id) === start) : 0));
-	let receipts = $state<{ verdict: Verdict; title: string; href?: string }[]>([]);
+	// a decided card's receipt: `edited` means the human overturned the agent's output (the
+	// committed output differs), else they confirmed it verbatim.
+	let receipts = $state<{ edited: boolean; title: string; href?: string }[]>([]);
 	let card = $state<ReviewCard>();
 
 	// keep the URL naming the on-screen decision, on each advance. Skip the first run: the URL
@@ -35,13 +37,21 @@
 		synced = true;
 	});
 
-	const judge = (verdict: Verdict | undefined, feedback: string, cta?: string, reasoning?: Statement[]) => {
+	const judge = (
+		committedOutput: Record<string, unknown> | undefined,
+		feedback: string,
+		reasoning?: Statement[]
+	) => {
 		const j = judgments[index];
-		onjudge?.({ id: j.id, verdict, feedback, cta, reasoning });
-		// a Save (no verdict) persists the edits but leaves the deck put — receipts are for
-		// decided cards, and the row is still under review.
-		if (verdict) {
-			receipts.push({ verdict, title: j.title, href: j.href });
+		onjudge?.({ id: j.id, committedOutput, feedback, reasoning });
+		// a Save (no committed output) persists the edits but leaves the deck put — receipts are
+		// for decided cards, and the row is still under review.
+		if (committedOutput) {
+			receipts.push({
+				edited: JSON.stringify(committedOutput) !== JSON.stringify(j.output),
+				title: j.title,
+				href: j.href
+			});
 			index += 1;
 		}
 	};
@@ -66,8 +76,8 @@
 				rel="noopener"
 				in:fly={{ y: -6, duration: 200 }}
 			>
-				<span class={r.verdict === "accepted" ? "text-green-600" : "text-red-600"}>
-					{r.verdict === "accepted" ? "✓ Accepted" : "✕ Rejected"}
+				<span class={r.edited ? "text-amber-600" : "text-green-600"}>
+					{r.edited ? "✎ Edited" : "✓ Confirmed"}
 				</span>
 				<span class="truncate">{r.title}</span>
 			</a>

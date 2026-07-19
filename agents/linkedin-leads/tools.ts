@@ -17,7 +17,8 @@ import { resolveQuotes, validate, type RawStatement } from "../../src/anchor.js"
 import { Ajv } from "ajv";
 import { stringify } from "yaml";
 import config from "./config.js";
-import { projectInput, renderEvidence } from "./evidence.js";
+import { renderEvidence } from "./evidence.js";
+import { projectInput } from "./project.js";
 import type { People } from "./schema/People.js";
 import type { Companies } from "./schema/Companies.js";
 import type { Leads } from "./schema/Leads.js";
@@ -349,13 +350,14 @@ export const tools = {
 		return { system, instruction, evidence, responseSchema };
 	},
 
-	// list — the decisions awaiting a human verdict (the review queue), newest edits first as
-	// the app orders them. One row each: the shared id, its Name, kind, and the app link that
-	// opens it. The store's raw pending set (DAG gating is the app's derived, read-time concern).
+	// list — the decisions awaiting review (the queue), newest edits first as the app orders
+	// them. The committed output IS the decision, so an unset "Final output" is the pending
+	// marker (no separate verdict column). One row each: the shared id, its Name, kind, and the
+	// app link that opens it. Raw pending set (DAG gating is the app's derived, read-time concern).
 	list: async () => {
 		const rows = await store.query(config.models.Decisions, {
-			property: "Human verdict",
-			select: { is_empty: true }
+			property: "Final output",
+			rich_text: { is_empty: true }
 		});
 		return rows.map((r) => {
 			const name = String(r.fields.Name ?? r.id);
@@ -379,7 +381,7 @@ export const tools = {
 			evidence: String(fields.Input),
 			open: appLink(id)
 		};
-		return fields["Human verdict"] ? { ...base, review: reviewOf(fields) } : base;
+		return fields["Final output"] ? { ...base, review: reviewOf(fields) } : base;
 	},
 
 	// qualify — one decide against the qualification contract: does this person fit the ICP?

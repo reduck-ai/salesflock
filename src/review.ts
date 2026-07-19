@@ -65,24 +65,28 @@ const json = <T>(fields: Fields, col: string): T => {
 	}
 };
 
-// reviewOf(fields) — a reviewed Decision's fields → its Review. Throws when there is no Human
-// verdict: this reads *reviewed* decisions, and a missing verdict is an unreviewed row, not an
-// empty diff. The reasoning delta is empty when the human left the judge's reasoning untouched
-// (no Final reasoning), likewise `output` when they didn't correct it.
+// reviewOf(fields) — a reviewed Decision's fields → its Review. The committed output IS the
+// decision, so `Final output` is the sole record of a review: its presence means reviewed
+// (throw otherwise — a missing one is an unreviewed row, not an empty diff), and agreement is
+// *derived*, never stored — the human "Accepted" iff their committed output equals the judge's
+// `Output`, else "Rejected" (they overturned it). The reasoning delta is empty when the human
+// left the judge's reasoning untouched (no Final reasoning); `output` rides only when corrected.
 export const reviewOf = (fields: Fields): Review => {
-	const verdict = text(fields["Human verdict"]);
-	if (!verdict) throw new Error("Decision has no Human verdict — not reviewed yet");
+	if (!fields["Final output"]) throw new Error("Decision has no Final output — not reviewed yet");
+	const output = json<unknown>(fields, "Output");
+	const corrected = json<unknown>(fields, "Final output");
+	const verdict = JSON.stringify(output) === JSON.stringify(corrected) ? "Accepted" : "Rejected";
 	const reasoning = json<RawStatement[]>(fields, "Reasoning");
 	const delta = fields["Final reasoning"]
 		? diffStatements(reasoning, json<Commented[]>(fields, "Final reasoning"))
 		: { comments: [], added: [], attached: [] };
 	return {
 		input: text(fields.Input),
-		judge: { verdict: json<unknown>(fields, "Output"), reasoning },
+		judge: { verdict: output, reasoning },
 		human: {
 			verdict,
 			...(fields.Feedback ? { feedback: text(fields.Feedback) } : {}),
-			...(fields["Final output"] ? { output: json<unknown>(fields, "Final output") } : {}),
+			...(verdict === "Rejected" ? { output: corrected } : {}),
 			...delta
 		}
 	};

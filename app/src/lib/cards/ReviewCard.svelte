@@ -1,21 +1,23 @@
 <script lang="ts">
 	// One evidenced judgment, read like a chat: the evidence is the document (one column,
 	// window scroll), and the dock — the single interaction surface, styled like a composer —
-	// floats at the bottom with the AI's whole proposal: verdict, the claims (each with one
-	// dot per proof), the editable drafted next step, and the human's actions. Every quote is
-	// highlighted in the evidence at all times, stance-coloured and subtle, with its claim
-	// pinned in the right margin like a doc comment. One cursor: click a claim, a dot, or a
-	// margin note — or press Tab/Shift+Tab — to focus a quote and scroll it into view.
-	// ⏎ accepts, Esc rejects, ←/→ navigate.
-	// The human can also talk back at the reasoning: a comment on any claim, and a
-	// Notion-style selection menu over the evidence to add a new claim (✓/✕) or attach the
-	// quote to an existing one — all edits to a local copy of the statements; the judge's
-	// stay canonical and the copy travels with the verdict only when it differs.
-	// Presentational: it owns feedback (resets on remount) and emits a verdict; meaning is the
-	// caller's.
+	// floats at the bottom in two zones: LEARNING (the claims, each with one dot per proof,
+	// annotatable) first, then OUTPUT (the agent's proposal, editable within its Prompt schema).
+	// The committed output IS the decision — one Confirm; there is no Reject (disagreeing is
+	// editing the output). Every quote is highlighted in the evidence at all times, stance-
+	// coloured and subtle, with its claim pinned in the right margin like a doc comment. One
+	// cursor: click a claim, a dot, or a margin note — or press Tab/Shift+Tab — to focus a quote
+	// and scroll it into view. ⏎ confirms, ←/→ navigate.
+	// The human can also talk back at the reasoning: a comment on any claim, and a Notion-style
+	// selection menu over the evidence to add a new claim (✓/✕) or attach the quote to an
+	// existing one — all edits to a local copy of the statements; the judge's stay canonical and
+	// the copy travels with the decision only when it differs.
+	// Presentational: it owns the output/feedback edits (reset on remount) and emits the committed
+	// output; meaning is the caller's.
 	import Markdown from "$lib/components/Markdown.svelte";
+	import OutputForm from "./OutputForm.svelte";
 	import { resolveVisible, quoteKey } from "$core/anchor";
-	import type { EvidencedJudgment, Selector, Statement, Verdict } from "./types";
+	import type { EvidencedJudgment, Selector, Statement } from "./types";
 
 	let {
 		judgment,
@@ -27,7 +29,11 @@
 		judgment: EvidencedJudgment;
 		pos: number;
 		total: number;
-		onjudge?: (verdict: Verdict | undefined, feedback: string, cta?: string, reasoning?: Statement[]) => void;
+		onjudge?: (
+			committedOutput: Record<string, unknown> | undefined,
+			feedback: string,
+			reasoning?: Statement[]
+		) => void;
 		onnav?: (dir: -1 | 1) => void;
 	} = $props();
 
@@ -36,7 +42,9 @@
 	// (provenance is read off `judgment.statements`, never this editable copy).
 	let feedback = $state(judgment.draft?.feedback ?? "");
 	let noting = $state(!!judgment.draft?.feedback); // the note field, open when a draft has one
-	let ctaText = $state(judgment.cta?.text ?? ""); // the human's CTA edit (card remounts per id)
+	// the committed output — seeded from the judge's, edited in place; committing it IS the
+	// decision (the card remounts per id, so it re-seeds from the judge's proposal)
+	let output = $state<Record<string, unknown>>(structuredClone(judgment.output));
 	// the human's editable copy of the reasoning — comments and added claims/quotes land here;
 	// the judge's statements stay canonical on the prop (the card remounts per id)
 	let statements = $state<Statement[]>(structuredClone(judgment.draft?.reasoning ?? judgment.statements));
@@ -48,13 +56,12 @@
 	let menuEl = $state<HTMLElement>();
 	let activeMi = $state<number | null>(null); // the cursor: one quote (a mark index)
 	let commenting = $state<number | null>(null); // the claim being annotated (distinct from the proof cursor, so Tab never opens a note)
-	let unfolded = $state(false); // the rationale prose, folded away by default
 	let evEl = $state<HTMLElement>();
 	let dockEl = $state<HTMLElement>();
 
 	// every quote in claim order, tagged with its statement index — the flat list the cursor
 	// walks; a claim's marks are adjacent, so stepping reads claim by claim, proof by proof.
-	// The CTA is not on the walk: it IS the draft in the dock, not a claim to verify.
+	// The output is not on the walk: it IS the editable proposal in the dock, not a claim to verify.
 	const marks = $derived(statements.flatMap((s, i) => s.quotes.map((sel) => ({ si: i, sel }))));
 	// the mark index of a statement's first quote — how the claim list addresses the cursor
 	const miOf = (si: number) => statements.slice(0, si).reduce((n, s) => n + s.quotes.length, 0);
@@ -181,23 +188,19 @@
 			commenting = null;
 		}
 	};
-	// the CTA edit travels only when it changed something — the judge's text stays canonical
-	const ctaEdit = () => {
-		const t = ctaText.trim();
-		return judgment.cta?.text !== undefined && t && t !== judgment.cta.text ? t : undefined;
-	};
-	// likewise the reasoning: the edited copy travels only when it differs from the judge's.
-	// Empty comments are dropped, so an opened-then-abandoned field is not an edit.
+	// the edited reasoning travels only when it differs from the judge's. Empty comments are
+	// dropped, so an opened-then-abandoned field is not an edit.
 	const reasoningEdit = (): Statement[] | undefined => {
 		const edited = $state
 			.snapshot(statements)
 			.map(({ comment, ...s }) => (comment?.trim() ? { ...s, comment: comment.trim() } : s));
 		return JSON.stringify(edited) !== JSON.stringify(judgment.statements) ? edited : undefined;
 	};
-	// v omitted = Save: the same judgment, decision withheld. The parent persists either way.
-	const decide = (v?: Verdict) => onjudge?.(v, feedback.trim(), ctaEdit(), reasoningEdit());
+	// commit = the committed output (the decision), which advances the deck; save (no output) =
+	// the same judgment with the decision withheld. The parent persists either way.
+	const commit = () => onjudge?.($state.snapshot(output), feedback.trim(), reasoningEdit());
 	export function save() {
-		decide();
+		onjudge?.(undefined, feedback.trim(), reasoningEdit());
 	}
 
 	// the selection menu opens on mouseup over a selection inside the evidence; the selector
@@ -244,9 +247,8 @@
 				if (e.key === "Escape") closeMenu();
 				return;
 			}
-			// a focused button already turns Enter into its own click — don't decide twice
-			if (e.key === "Enter" && !(e.target instanceof HTMLButtonElement)) decide("accepted");
-			else if (e.key === "Escape") decide("rejected");
+			// a focused button already turns Enter into its own click — don't commit twice
+			if (e.key === "Enter" && !(e.target instanceof HTMLButtonElement)) commit();
 			else if (e.key === "ArrowRight") onnav?.(1);
 			else if (e.key === "ArrowLeft") onnav?.(-1);
 			else if ((e.key === "Backspace" || e.key === "Delete") && canRemove(activeMi)) {
@@ -288,8 +290,7 @@
 		<div class="meta">
 			<span>{pos} / {total}</span>
 			<span class="hint">
-				<kbd>←</kbd><kbd>→</kbd> navigate · <kbd>Tab</kbd> proof · <kbd>⏎</kbd> accept ·
-				<kbd>Esc</kbd> reject
+				<kbd>←</kbd><kbd>→</kbd> navigate · <kbd>Tab</kbd> proof · <kbd>⏎</kbd> confirm
 			</span>
 		</div>
 	</div>
@@ -398,38 +399,7 @@
 {/if}
 
 <div class="dock" bind:this={dockEl}>
-	<div class="head">
-		<div class="verdict"><Markdown source={judgment.verdict} /></div>
-		{#if judgment.rationale}
-			<button
-				class="icon"
-				class:on={unfolded}
-				title="The judge's rationale"
-				aria-label="The judge's rationale"
-				aria-expanded={unfolded}
-				onclick={() => (unfolded = !unfolded)}
-			>
-				<svg
-					width="15"
-					height="15"
-					viewBox="0 0 24 24"
-					fill="none"
-					stroke="currentColor"
-					stroke-width="2"
-					stroke-linecap="round"
-					stroke-linejoin="round"
-					><circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" /></svg
-				>
-			</button>
-		{/if}
-	</div>
-
-	{#if judgment.rationale}
-		<div class="rationale" class:open={unfolded}>
-			<div><Markdown source={judgment.rationale} /></div>
-		</div>
-	{/if}
-
+	<!-- LEARNING — the judge's reasoning, annotatable; first, so it reads before the decision -->
 	<div class="why">
 		{#each statements as s, i (i)}
 			<div
@@ -490,19 +460,14 @@
 		{/each}
 	</div>
 
-	{#if judgment.cta}
-		<div class="cta">
-			<Markdown source={judgment.cta.head} />
-			{#if judgment.cta.text !== undefined}
-				<textarea class="cta-text" bind:value={ctaText} rows="1"></textarea>
-			{/if}
-		</div>
-	{/if}
+	<!-- OUTPUT — the agent's proposal, editable within its schema; committing it IS the decision -->
+	<div class="output">
+		<OutputForm schema={judgment.outputSchema} bind:value={output} />
+	</div>
 
 	<div class="acts-wrap">
 		<div class="acts">
-			<button class="btn reject" onclick={() => decide("rejected")}>Reject <kbd>Esc</kbd></button>
-			<button class="btn accept" onclick={() => decide("accepted")}>Accept <kbd>⏎</kbd></button>
+			<button class="btn confirm" onclick={commit}>Confirm <kbd>⏎</kbd></button>
 			<button
 				class="btn-note"
 				class:on={noting}
@@ -887,70 +852,9 @@
 		overflow: hidden;
 	}
 
-	.head {
-		display: flex;
-		align-items: center;
-		gap: 12px;
-		padding: 14px 18px 6px;
-	}
-	.verdict {
-		flex: 1;
-		min-width: 0;
-	}
-	.verdict :global(h1) {
-		margin: 0;
-		font-size: 20px;
-		font-weight: 720;
-		letter-spacing: -0.02em;
-	}
-	.icon {
-		flex: none;
-		width: 26px;
-		height: 26px;
-		border-radius: 8px;
-		border: none;
-		background: transparent;
-		color: var(--muted-foreground);
-		cursor: pointer;
-		display: grid;
-		place-items: center;
-		transition:
-			background 0.15s ease,
-			color 0.15s ease;
-	}
-	.icon:hover {
-		color: var(--foreground);
-	}
-	.icon.on {
-		color: var(--foreground);
-		background: var(--accent);
-	}
-
-	/* the judge's prose — folded away until asked for */
-	.rationale {
-		display: grid;
-		grid-template-rows: 0fr;
-		opacity: 0;
-		transition:
-			grid-template-rows 0.22s ease,
-			opacity 0.18s ease;
-	}
-	.rationale > div {
-		overflow: hidden;
-		padding: 0 18px;
-		font-size: 13px;
-		line-height: 1.55;
-		color: var(--muted-foreground);
-	}
-	.rationale.open {
-		grid-template-rows: 1fr;
-		opacity: 1;
-		margin-bottom: 6px;
-	}
-
-	/* the claims — always visible, one dot per proof; the cursor lives in the dots */
+	/* the claims — LEARNING, first in the dock; one dot per proof, the cursor lives in the dots */
 	.why {
-		padding: 2px 10px 8px;
+		padding: 12px 10px 8px;
 		max-height: 32vh;
 		overflow-y: auto;
 		display: flex;
@@ -1076,35 +980,11 @@
 			0 0 0 3px #dc2626;
 	}
 
-	/* the proposed next action — the draft in the composer; the body is the human's to edit */
-	.cta {
-		margin: 0 18px 10px;
-		padding-top: 8px;
+	/* OUTPUT — the agent's proposal, editable within its schema; committing it IS the decision */
+	.output {
+		margin: 0 18px 12px;
+		padding-top: 10px;
 		border-top: 1px solid var(--border);
-		font-size: 13px;
-		line-height: 1.55;
-	}
-	.cta-text {
-		width: 100%;
-		margin-top: 4px;
-		padding: 6px 9px;
-		border: 1px solid transparent;
-		border-radius: 9px;
-		background: transparent;
-		font: inherit;
-		font-style: italic;
-		color: var(--foreground);
-		resize: none;
-		field-sizing: content; /* grows with the edit */
-	}
-	.cta-text:hover {
-		border-color: var(--input);
-	}
-	.cta-text:focus {
-		outline: none;
-		border-color: var(--ring);
-		background: var(--card);
-		box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring) 30%, transparent);
 	}
 
 	.acts-wrap {
@@ -1186,10 +1066,7 @@
 		border: none;
 		background: rgb(255 255 255 / 0.24);
 	}
-	.btn.reject {
-		background: #dc2626;
-	}
-	.btn.accept {
+	.btn.confirm {
 		background: #16a34a;
 	}
 

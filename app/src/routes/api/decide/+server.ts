@@ -1,24 +1,21 @@
-// The judgment sink: the card stack POSTs one Judgment here and it lands on the
-// Notion page. Gated — only a signed-in visitor may write. The verdict shape is the
-// card seam's Verdict, so this endpoint is card-type-agnostic like everything else.
-// A judgment with no verdict is a Save — the human's edits persist, the decision is withheld.
+// The judgment sink: the card stack POSTs one Judgment here and it lands on the Notion page.
+// Gated — only a signed-in visitor may write. The committed output IS the decision, kept opaque
+// here (its schema is the Prompt's), so this endpoint stays card-type-agnostic. A judgment with
+// no `committedOutput` is a Save — the human's edits persist, the decision is withheld.
 
 import { error, json } from "@sveltejs/kit";
 import { record } from "$lib/server/notion";
-import type { Verdict } from "$lib/cards/types";
 import type { RequestHandler } from "./$types";
 
 export const POST: RequestHandler = async ({ request, locals }) => {
 	if (!locals.user) throw error(401, "not signed in");
-	const { id, verdict, feedback, finalOutput, finalReasoning } = (await request.json()) as {
+	const { id, committedOutput, feedback, finalReasoning } = (await request.json()) as {
 		id: string;
-		verdict?: Verdict; // absent for a Save
+		committedOutput?: unknown; // the schema-valid output the human commits — absent for a Save
 		feedback?: string;
-		finalOutput?: string; // the output as the human accepted it — opaque here, card-type-agnostic
-		finalReasoning?: string; // the statements as the human accepted them — opaque, likewise
+		finalReasoning?: string; // the statements as the human left them — opaque, card-type-agnostic
 	};
-	if (!id || (verdict !== undefined && verdict !== "accepted" && verdict !== "rejected"))
-		throw error(400, "bad judgment");
-	await record(id, verdict, feedback ?? "", finalOutput, finalReasoning);
+	if (!id) throw error(400, "bad judgment");
+	await record(id, { committedOutput, feedback: feedback ?? "", finalReasoning });
 	return json({ ok: true });
 };

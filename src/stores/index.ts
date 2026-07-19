@@ -31,14 +31,17 @@ export const STORES = { notion, hubspot } as const;
 
 export const getStore = (name: keyof typeof STORES): Store => STORES[name];
 
-// A prompt row and its pipeline effect: the Lead Status while its decision awaits the
-// human gate, and where each verdict moves it. The one map of decision kind → pipeline
-// semantics, read by both sides of the gate: the runtime (decide) and the review app (record).
+// A prompt row and its pipeline effect. `resolve` is the whole semantics: the committed
+// output IS the decision, so a single function of that output yields both where the Lead
+// moves (`status`) and whether the outcome advances the pipeline (`advances` — read by the
+// DAG gate to unlock speculative dependents; a non-advancing outcome, e.g. "Not qualified",
+// permanently hides them). "Which outcome advances" is a business rule, not derivable from
+// the output — so it lives here, declared once, and both consumers (the runtime's `decide`
+// pending stamp and the review app's `record`) read the same map of decision kind → semantics.
 export interface PromptSpec {
 	name: string; // the Prompt row's Name
 	pending: string; // Lead Status while the decision awaits the human gate
-	onAccept: string; // Lead Status when the human accepts
-	onReject: string; // Lead Status when the human rejects
+	resolve: (output: Record<string, unknown>) => { status: string; advances: boolean };
 }
 
 // The one thing an agent needs to run (besides secrets): which store, which table each

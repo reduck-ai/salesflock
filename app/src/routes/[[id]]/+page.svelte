@@ -2,7 +2,6 @@
 	import { replaceState } from "$app/navigation";
 	import { Button } from "$lib/components/ui/button/index.js";
 	import JudgmentStack from "$lib/cards/JudgmentStack.svelte";
-	import { correct } from "$lib/cards/decision";
 	import type { Judgment } from "$lib/cards/types";
 
 	let { data } = $props();
@@ -12,14 +11,11 @@
 	let userEl = $state<HTMLElement>();
 	let saved = $state(false);
 
-	// Persist a judgment to its source record; fire-and-forget so the deck keeps its snappy
-	// feel. A verdict-less judgment (j.verdict undefined) is a Save — the write skips the
-	// verdict + pipeline move server-side. An edited CTA is re-fused into the judge's Output
-	// (the adapter's inverse) and travels as finalOutput; edited statements travel as
-	// finalReasoning — each the artifact as the human has it, same contract as the judge's own.
+	// Persist a judgment to its source record; fire-and-forget so the deck keeps its snappy feel.
+	// A judgment with no `committedOutput` is a Save — the write skips the decision + pipeline
+	// move server-side. Otherwise the committed output IS the decision and travels as-is (its
+	// schema is the Prompt's). Edited statements travel as finalReasoning.
 	const judge = (j: Judgment) => {
-		const output = data.judgments.find((x) => x.id === j.id)?.output;
-		const finalOutput = j.cta && output ? JSON.stringify(correct(output, j.cta)) : undefined;
 		// store the human's reasoning like the judge's: quotes as verbatim strings, not resolved
 		// Selectors — the anchor is derived live on read (decision.ts), never frozen.
 		const finalReasoning = j.reasoning
@@ -30,9 +26,8 @@
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({
 				id: j.id,
-				verdict: j.verdict,
+				committedOutput: j.committedOutput,
 				feedback: j.feedback,
-				finalOutput,
 				finalReasoning
 			})
 		}).catch((e) => console.error("decide failed", e));

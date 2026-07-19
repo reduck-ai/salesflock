@@ -1,29 +1,12 @@
 // The evidence seam — the ONE renderer, shared by the judge (tools.ts), the review app
 // ($agent/evidence), and the migration. A Decision freezes the lossless input MAP (the seed);
 // presentation is derived from it here, so improving this renderer reflows every Decision on
-// read — no re-judge. `projectInput` selects the Person fields the Prompt's Input schema names
-// (and holds them to it); `renderEvidence` turns that map into the Markdown a judge/human reads.
+// read — no re-judge. Kept dependency-light on purpose (markdown + yaml only, no ajv) so the app
+// can import it without pulling projection machinery into its bundle; `projectInput` lives in
+// ./project.ts (judge/migration only).
 
-import { Ajv } from "ajv";
 import { markdown } from "../../src/markdown.js";
 import { renderActivity } from "./activity.js";
-
-const ajv = new Ajv();
-
-// Project a Person's fields onto the Input schema — the schema names the evidence — and hold the
-// projection to that contract (evidence must respect it). Returns the lossless {field: value}
-// map, in schema order, which is what the Decision freezes as `Input`.
-export const projectInput = (
-	fields: Record<string, string | number | boolean>,
-	inputSchema: Record<string, unknown>
-): Record<string, string> => {
-	const keys = Object.keys((inputSchema.properties as Record<string, unknown> | undefined) ?? {});
-	const present = keys.filter((k) => fields[k]);
-	const input = Object.fromEntries(present.map((k) => [k, String(fields[k])]));
-	if (!ajv.validate(inputSchema, input))
-		throw new Error(`evidence violates Input schema: ${ajv.errorsText(ajv.errors)}`);
-	return input;
-};
 
 // Per-field renderer: Activity mirrors LinkedIn's UI; everything else is generic Markdown.
 const renderers: Record<string, (v: string) => string> = { Activity: renderActivity };

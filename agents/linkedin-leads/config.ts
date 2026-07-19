@@ -16,17 +16,22 @@ export default {
 		Prompts: "942c4138-c9db-404c-9ae0-472f8edb0712"
 	},
 	prompts: {
+		// The committed output IS the decision: `resolve` reads it for both the Lead move and
+		// whether it advances the pipeline. Qualification carries its own negative outcome
+		// ("Not qualified") in the tier — no separate reject; a non-advancing tier hides any
+		// engagement drafted against it.
 		qualify: {
 			name: "Lead Qualification",
 			pending: "Qualification pending approval",
-			onAccept: "To engage",
-			onReject: "Not qualified"
+			resolve: (o) =>
+				o.tier === "Not qualified"
+					? { status: "Not qualified", advances: false }
+					: { status: "To engage", advances: true }
 		},
 		engage: {
 			name: "Lead Engagement",
 			pending: "Engagement pending approval",
-			onAccept: "Engaged - waiting for lead",
-			onReject: "To engage"
+			resolve: () => ({ status: "Engaged - waiting for lead", advances: true })
 		}
 	}
 } as const satisfies AgentConfig;
