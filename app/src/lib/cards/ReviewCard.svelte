@@ -47,6 +47,7 @@
 	let claimText = $state("");
 	let menuEl = $state<HTMLElement>();
 	let activeMi = $state<number | null>(null); // the cursor: one quote (a mark index)
+	let commenting = $state<number | null>(null); // the claim being annotated (distinct from the proof cursor, so Tab never opens a note)
 	let unfolded = $state(false); // the rationale prose, folded away by default
 	let evEl = $state<HTMLElement>();
 	let dockEl = $state<HTMLElement>();
@@ -96,6 +97,9 @@
 			m.classList.toggle("against", s ? !s.supporting : false);
 			m.classList.toggle("active", si !== null && m.getAttribute("data-si") === String(si));
 			m.classList.toggle("current", mi !== null && m.getAttribute("data-mi") === String(mi));
+			// a claim carrying the human's note reads gold — reading .comment here keeps this effect
+			// reactive to note edits
+			m.classList.toggle("noted", !!s?.comment?.trim());
 		});
 	});
 
@@ -108,7 +112,7 @@
 	const GAP = 10;
 	let vw = $state(0);
 	let sy = $state(0);
-	let anchors = $state<{ si: number; top: number }[]>([]);
+	let anchors = $state<{ si: number; mi: number; top: number }[]>([]);
 	let heights = $state<Record<number, number>>({});
 	$effect(() => {
 		void vw;
@@ -126,22 +130,25 @@
 		const line = (dockEl ? dockEl.getBoundingClientRect().top / 2 : window.innerHeight / 2) - base;
 		anchors = statements
 			.flatMap((_, si) => {
-				const tops = [...el.querySelectorAll(`mark.hl[data-si="${si}"]`)].map(
-					(m) => m.getBoundingClientRect().top - base
-				);
-				if (!tops.length) return [];
-				const top = tops.reduce((a, b) => (Math.abs(b - line) < Math.abs(a - line) ? b : a));
-				return { si, top };
+				const ms = [...el.querySelectorAll(`mark.hl[data-si="${si}"]`)].map((m) => ({
+					si,
+					mi: Number(m.getAttribute("data-mi")),
+					top: m.getBoundingClientRect().top - base
+				}));
+				if (!ms.length) return [];
+				// keep the whole mark, not just its top: which quote the pin sits beside IS where
+				// clicking the note focuses (goto), so it must survive to the render.
+				return ms.reduce((a, b) => (Math.abs(b.top - line) < Math.abs(a.top - line) ? b : a));
 			})
 			.sort((a, b) => a.top - b.top);
 	});
 	// the floor walk: each pin lands at its anchor, pushed down only past the one just above
 	const notes = $derived.by(() => {
 		let floor = 0;
-		return anchors.map(({ si, top }) => {
+		return anchors.map(({ si, mi, top }) => {
 			const at = Math.max(top, floor);
 			floor = at + (heights[si] ?? 0) + GAP;
-			return { si, top: at };
+			return { si, mi, top: at };
 		});
 	});
 
@@ -152,6 +159,27 @@
 		if (!m || !dockEl) return;
 		const band = dockEl.getBoundingClientRect().top;
 		window.scrollBy({ top: m.getBoundingClientRect().top - band / 2, behavior: "smooth" });
+	};
+	// focus a claim without disturbing the cursor when it already sits inside it: clicking a
+	// claim you're already reading keeps the exact quote Tab picked; only a different claim
+	// jumps to its first proof. The one "focus a claim" gesture the dock and the margin share.
+	const focusClaim = (si: number) => {
+		if (activeSi !== si) goto(miOf(si));
+	};
+	// open a claim's note for editing, focused on the exact quote its pin sits beside (the mark
+	// the anchor picked — the one in view), so editing the feedback never yanks the cursor to a
+	// different proof of the claim. Reached from the pin's claim OR its comment; either edits.
+	const editNote = (mi: number, si: number) => {
+		goto(mi);
+		commenting = si;
+	};
+	// Enter saves the note, Shift+Enter is a newline, Escape closes. Saving is just closing the
+	// editor — the value is already bound — so the ⏎ key and the send button do the same thing.
+	const onReplyKey = (e: KeyboardEvent) => {
+		if (e.key === "Escape" || (e.key === "Enter" && !e.shiftKey)) {
+			e.preventDefault();
+			commenting = null;
+		}
 	};
 	// the CTA edit travels only when it changed something — the judge's text stays canonical
 	const ctaEdit = () => {
@@ -253,15 +281,17 @@
 />
 
 <div class="page">
-	<div class="rail" title={`${pos} / ${total}`}>
-		<div class="fill" style={`width:${(pos / total) * 100}%`}></div>
-	</div>
-	<div class="meta">
-		<span>{pos} / {total}</span>
-		<span class="hint">
-			<kbd>←</kbd><kbd>→</kbd> navigate · <kbd>Tab</kbd> proof · <kbd>⏎</kbd> accept ·
-			<kbd>Esc</kbd> reject
-		</span>
+	<div class="topmeta">
+		<div class="rail" title={`${pos} / ${total}`}>
+			<div class="fill" style={`width:${(pos / total) * 100}%`}></div>
+		</div>
+		<div class="meta">
+			<span>{pos} / {total}</span>
+			<span class="hint">
+				<kbd>←</kbd><kbd>→</kbd> navigate · <kbd>Tab</kbd> proof · <kbd>⏎</kbd> accept ·
+				<kbd>Esc</kbd> reject
+			</span>
+		</div>
 	</div>
 
 	<div class="doc" bind:this={evEl}>
@@ -272,21 +302,62 @@
 					class="note-pin"
 					class:against={!statements[n.si].supporting}
 					class:on={activeSi === n.si}
+					class:noted={!!statements[n.si].comment?.trim()}
 					style={`top:${n.top}px`}
 					bind:clientHeight={heights[n.si]}
 				>
-					<button onclick={() => goto(miOf(n.si))}>
+					<button onclick={() => editNote(n.mi, n.si)}>
 						<span>{statements[n.si].claim}</span>
 					</button>
-					{#if activeSi === n.si}
-						<input
-							class="reply"
-							bind:value={statements[n.si].comment}
-							placeholder="Reply…"
-							onkeydown={(e) => (e.key === "Enter" || e.key === "Escape") && e.currentTarget.blur()}
-						/>
+					{#if commenting === n.si}
+						<div class="composer">
+							<textarea
+								class="reply"
+								rows="1"
+								bind:value={statements[n.si].comment}
+								placeholder="Reply…"
+								{@attach (el: HTMLTextAreaElement) => el.focus()}
+								onblur={() => (commenting = null)}
+								onkeydown={(e) => onReplyKey(e)}></textarea>
+							<button
+								class="send"
+								title="Save note (⏎)"
+								aria-label="Save note"
+								onmousedown={(e) => e.preventDefault()}
+								onclick={() => (commenting = null)}
+							>
+								<svg
+									width="14"
+									height="14"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2.2"
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									aria-hidden="true"><path d="M12 19V5" /><path d="m5 12 7-7 7 7" /></svg
+								>
+							</button>
+						</div>
 					{:else if statements[n.si].comment}
-						<div class="cmt">{statements[n.si].comment}</div>
+						<button class="cmt" title="Edit note" onclick={() => editNote(n.mi, n.si)}>
+							<span class="cmt-text">{statements[n.si].comment}</span>
+							<svg
+								class="pencil"
+								width="12"
+								height="12"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								aria-hidden="true"
+								><path
+									d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"
+								/></svg
+							>
+						</button>
 					{/if}
 				</div>
 			{/each}
@@ -361,7 +432,12 @@
 
 	<div class="why">
 		{#each statements as s, i (i)}
-			<div class="claim" class:active={activeSi === i} class:against={!s.supporting}>
+			<div
+				class="claim"
+				class:active={activeSi === i}
+				class:against={!s.supporting}
+				class:noted={!!s.comment?.trim()}
+			>
 				<svg
 					class="mark"
 					width="13"
@@ -389,7 +465,7 @@
 						onkeydown={(e) => (e.key === "Enter" || e.key === "Escape") && e.currentTarget.blur()}
 					/>
 				{:else}
-					<button class="text" onclick={() => goto(miOf(i))}>{s.claim}</button>
+					<button class="text" onclick={() => focusClaim(i)}>{s.claim}</button>
 				{/if}
 				<span class="dots">
 					{#each s.quotes as sel, j (j)}
@@ -467,6 +543,15 @@
 		margin: 0 auto;
 		padding: 0 4px 340px; /* deep bottom pad: last evidence clears the dock */
 	}
+	/* the card's half of the top bar — progress + key hints — sticks flush beneath the app
+	   header, so the whole band stays put while the evidence scrolls under it */
+	.topmeta {
+		position: sticky;
+		top: var(--topbar);
+		z-index: 15;
+		background: var(--background);
+		padding-top: 8px;
+	}
 	.rail {
 		height: 3px;
 		border-radius: 2px;
@@ -522,11 +607,16 @@
 		top: 0;
 		bottom: 0;
 		left: calc(100% + 18px);
-		width: 230px;
+		width: 300px;
 	}
 	.note-pin {
 		position: absolute;
 		width: 100%;
+		/* a thread: the claim leads, the note replies — entries separated by this gap, not a
+		   divider line; the card (border + stance bar) is the unit, independent of siblings */
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
 		font-size: 12px;
 		line-height: 1.45;
 		color: var(--muted-foreground);
@@ -534,7 +624,7 @@
 		border: 1px solid var(--border);
 		border-left: 2.5px solid #16a34a;
 		border-radius: 10px;
-		padding: 7px 10px;
+		padding: 8px 10px;
 		box-shadow: 0 1px 3px rgb(0 0 0 / 0.07);
 		transition:
 			color 0.15s ease,
@@ -564,33 +654,90 @@
 		-webkit-line-clamp: unset;
 		line-clamp: unset;
 	}
-	/* the human's side of the thread: the note, or the Reply field while the pin is open */
-	.note-pin .reply,
-	.note-pin .cmt {
-		width: 100%;
-		margin-top: 6px;
-		padding: 5px 0 0;
-		border-top: 1px solid var(--border);
-		font: inherit;
-		font-size: 12px;
-		color: var(--foreground);
+	/* the reply composer — the dock's bordered note field, scoped to the pin: a rounded box
+	   holding a note that grows with its text (field-sizing) and a send button. ⏎ or the send
+	   button saves; the box rings on focus. */
+	.note-pin .composer {
+		display: flex;
+		align-items: flex-end;
+		gap: 4px;
+		padding: 3px 3px 3px 0;
+		border: 1px solid var(--input);
+		border-radius: 9px;
+		background: var(--card);
+	}
+	.note-pin .composer:focus-within {
+		border-color: var(--ring);
+		box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring) 30%, transparent);
 	}
 	.note-pin .reply {
-		border-left: none;
-		border-right: none;
-		border-bottom: none;
+		flex: 1;
+		min-width: 0;
+		padding: 4px 0 4px 9px;
+		border: none;
 		background: none;
+		font: inherit;
+		font-size: 12px;
+		line-height: 1.45;
+		color: var(--foreground);
 		outline: none;
+		resize: none;
+		field-sizing: content;
 	}
 	.note-pin .reply::placeholder {
 		color: var(--muted-foreground);
 	}
+	/* send/save — a small round icon button, muted until hovered; overrides the pin's block
+	   button reset so it stays a compact square, not a full-width row */
+	.note-pin .send {
+		flex: none;
+		width: 24px;
+		height: 24px;
+		display: grid;
+		place-items: center;
+		border-radius: 7px;
+		color: var(--muted-foreground);
+		cursor: pointer;
+	}
+	.note-pin .send:hover {
+		color: var(--foreground);
+		background: var(--accent);
+	}
+	/* the human's note — a reply entry in the thread, a subtle bubble rather than a divided-off
+	   line, so it reads as its own unit. Clicking it reopens the composer; a pencil fades in on
+	   hover to signal that. */
 	.note-pin .cmt {
+		display: flex;
+		align-items: flex-start;
+		gap: 6px;
+		padding: 6px 8px;
+		border: none;
+		border-radius: 8px;
+		background: var(--muted);
+		font: inherit;
+		font-size: 12px;
+		color: var(--foreground);
+		text-align: left;
+		cursor: pointer;
+	}
+	.note-pin .cmt-text {
+		flex: 1;
+		min-width: 0;
 		display: -webkit-box;
 		-webkit-line-clamp: 2;
 		line-clamp: 2;
 		-webkit-box-orient: vertical;
 		overflow: hidden;
+	}
+	.note-pin .pencil {
+		flex: none;
+		margin-top: 2px;
+		color: var(--muted-foreground);
+		opacity: 0;
+		transition: opacity 0.15s ease;
+	}
+	.note-pin .cmt:hover .pencil {
+		opacity: 1;
 	}
 	.note-pin.on {
 		z-index: 1;
@@ -611,7 +758,15 @@
 		border-color: color-mix(in oklch, #dc2626 45%, var(--border));
 		border-left-color: #dc2626;
 	}
-	@media (max-width: 1260px) {
+	/* a note on this claim reads gold — wins over stance/active (placed last, matched specificity) */
+	.note-pin.noted {
+		border-left-color: #d97706;
+	}
+	.note-pin.noted.on {
+		border-color: color-mix(in oklch, #d97706 45%, var(--border));
+		border-left-color: #d97706;
+	}
+	@media (max-width: 1360px) {
 		.gutter {
 			display: none; /* no margin room — the dock's claim list carries the mapping */
 		}
@@ -817,6 +972,10 @@
 	.claim:hover,
 	.claim.active {
 		background: var(--accent);
+	}
+	/* a claim carrying the human's note: a gold left bar, same language as the evidence marks */
+	.claim.noted {
+		box-shadow: inset 2px 0 0 #d97706;
 	}
 	/* the claim text: the judge's is a button (click to focus its proof), the human's an
 	   inline-editable input — same look, so only the affordance differs */

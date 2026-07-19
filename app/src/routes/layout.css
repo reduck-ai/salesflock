@@ -4,6 +4,7 @@
 
 :root {
 	--radius: 0.625rem;
+	--topbar: 3.25rem; /* the always-visible top band: app header, then the card's progress/hints */
 	--background: oklch(1 0 0);
 	--foreground: oklch(0.145 0 0);
 	--card: oklch(1 0 0);

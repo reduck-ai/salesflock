@@ -79,8 +79,8 @@
 		{/if}
 	</main>
 {:else}
-	<main class="mx-auto max-w-3xl space-y-5 p-6">
-		<header class="flex items-center justify-between">
+	<main class="mx-auto max-w-3xl px-6 pb-6">
+		<header class="appbar flex items-center justify-between">
 			<h1 class="text-2xl font-semibold">Decisions</h1>
 			<div class="toolbar">
 				<button class="tbtn" class:saved onclick={save} title="Save (⌘S)" aria-label="Save">
@@ -150,6 +150,15 @@
 {/if}
 
 <style>
+	/* the app header — the top of the always-visible bar: sticks to the viewport, the card's
+	   progress/hints stick flush beneath it (top: var(--topbar)). Opaque, so evidence scrolls under. */
+	.appbar {
+		position: sticky;
+		top: 0;
+		z-index: 20;
+		height: var(--topbar);
+		background: var(--background);
+	}
 	/* the toolbar — Save + account, right-aligned in the header, level with the title */
 	.toolbar {
 		display: flex;

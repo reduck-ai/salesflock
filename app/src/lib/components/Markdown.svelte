@@ -105,6 +105,10 @@
 	.md :global(mark.hl.against) {
 		--hl: #dc2626;
 	}
+	/* a claim the human has noted reads gold — same --hl machinery, gold overrides stance */
+	.md :global(mark.hl.noted) {
+		--hl: #d97706;
+	}
 	.md :global(mark.hl.active) {
 		background: color-mix(in oklch, var(--hl) 18%, transparent);
 		box-shadow: inset 2px 0 0 var(--hl);
