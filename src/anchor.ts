@@ -68,24 +68,45 @@ export const resolve = (evidence: string, quote: string): Selector | null => {
 	return { exact: quote };
 };
 
-// resolveVisible(evidence, selection) — the HUMAN seam. A DOM selection is a
-// whitespace-collapsed VIEW of the source (leading indentation dropped inside code blocks,
-// newlines injected across blocks), so an exact match against the raw evidence fails — this
-// is a coordinate mismatch, not a bad quote. Canonicalize away exactly what the render
-// collapses (runs of whitespace → one space), match in canon space, map the span back to raw
-// offsets, then defer to `resolve` for uniqueness. So a human quote is a real source span
-// like the judge's and everything downstream (locate, diff, labelling) is untouched. null
-// when the text is genuinely absent from the source — a true "can't anchor", never a guess.
+// resolveVisible(evidence, selection) — the HUMAN seam. A DOM selection is the RENDERED
+// VIEW of the source markdown: the renderer collapses whitespace AND strips syntax — inline
+// emphasis (`**`) and line-leading block markers (`#`, `-`/`*`/`+`, `>`) — so an exact match
+// against the raw evidence fails wherever a span crosses a bold label or a block boundary.
+// This is a coordinate mismatch, not a bad quote. Project the source into that same rendered
+// space — skip exactly what the render removes, collapse whitespace runs to one space —
+// recording each kept char's raw index in `at`; match the (equally-projected) selection there,
+// map the endpoints back to raw offsets, then defer to `resolve` for uniqueness. The raw slice
+// re-includes the skipped syntax verbatim, so a human quote is a real source span like the
+// judge's and everything downstream (locate, highlight, diff) is untouched. null when the text
+// is genuinely absent from the source — a true "can't anchor", never a guess.
 export const resolveVisible = (evidence: string, selection: string): Selector | null => {
-	// canon(evidence) + at[k] = the raw index of canon[k], in one pass. A whitespace run
-	// becomes a single space (never leading); the endpoints we read back are always the
-	// selection's non-space edges, so their raw indices are exact.
+	// canon(evidence) + at[k] = the raw index of canon[k], in one pass. Whitespace runs become a
+	// single space (never leading); the endpoints we read back are always the selection's
+	// non-space, non-syntax edges, so their raw indices are exact.
 	let canon = "";
 	const at: number[] = [];
-	for (let i = 0; i < evidence.length; i++) {
-		if (/\s/.test(evidence[i])) {
+	let lineStart = true;
+	for (let i = 0; i < evidence.length; ) {
+		const c = evidence[i];
+		if (/\s/.test(c)) {
+			if (c === "\n") lineStart = true;
 			if (canon && canon[canon.length - 1] !== " ") (canon += " "), at.push(i);
-		} else (canon += evidence[i]), at.push(i);
+			i++;
+			continue;
+		}
+		// a line-leading block marker (heading / list bullet / blockquote) is chrome the renderer
+		// removes; skip it and stay at line-start so a nested `> >` peels fully.
+		const m = lineStart && /^(?:#{1,6}|[-*+]|>)[ \t]+/.exec(evidence.slice(i));
+		if (m) {
+			i += m[0].length;
+			continue;
+		}
+		lineStart = false;
+		if (c === "*" && evidence[i + 1] === "*") {
+			i += 2;
+			continue;
+		} // ** emphasis
+		(canon += c), at.push(i), i++;
 	}
 	if (canon.endsWith(" ")) (canon = canon.slice(0, -1), at.pop());
 
