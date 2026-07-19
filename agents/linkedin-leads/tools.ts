@@ -10,6 +10,7 @@ import {
 	publicIdOf
 } from "../../src/clients/lk/index.js";
 import { getStore } from "../../src/stores/index.js";
+import { idOf } from "../../src/stores/notion.js";
 import { reviewOf } from "../../src/review.js";
 import * as llm from "../../src/ai/llm.js";
 import { resolveQuotes, validate, type RawStatement, type Statement } from "../../src/anchor.js";
@@ -26,6 +27,17 @@ import type { Decisions } from "./schema/Decisions.js";
 // The store this agent writes to and the tables it addresses — both chosen in config.ts
 // (notion by default). No env: the model→table map and prompt specs all live in one file.
 const store = getStore(config.destination);
+
+// The review app's base URL (the deployed Decisions surface), if configured. Turns a Decision
+// id into a link a human opens to review it — the other half of the shared id: I hand back
+// `open`, they click through to the same decision. Fail-soft: omitted when the env is unset.
+const appBase = process.env.SALESFLOCK_APP_URL?.replace(/\/+$/, "");
+const appLink = (id: string): string | undefined =>
+	appBase ? `${appBase}/${id.replace(/-/g, "")}` : undefined;
+
+// A Decision's kind from its page Name — which Prompt spec it was judged against.
+const kindOf = (name: string): string | undefined =>
+	Object.values(config.prompts).find((s) => name.includes(s.name))?.name;
 
 // The decision kinds this agent can produce — the keys of config.prompts.
 type PromptKey = keyof typeof config.prompts;
@@ -209,7 +221,13 @@ const decide = async (
 		} satisfies Decisions,
 		"Name"
 	);
-	return { id: d.id, output, claims: statements.map((s) => s.claim), where: d.url };
+	return {
+		id: d.id,
+		output,
+		claims: statements.map((s) => s.claim),
+		where: d.url,
+		open: appLink(d.id)
+	};
 };
 
 export const tools = {
@@ -328,14 +346,37 @@ export const tools = {
 		return { system, instruction, evidence, responseSchema };
 	},
 
-	// review — a human-reviewed Decision (by its page Name) → the judge's judgment plus the
-	// human's diff, the few-shot signal. Pure projection over the row (src/review.ts); the
-	// Prompt this example trains is recovered from the Name against the known specs. Reads
-	// only — throws (loud) if the Decision hasn't been reviewed.
-	review: async (name: string) => {
-		const { fields } = await store.read(config.models.Decisions, "Name", name);
-		const prompt = Object.values(config.prompts).find((s) => name.includes(s.name))?.name;
-		return { name, prompt, ...reviewOf(fields) };
+	// list — the decisions awaiting a human verdict (the review queue), newest edits first as
+	// the app orders them. One row each: the shared id, its Name, kind, and the app link that
+	// opens it. The store's raw pending set (DAG gating is the app's derived, read-time concern).
+	list: async () => {
+		const rows = await store.query(config.models.Decisions, {
+			property: "Human verdict",
+			select: { is_empty: true }
+		});
+		return rows.map((r) => {
+			const name = String(r.fields.Name ?? r.id);
+			return { id: r.id, name, kind: kindOf(name), open: appLink(r.id) };
+		});
+	},
+
+	// show — one Decision by the shared id (an id / Notion URL / app URL, resolved by idOf):
+	// the judge's judgment always (Output, Reasoning statements, frozen Input evidence), and —
+	// once a human has ruled — the review diff too (reviewOf). Reads only. The id-keyed superset
+	// of the old Name-keyed review: what I open when the human pastes me a decision link.
+	show: async (handle: string) => {
+		const { id, fields } = await store.get(idOf(handle));
+		const name = String(fields.Name ?? id);
+		const base = {
+			id,
+			name,
+			kind: kindOf(name),
+			output: JSON.parse(String(fields.Output)),
+			statements: JSON.parse(String(fields.Reasoning)),
+			evidence: String(fields.Input),
+			open: appLink(id)
+		};
+		return fields["Human verdict"] ? { ...base, review: reviewOf(fields) } : base;
 	},
 
 	// qualify — one decide against the qualification contract: does this person fit the ICP?

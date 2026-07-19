@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { replaceState } from "$app/navigation";
 	import { Button } from "$lib/components/ui/button/index.js";
 	import JudgmentStack from "$lib/cards/JudgmentStack.svelte";
 	import { correct } from "$lib/cards/decision";
@@ -145,7 +146,15 @@
 			</div>
 		</header>
 
-		<JudgmentStack bind:this={stack} judgments={data.judgments} onjudge={judge} />
+		<!-- the deck starts at the URL's decision and rewrites the URL to whichever it advances to,
+		     so the address bar always names the on-screen decision (copy → paste → jump back here) -->
+		<JudgmentStack
+			bind:this={stack}
+			judgments={data.judgments}
+			start={data.currentId}
+			oncurrent={(id) => replaceState(`/${id}`, {})}
+			onjudge={judge}
+		/>
 	</main>
 {/if}
 

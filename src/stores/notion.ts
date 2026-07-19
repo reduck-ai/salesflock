@@ -50,8 +50,10 @@ interface NotionProp {
 	relation?: { data_source_id?: string; database_id?: string };
 }
 
-// A bare 32-hex id out of a raw id or a Notion URL.
-const idOf = (s: string): string => s.match(/[0-9a-f]{32}/i)?.[0] ?? s;
+// A bare 32-hex id out of a raw id or a Notion URL (a dashed uuid passes through — Notion's
+// API accepts both). The one id extractor, shared by the store and any caller that resolves a
+// user-pasted handle (an id, a Notion URL, an app URL) to a page.
+export const idOf = (s: string): string => s.match(/[0-9a-f]{32}/i)?.[0] ?? s;
 
 // Resolve a model handle (database id / data-source id / URL) to a data source id.
 // `datasources resolve` maps a DATABASE id → its data source(s); given a value that is
@@ -194,11 +196,10 @@ export const upsert = async (model: string, record: object, keyProp: string): Pr
 	return { id, url: pageUrl(id), created };
 };
 
-// read(model, keyProp, value) — the one page whose keyProp equals value, flattened to
-// plain scalars. Loud when absent: in the face of a missing record, refuse to guess.
-export const read = async (model: string, keyProp: string, value: unknown): Promise<Row> => {
-	const { page } = await locate(model, keyProp, value);
-	if (!page) throw new Error(`notion.read: no "${model}" page with ${keyProp} = ${value}`);
+// A page → a Row: its id plus every property flattened to a plain scalar (relations and other
+// pointerish types drop to null and are skipped). The one page→Row mapping, shared by read,
+// query and get so the three return the same shape.
+const rowOf = (page: { id: string; properties: Record<string, NotionValue> }): Row => {
 	const fields: Record<string, string | number | boolean> = {};
 	for (const [name, v] of Object.entries(page.properties)) {
 		const s = plain(v);
@@ -206,6 +207,35 @@ export const read = async (model: string, keyProp: string, value: unknown): Prom
 	}
 	return { id: page.id, fields };
 };
+
+// read(model, keyProp, value) — the one page whose keyProp equals value, flattened to
+// plain scalars. Loud when absent: in the face of a missing record, refuse to guess.
+export const read = async (model: string, keyProp: string, value: unknown): Promise<Row> => {
+	const { page } = await locate(model, keyProp, value);
+	if (!page) throw new Error(`notion.read: no "${model}" page with ${keyProp} = ${value}`);
+	return rowOf(page);
+};
+
+// query(model, filter) — every row of a data source matching a Notion filter object (e.g.
+// `{ property: "Human verdict", select: { is_empty: true } }`). read is this taking the first
+// equals-match; query keeps the whole set — the queue an agent lists.
+export const query = async (model: string, filter: object): Promise<Row[]> => {
+	const dsId = await resolveDsId(model);
+	const { results } = JSON.parse(
+		await ntn(["datasources", "query", dsId, "--filter", JSON.stringify(filter), "--json"])
+	) as { results: { id: string; properties: Record<string, NotionValue> }[] };
+	return results.map(rowOf);
+};
+
+// get(id) — the page with this id, flattened like read. A page id already implies its data
+// source, so no model is needed (like title); an id / Notion URL / app URL resolves via idOf.
+export const get = async (id: string): Promise<Row> =>
+	rowOf(
+		JSON.parse(await ntn(["api", `/v1/pages/${idOf(id)}`])) as {
+			id: string;
+			properties: Record<string, NotionValue>;
+		}
+	);
 
 // title(_model, id) — a record's title property as plain text (its "Name"). Lets a caller
 // derive one record's identity from another it points at (a Lead's name from its Person).
@@ -248,4 +278,4 @@ export const describe = async (model: string): Promise<Record<string, unknown>> 
 };
 
 // The Store this module implements (Notion is the full System of Record).
-export const notion: Store = { describe, upsert, read, title };
+export const notion: Store = { describe, upsert, read, query, get, title };

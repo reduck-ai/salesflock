@@ -79,8 +79,18 @@ export const describe = async (type: string): Promise<Record<string, unknown>> =
 // The runtime write path is not built yet — DESTINATION=hubspot is describe-only. Fail
 // loud rather than write a wrong shape silently (errors should never pass silently).
 const notImplemented = (): never => {
-	throw new Error("hubspot: write path not implemented — DESTINATION=hubspot is describe-only today");
+	throw new Error(
+		"hubspot: write path not implemented — DESTINATION=hubspot is describe-only today"
+	);
 };
 
-// The Store this module implements: the setup half (describe) is real; the write half throws.
-export const hubspot: Store = { describe, upsert: notImplemented, read: notImplemented, title: notImplemented };
+// The Store this module implements: the setup half (describe) is real; the write half and the
+// runtime reads throw (describe-only today).
+export const hubspot: Store = {
+	describe,
+	upsert: notImplemented,
+	read: notImplemented,
+	query: notImplemented,
+	get: notImplemented,
+	title: notImplemented
+};

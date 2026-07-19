@@ -79,12 +79,17 @@ program
 	});
 
 program
-	.command("review")
-	.argument("<name>", "the reviewed Decision's full page Name (its title)")
+	.command("list")
+	.description("Decisions awaiting a human verdict (the review queue): id, name, kind, app link.")
+	.action(async () => out(await tools.list()));
+
+program
+	.command("show")
+	.argument("<decision>", "Decision id, Notion URL, or app URL")
 	.description(
-		"A human-reviewed Decision → the judge's judgment + the human's diff (few-shot data)."
+		"One decision by id: the judge's judgment (output, statements, evidence), plus the human diff once reviewed."
 	)
-	.action(async (name) => out(await tools.review(name)));
+	.action(async (decision) => out(await tools.show(decision)));
 
 program
 	.command("get-company")

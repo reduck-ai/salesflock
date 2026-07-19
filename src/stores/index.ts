@@ -17,6 +17,8 @@ export interface Store {
 	describe(model: string): Promise<Record<string, unknown>>; // JSON Schema of writable props (setup)
 	upsert(model: string, record: object, key: string): Promise<Ref>; // idempotent write, keyed by `key`
 	read(model: string, key: string, value: unknown): Promise<Row>; // the one row where key = value
+	query(model: string, filter: object): Promise<Row[]>; // every row matching a store-native filter
+	get(id: string): Promise<Row>; // the row with this id — model-agnostic (an id implies its model)
 	title(model: string, id: string): Promise<string>; // a record's name, by id (the join)
 }
 

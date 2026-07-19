@@ -7,11 +7,33 @@
 	import ReviewCard from "./ReviewCard.svelte";
 	import type { EvidencedJudgment, Judgment, Statement, Verdict } from "./types";
 
-	let { judgments, onjudge }: { judgments: EvidencedJudgment[]; onjudge?: (j: Judgment) => void } = $props();
+	let {
+		judgments,
+		onjudge,
+		start,
+		oncurrent
+	}: {
+		judgments: EvidencedJudgment[];
+		onjudge?: (j: Judgment) => void;
+		start?: string | null; // the id (dashless) to open on — the URL's decision
+		oncurrent?: (id: string) => void; // the front card's id (dashless), on mount and each advance
+	} = $props();
 
-	let index = $state(0);
+	const bare = (id: string) => id.replace(/-/g, "");
+	// open on the URL's decision when it's in the deck, else the top
+	let index = $state(Math.max(0, start ? judgments.findIndex((j) => bare(j.id) === start) : 0));
 	let receipts = $state<{ verdict: Verdict; title: string; href?: string }[]>([]);
 	let card = $state<ReviewCard>();
+
+	// keep the URL naming the on-screen decision, on each advance. Skip the first run: the URL
+	// already names the start card (the server redirect / the deep link), and replaceState throws
+	// if called during hydration, before the router is initialized.
+	let synced = false;
+	$effect(() => {
+		const j = judgments[index];
+		if (synced && j) oncurrent?.(bare(j.id));
+		synced = true;
+	});
 
 	const judge = (verdict: Verdict | undefined, feedback: string, cta?: string, reasoning?: Statement[]) => {
 		const j = judgments[index];

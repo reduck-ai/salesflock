@@ -23,11 +23,39 @@ export interface Decision {
 	deps: string[]; // upstream Decision ids ("Depends on") — the DAG edges
 }
 
-const page = async (id: string): Promise<{ properties: Record<string, NotionValue> }> => {
+const page = async (
+	id: string
+): Promise<{ id: string; url: string; properties: Record<string, NotionValue> }> => {
 	const res = await fetch(`${API}/pages/${id}`, { headers });
 	if (!res.ok) throw new Error(`Notion ${res.status}: ${await res.text()}`);
 	return res.json();
 };
+
+// One page → a Decision: its title, its writable scalars flattened, and its "Depends on"
+// edges. The one mapping, shared by the queue (decisions) and the deep link (decision).
+const toDecision = ({
+	id,
+	url,
+	properties
+}: {
+	id: string;
+	url: string;
+	properties: Record<string, NotionValue>;
+}): Decision => {
+	let title = "";
+	const fields: Record<string, string> = {};
+	for (const [name, v] of Object.entries(properties)) {
+		const s = plain(v);
+		if (s == null || s === "") continue;
+		if (v.type === "title") title = String(s);
+		else fields[name] = String(s);
+	}
+	return { id, url, title, fields, deps: relation(properties["Depends on"]) };
+};
+
+// decision(id) — one Decision by id, for a deep link. No gate: a link opens its decision
+// whatever its state (decided or blocked); the DAG gate governs only the queue's ordering.
+export const decision = async (id: string): Promise<Decision> => toDecision(await page(id));
 
 export const decisions = async (): Promise<Decision[]> => {
 	const res = await fetch(`${API}/data_sources/${env.NOTION_DECISIONS_DS}/query`, {
@@ -44,17 +72,7 @@ export const decisions = async (): Promise<Decision[]> => {
 	const { results } = (await res.json()) as {
 		results: { id: string; url: string; properties: Record<string, NotionValue> }[];
 	};
-	const rows = results.map(({ id, url, properties }) => {
-		let title = "";
-		const fields: Record<string, string> = {};
-		for (const [name, v] of Object.entries(properties)) {
-			const s = plain(v);
-			if (s == null || s === "") continue;
-			if (v.type === "title") title = String(s);
-			else fields[name] = String(s);
-		}
-		return { id, url, title, fields, deps: relation(properties["Depends on"]) };
-	});
+	const rows = results.map(toDecision);
 
 	// The DAG gate, derived at read time — never stored: a Decision is reviewable only once
 	// every upstream it depends on is Accepted. A rejected upstream permanently hides its
