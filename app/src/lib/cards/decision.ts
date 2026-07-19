@@ -60,17 +60,25 @@ export const decisionToJudgment = (d: Decision): EvidencedJudgment => {
 					rationale: (o as EngageOutput).engagement_strategy,
 					cta: toCta(evidence, (o as EngageOutput).next_step)
 				};
+	const order = (ss: Statement[]) => ss.map((s) => ({ ...s, quotes: byAppearance(evidence, s.quotes) }));
+	// a saved-but-undecided draft, when the human has already checkpointed work on this row:
+	// their edited statements ("Final reasoning") and note ("Feedback"). Only present until a
+	// verdict is set (a decided row leaves the queue). Quotes ordered like the judge's.
+	const feedback = d.fields.Feedback ?? "";
+	const draftReasoning = d.fields["Final reasoning"];
+	const draft =
+		draftReasoning || feedback
+			? { feedback, reasoning: draftReasoning ? order(JSON.parse(draftReasoning) as Statement[]) : undefined }
+			: undefined;
 	return {
 		id: d.id,
 		title: d.title,
 		href: d.url,
 		...head,
-		statements: (JSON.parse(d.fields.Reasoning) as Statement[]).map((s) => ({
-			...s,
-			quotes: byAppearance(evidence, s.quotes)
-		})),
+		statements: order(JSON.parse(d.fields.Reasoning) as Statement[]),
 		evidence,
-		output: o
+		output: o,
+		draft
 	};
 };
 

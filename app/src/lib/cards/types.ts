@@ -28,10 +28,12 @@ export type Verdict = "accepted" | "rejected";
 
 // The output of reviewing one card: the human's call plus optional free-text. `cta` is the
 // human's edited next-step text, `reasoning` the human's edited statements (comments and
-// added claims/quotes) — each present only when it differs from the judge's.
+// added claims/quotes) — each present only when it differs from the judge's. `verdict` is
+// absent for a Save — a judgment with the decision withheld: the edits persist, the row
+// stays at the gate.
 export interface Judgment {
 	id: string;
-	verdict: Verdict;
+	verdict?: Verdict;
 	feedback: string;
 	cta?: string;
 	reasoning?: Statement[];
@@ -81,4 +83,8 @@ export interface EvidencedJudgment {
 	statements: Statement[];
 	evidence: string; // markdown — frozen snapshot the quotes resolve against
 	output: Record<string, unknown>; // the judge's Output, verbatim — Final output's base
+	// a saved-but-undecided draft, when one exists: the human's note and edited statements
+	// (Feedback / Final reasoning). The card seeds from this; `statements` stays the judge's
+	// canonical copy, so provenance (which claim is whose) is still read off it.
+	draft?: { feedback: string; reasoning?: Statement[] };
 }

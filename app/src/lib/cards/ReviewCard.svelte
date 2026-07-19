@@ -27,16 +27,19 @@
 		judgment: EvidencedJudgment;
 		pos: number;
 		total: number;
-		onjudge?: (verdict: Verdict, feedback: string, cta?: string, reasoning?: Statement[]) => void;
+		onjudge?: (verdict: Verdict | undefined, feedback: string, cta?: string, reasoning?: Statement[]) => void;
 		onnav?: (dir: -1 | 1) => void;
 	} = $props();
 
-	let feedback = $state("");
-	let noting = $state(false); // the optional note field, folded away until asked for
+	// seed from a saved draft when one exists, else from the judge's — so a checkpointed
+	// review resumes where it was left. The judge's statements stay canonical on the prop
+	// (provenance is read off `judgment.statements`, never this editable copy).
+	let feedback = $state(judgment.draft?.feedback ?? "");
+	let noting = $state(!!judgment.draft?.feedback); // the note field, open when a draft has one
 	let ctaText = $state(judgment.cta?.text ?? ""); // the human's CTA edit (card remounts per id)
 	// the human's editable copy of the reasoning — comments and added claims/quotes land here;
 	// the judge's statements stay canonical on the prop (the card remounts per id)
-	let statements = $state<Statement[]>(structuredClone(judgment.statements));
+	let statements = $state<Statement[]>(structuredClone(judgment.draft?.reasoning ?? judgment.statements));
 	// the selection menu — its selector is minted at mouseup: verbatim-or-refuse, the judge's contract
 	let menu = $state<{ selector: Selector | null; x: number; y: number } | null>(null);
 	let menuMode = $state<"acts" | "claim" | "attach">("acts");
@@ -104,22 +107,31 @@
 	// never on top, so measure→place settles in one pass.
 	const GAP = 10;
 	let vw = $state(0);
+	let sy = $state(0);
 	let anchors = $state<{ si: number; top: number }[]>([]);
 	let heights = $state<Record<number, number>>({});
 	$effect(() => {
 		void vw;
+		void sy; // re-anchor on scroll: a claim's note tracks its nearest quote
 		const el = evEl;
 		if (!el || !marks.length) {
 			anchors = [];
 			return;
 		}
 		const base = el.getBoundingClientRect().top;
-		// pin each claim beside its first proof, in document order (claims and quotes are
-		// ordered independently)
+		// pin each claim beside the one of its quotes nearest the line goto() parks a focused
+		// quote at, so a claim with several proofs keeps its note beside the one in view — never
+		// stranded off-screen at the first, never doubled. In document order (claims and quotes
+		// are ordered independently).
+		const line = (dockEl ? dockEl.getBoundingClientRect().top / 2 : window.innerHeight / 2) - base;
 		anchors = statements
 			.flatMap((_, si) => {
-				const m = el.querySelector(`mark.hl[data-si="${si}"]`);
-				return m ? { si, top: m.getBoundingClientRect().top - base } : [];
+				const tops = [...el.querySelectorAll(`mark.hl[data-si="${si}"]`)].map(
+					(m) => m.getBoundingClientRect().top - base
+				);
+				if (!tops.length) return [];
+				const top = tops.reduce((a, b) => (Math.abs(b - line) < Math.abs(a - line) ? b : a));
+				return { si, top };
 			})
 			.sort((a, b) => a.top - b.top);
 	});
@@ -154,7 +166,11 @@
 			.map(({ comment, ...s }) => (comment?.trim() ? { ...s, comment: comment.trim() } : s));
 		return JSON.stringify(edited) !== JSON.stringify(judgment.statements) ? edited : undefined;
 	};
-	const decide = (v: Verdict) => onjudge?.(v, feedback.trim(), ctaEdit(), reasoningEdit());
+	// v omitted = Save: the same judgment, decision withheld. The parent persists either way.
+	const decide = (v?: Verdict) => onjudge?.(v, feedback.trim(), ctaEdit(), reasoningEdit());
+	export function save() {
+		decide();
+	}
 
 	// the selection menu opens on mouseup over a selection inside the evidence; the selector
 	// is minted right away — an unresolvable selection (markdown syntax in the span) shows a
@@ -223,6 +239,7 @@
 
 <svelte:window
 	bind:innerWidth={vw}
+	bind:scrollY={sy}
 	onmouseup={onselect}
 	onmousedown={(e) => menu && !menuEl?.contains(e.target as Node) && (menu = null)}
 	onclick={(e) => {
@@ -386,7 +403,12 @@
 					{/each}
 				</span>
 				{#if activeSi === i && canRemove(activeMi)}
-					<button class="rm" title="Remove this quote (⌫)" aria-label="Remove this quote" onclick={removeFocused}>✕</button>
+					<button
+						class="rm"
+						title="Remove this quote (⌫)"
+						aria-label="Remove this quote"
+						onclick={removeFocused}>✕</button
+					>
 				{/if}
 			</div>
 		{/each}

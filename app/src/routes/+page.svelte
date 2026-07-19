@@ -6,11 +6,16 @@
 
 	let { data } = $props();
 
-	// Persist each verdict + feedback to its source record; fire-and-forget so the
-	// deck keeps its snappy feel. A failure surfaces in the console, not a blocked UI.
-	// An edited CTA is re-fused into the judge's Output (the adapter's inverse) and
-	// travels as finalOutput; edited statements travel as finalReasoning — each the
-	// artifact as the human accepted it, same contract as the judge's own.
+	let stack = $state<JudgmentStack>();
+	let menuOpen = $state(false);
+	let userEl = $state<HTMLElement>();
+	let saved = $state(false);
+
+	// Persist a judgment to its source record; fire-and-forget so the deck keeps its snappy
+	// feel. A verdict-less judgment (j.verdict undefined) is a Save — the write skips the
+	// verdict + pipeline move server-side. An edited CTA is re-fused into the judge's Output
+	// (the adapter's inverse) and travels as finalOutput; edited statements travel as
+	// finalReasoning — each the artifact as the human has it, same contract as the judge's own.
 	const judge = (j: Judgment) => {
 		const output = data.judgments.find((x) => x.id === j.id)?.output;
 		const finalOutput = j.cta && output ? JSON.stringify(correct(output, j.cta)) : undefined;
@@ -27,7 +32,32 @@
 			})
 		}).catch((e) => console.error("decide failed", e));
 	};
+
+	// Save the current card's draft; flash the icon only when there was one to save.
+	const save = () => {
+		if (stack?.save()) {
+			saved = true;
+			setTimeout(() => (saved = false), 1200);
+		}
+	};
+
+	// ⌘S / Ctrl+S saves — page-level so it fires even while typing a note (the card's own
+	// key handler ignores keys inside inputs).
+	$effect(() => {
+		if (!data.user) return;
+		const onkey = (e: KeyboardEvent) => {
+			if ((e.metaKey || e.ctrlKey) && e.key === "s") {
+				e.preventDefault();
+				save();
+			}
+		};
+		window.addEventListener("keydown", onkey);
+		return () => window.removeEventListener("keydown", onkey);
+	});
 </script>
+
+<!-- click anywhere outside the account menu closes it (the pattern ReviewCard uses) -->
+<svelte:window onclick={(e) => menuOpen && !userEl?.contains(e.target as Node) && (menuOpen = false)} />
 
 {#if !data.user}
 	<main class="grid min-h-svh place-items-center">
@@ -52,11 +82,141 @@
 	<main class="mx-auto max-w-3xl space-y-5 p-6">
 		<header class="flex items-center justify-between">
 			<h1 class="text-2xl font-semibold">Decisions</h1>
-			<form method="POST" action="?/signout">
-				<Button type="submit" variant="ghost">{data.user.name} · Sign out</Button>
-			</form>
+			<div class="toolbar">
+				<button class="tbtn" class:saved onclick={save} title="Save (⌘S)" aria-label="Save">
+					{#if saved}
+						<svg
+							width="16"
+							height="16"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2.4"
+							stroke-linecap="round"
+							stroke-linejoin="round"><path d="M20 6 9 17l-5-5" /></svg
+						>
+					{:else}
+						<svg
+							width="16"
+							height="16"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							><path
+								d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"
+							/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7" /><path d="M7 3v4a1 1 0 0 0 1 1h7" /></svg
+						>
+					{/if}
+				</button>
+
+				<div class="user" bind:this={userEl}>
+					<button
+						class="tbtn"
+						class:on={menuOpen}
+						onclick={() => (menuOpen = !menuOpen)}
+						title="Account"
+						aria-label="Account"
+						aria-expanded={menuOpen}
+					>
+						<svg
+							width="16"
+							height="16"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg
+						>
+					</button>
+					{#if menuOpen}
+						<div class="menu">
+							<div class="who">{data.user.name}</div>
+							<form method="POST" action="?/signout">
+								<button type="submit" class="logout">Log out</button>
+							</form>
+						</div>
+					{/if}
+				</div>
+			</div>
 		</header>
 
-		<JudgmentStack judgments={data.judgments} onjudge={judge} />
+		<JudgmentStack bind:this={stack} judgments={data.judgments} onjudge={judge} />
 	</main>
 {/if}
+
+<style>
+	/* the toolbar — Save + account, right-aligned in the header, level with the title */
+	.toolbar {
+		display: flex;
+		gap: 2px;
+	}
+	.tbtn {
+		width: 34px;
+		height: 34px;
+		border-radius: 10px;
+		border: none;
+		background: transparent;
+		color: var(--muted-foreground);
+		cursor: pointer;
+		display: grid;
+		place-items: center;
+		transition:
+			color 0.15s ease,
+			background 0.15s ease;
+	}
+	.tbtn:hover {
+		color: var(--foreground);
+		background: var(--accent);
+	}
+	.tbtn.on {
+		color: var(--foreground);
+		background: var(--accent);
+	}
+	.tbtn.saved {
+		color: #16a34a;
+	}
+	.user {
+		position: relative;
+	}
+	.menu {
+		position: absolute;
+		top: calc(100% + 8px);
+		right: 0;
+		z-index: 30;
+		min-width: 200px;
+		background: var(--card);
+		border: 1px solid var(--border);
+		border-radius: 12px;
+		box-shadow: 0 8px 30px rgb(0 0 0 / 0.16);
+		overflow: hidden;
+	}
+	.who {
+		padding: 10px 12px;
+		font-size: 12.5px;
+		color: var(--muted-foreground);
+		border-bottom: 1px solid var(--border);
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.logout {
+		display: block;
+		width: 100%;
+		text-align: left;
+		border: none;
+		background: none;
+		cursor: pointer;
+		font: inherit;
+		font-size: 13px;
+		color: var(--foreground);
+		padding: 9px 12px;
+	}
+	.logout:hover {
+		background: var(--accent);
+	}
+</style>

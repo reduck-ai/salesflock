@@ -11,14 +11,27 @@
 
 	let index = $state(0);
 	let receipts = $state<{ verdict: Verdict; title: string; href?: string }[]>([]);
+	let card = $state<ReviewCard>();
 
-	const judge = (verdict: Verdict, feedback: string, cta?: string, reasoning?: Statement[]) => {
+	const judge = (verdict: Verdict | undefined, feedback: string, cta?: string, reasoning?: Statement[]) => {
 		const j = judgments[index];
 		onjudge?.({ id: j.id, verdict, feedback, cta, reasoning });
-		receipts.push({ verdict, title: j.title, href: j.href });
-		index += 1;
+		// a Save (no verdict) persists the edits but leaves the deck put — receipts are for
+		// decided cards, and the row is still under review.
+		if (verdict) {
+			receipts.push({ verdict, title: j.title, href: j.href });
+			index += 1;
+		}
 	};
 	const nav = (dir: -1 | 1) => (index = Math.min(judgments.length - 1, Math.max(0, index + dir)));
+
+	// Save the current card's draft — the page's Save icon + ⌘S call this. Returns whether
+	// there was a card to save (false when caught up), so the page flashes only on a real save.
+	export function save(): boolean {
+		if (!card) return false;
+		card.save();
+		return true;
+	}
 </script>
 
 {#if receipts.length}
@@ -44,6 +57,7 @@
 	{#key judgments[index].id}
 		<div in:fly={{ y: 12, duration: 200 }}>
 			<ReviewCard
+				bind:this={card}
 				judgment={judgments[index]}
 				pos={index + 1}
 				total={judgments.length}
