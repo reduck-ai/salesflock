@@ -4,11 +4,12 @@ import { sveltekit } from "@sveltejs/kit/vite";
 import { defineConfig } from "vite";
 
 export default defineConfig({
-	// Shared files under ../src and ../agents `import "yaml"`, but on Vercel only
-	// app/node_modules is installed — resolving from the importing file's dir (outside the
-	// app root) misses it. dedupe forces yaml to resolve from the app root, via normal
-	// package resolution (so dev's CJS→ESM interop still works, unlike a hard path alias).
-	resolve: { dedupe: ["yaml"] },
+	// Shared files under ../src and ../agents import bare packages (`yaml`; `ajv` in
+	// src/output.ts), but on Vercel only app/node_modules is installed — resolving from the
+	// importing file's dir (outside the app root) misses them. dedupe forces each to resolve
+	// from the app root, via normal package resolution (so dev's CJS→ESM interop still works,
+	// unlike a hard path alias). Every such package is in app/package.json.
+	resolve: { dedupe: ["yaml", "ajv"] },
 	plugins: [
 		tailwindcss(),
 		sveltekit({
