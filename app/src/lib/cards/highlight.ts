@@ -3,9 +3,9 @@
 // sentinel, render the markdown once, then swap sentinels for <mark data-si> — so we mark in
 // the source and style in the output, and a quote spanning inline markdown can't break the
 // render. The sentinels are private-use code points (built at runtime, so this file stays
-// pure ASCII) that never occur in real text and pass through snarkdown untouched.
+// pure ASCII) that never occur in real text and pass through marked untouched.
 
-import snarkdown from "snarkdown";
+import { renderMd } from "$lib/md";
 import type { Selector } from "./types";
 
 const OPEN = String.fromCharCode(0xe000); // ⟦ start of a marked span
@@ -44,7 +44,7 @@ export const highlightEvidence = (evidence: string, marks: { si: number; sel: Se
 		cursor = start + len;
 	}
 	out += evidence.slice(cursor);
-	return snarkdown(out)
+	return renderMd(out)
 		.replace(OPEN_RE, '<mark class="hl" data-si="$1" data-mi="$2">')
 		.replace(CLOSE_RE, "</mark>");
 };

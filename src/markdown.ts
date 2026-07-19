@@ -1,40 +1,29 @@
 // Evidence rendering — a generic, lossless YAML→Markdown pass for a projected field.
 // A multi-line value that parses as structured YAML (the shape enrich stores) becomes
-// headings, bold labels and flat bullets, every key and value emitted so nothing the
-// source gave us is dropped; prose passes through untouched. Deterministic: the judge's
-// verbatim quotes anchor against exactly this rendering, frozen on the Decision. Null
-// values are absence of data, not data — they carry nothing to render.
-//
-// The one constraint that shapes it: the app renders this with snarkdown (~1 KB), which
-// reads a line indented 3+ spaces as a code block and only supports a single, un-indented
-// list level. So structure is carried by bold labels and `---` rules between an array's
-// object items — NEVER by indentation or nested bullets — and value text stays verbatim
-// and contiguous so every quote still resolves.
+// nested bullets, every key and value emitted so nothing the source gave us is dropped;
+// prose passes through untouched. Deterministic and renderer-agnostic: the judge's verbatim
+// quotes anchor against exactly this rendering, frozen on the Decision, and any CommonMark
+// renderer displays it — so value text stays verbatim and contiguous (never re-wrapped) and
+// structure is carried by natural nesting. Null values are absence of data, not data — they
+// carry nothing to render.
 
 import { parse } from "yaml";
 
-const isScalar = (v: unknown): boolean => v === null || typeof v !== "object";
-
-// One parsed value → snarkdown-safe markdown lines. Object scalars become `- **key:** value`
-// bullets; a multi-line scalar drops to its own un-indented paragraph under a bold label; a
-// nested object/array is introduced by a bold label then rendered flat. An array of scalars
-// is a bullet list; an array of objects is its items separated by `---` (blank-lined so the
-// rule can't read as a setext heading).
+// One parsed value → markdown lines (relative indent; the caller nests by two spaces).
+// An array item folds into a single bullet: its first line takes the dash, the rest
+// stay indented inside it. Multi-line scalars keep their lines under a bare key.
 const render = (v: unknown): string[] => {
-	if (Array.isArray(v)) {
-		const items = v.filter((x) => x != null);
-		if (items.every(isScalar)) return items.map((x) => `- ${x}`);
-		return items.flatMap((item, i) => (i ? ["", "---", ""] : []).concat(render(item)));
-	}
+	if (Array.isArray(v))
+		return v.flatMap((item) => render(item).map((l, i) => (i === 0 ? `- ${l}` : `  ${l}`)));
 	if (v !== null && typeof v === "object")
 		return Object.entries(v)
 			.filter(([, x]) => x != null)
 			.flatMap(([k, x]) => {
-				if (!isScalar(x)) return [`**${k}:**`, ...render(x)];
+				if (typeof x === "object") return [`**${k}:**`, ...render(x).map((l) => `  ${l}`)];
 				const s = String(x);
 				return s.includes("\n")
-					? [`**${k}:**`, "", ...s.split("\n"), ""]
-					: [`- **${k}:** ${s}`];
+					? [`**${k}:**`, ...s.split("\n").map((l) => `  ${l}`)]
+					: [`**${k}:** ${s}`];
 			});
 	return [String(v)];
 };

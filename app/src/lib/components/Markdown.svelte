@@ -1,10 +1,11 @@
 <script lang="ts">
-	// The one place markdown becomes HTML. snarkdown (~1 KB, no deps) is sufficient for
-	// the headings/emphasis/lists our sources emit; the scoped styles give them shape,
-	// since Tailwind's preflight strips it. Source is our own CRM text, never visitor
-	// input, so {@html} is safe here — keep it that way. `highlights` (optional) wraps each
-	// resolved quote span in <mark data-si> so a claim can light up its proof.
-	import snarkdown from "snarkdown";
+	// The one place markdown becomes HTML, via the app's shared renderer ($lib/md). It
+	// renders the natural nested markdown our sources emit — nested lists, bold labels,
+	// paragraphs — that a minimal renderer can't; the scoped styles give them shape, since
+	// Tailwind's preflight strips it. Source is our own CRM text, never visitor input, so
+	// {@html} is safe here — keep it that way. `highlights` (optional) wraps each resolved
+	// quote span in <mark data-si> so a claim can light up its proof.
+	import { renderMd } from "$lib/md";
 	import { highlightEvidence } from "$lib/cards/highlight";
 	import type { Selector } from "$lib/cards/types";
 
@@ -14,9 +15,10 @@
 		highlights
 	}: { source: string; class?: string; highlights?: { si: number; sel: Selector }[] } = $props();
 
-	// snarkdown only links [text](url); our sources carry bare URLs (evidence is raw field
-	// values). Linkify them in the rendered HTML's text segments — never inside a tag or an
-	// existing anchor — so a URL stays clickable even when a highlight <mark> wraps it.
+	// marked's autolinking is off (see $lib/md), and our sources carry bare URLs (evidence is
+	// raw field values). Linkify them in the rendered HTML's text segments — never inside a
+	// tag or an existing anchor — so a URL stays clickable even when a highlight <mark> wraps
+	// it. This is the single place URLs become links, sentinel-safe by running last.
 	const linkify = (html: string): string => {
 		let inAnchor = 0;
 		return html
@@ -36,7 +38,7 @@
 			.join("");
 	};
 
-	const html = $derived(linkify(highlights ? highlightEvidence(source, highlights) : snarkdown(source)));
+	const html = $derived(linkify(highlights ? highlightEvidence(source, highlights) : renderMd(source)));
 </script>
 
 <div class="md {klass}">{@html html}</div>
@@ -63,6 +65,23 @@
 		margin: 0.25rem 0;
 		padding-left: 1.25rem;
 		list-style: disc;
+	}
+	.md :global(ul ul) {
+		margin: 0.1rem 0;
+	}
+	.md :global(li) {
+		margin: 0.2rem 0;
+	}
+	/* marked wraps a loose list item's content in <p> (Tailwind's preflight zeroes their
+	   margins) — give paragraphs air so a post's text reads as prose, not one block */
+	.md :global(p) {
+		margin: 0.5rem 0;
+	}
+	.md :global(p:first-child) {
+		margin-top: 0;
+	}
+	.md :global(p:last-child) {
+		margin-bottom: 0;
 	}
 	.md :global(code) {
 		font-family: ui-monospace, monospace;
