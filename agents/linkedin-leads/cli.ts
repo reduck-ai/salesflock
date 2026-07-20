@@ -7,6 +7,7 @@ import "../../src/env.js";
 import { Command } from "commander";
 import { readFile } from "node:fs/promises";
 import { text } from "node:stream/consumers";
+import { renderError } from "../../src/errors.js";
 import { tools, type Verdict } from "./tools.js";
 
 const out = (v: unknown) => console.log(JSON.stringify(v, null, 2));
@@ -108,7 +109,7 @@ program
 		out(await tools.putLead({ personId: person, companyId: company }))
 	);
 
-program.parseAsync().catch((e: Error) => {
-	console.error(`error: ${e.message}`);
+program.parseAsync().catch((e: unknown) => {
+	console.error(renderError(e));
 	process.exit(1);
 });

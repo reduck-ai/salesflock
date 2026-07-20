@@ -6,4 +6,5 @@ export interface Prompts {
   Name: string;
   "Output schema"?: string;
   "System prompt"?: string;
+  Version?: number;
 }

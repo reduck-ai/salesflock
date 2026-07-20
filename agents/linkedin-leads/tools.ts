@@ -13,7 +13,7 @@ import { getStore } from "../../src/stores/index.js";
 import { idOf } from "../../src/stores/notion.js";
 import { reviewOf } from "../../src/review.js";
 import * as llm from "../../src/ai/llm.js";
-import { collectQuotes, inRange, type Statement } from "../../src/anchor.js";
+import { annotate, collectQuotes, inRange, mapQuotes, snapQuote, type Statement } from "../../src/anchor.js";
 import { schemaError } from "../../src/output.js";
 import { stringify } from "yaml";
 import config from "./config.js";
@@ -96,7 +96,7 @@ const STATEMENTS = {
 						intended_text: {
 							type: "string",
 							description:
-								"the exact Evidence text the [start,end) range covers, copied verbatim — your own check that the offsets are right"
+								"the exact Evidence text the [start,end) range covers, copied verbatim with the ⟨N⟩ position markers removed — your own check that the offsets are right"
 						}
 					}
 				}
@@ -104,6 +104,15 @@ const STATEMENTS = {
 		}
 	}
 } as const;
+
+// The evidence carries position landmarks (anchor.ts `annotate`) so the judge can place exact
+// offsets: an LLM counting chars from 0 drifts worse the deeper the quote, but it can count the
+// few chars from the nearest ⟨N⟩. Prompt-only — the offsets it returns index the CLEAN evidence.
+const MARKERS =
+	"The Evidence below carries position markers like ⟨1200⟩ every ~100 characters: the character " +
+	"immediately after ⟨N⟩ is at offset N in the evidence. The markers are NOT part of the evidence — " +
+	"ignore them when copying quoted text. Give each quote's start/end as offsets into the evidence " +
+	"WITH THE MARKERS REMOVED; find the nearest preceding ⟨N⟩ and count forward to be exact.";
 
 // A judgment, whoever judged: the domain output plus its claim→proof statements. What
 // the LLM returns, and what a manual judge hands to `qualify` via --verdict.
@@ -266,20 +275,27 @@ const decide = async (
 			);
 	};
 
+	// Offset-correction post-step (removable): the position markers get the judge within tens of
+	// chars of its quote; snap each quote onto its own intended_text nearby so the range is exact.
+	// Applied to whoever judged, BEFORE the contract check, so we validate and store the corrected
+	// form. To remove: drop this and pass the raw verdict/res to check.
+	const snap = (v: Verdict): Verdict => mapQuotes(v, (q) => snapQuote(ctx.evidence, q)) as Verdict;
+
 	let output: Record<string, unknown> | undefined;
 	let statements: Statement[] | undefined;
 	if (verdict) {
-		check(verdict);
-		({ output, statements } = verdict);
+		const v = snap(verdict);
+		check(v);
+		({ output, statements } = v);
 	} else {
-		const judgePrompt = [ctx.system, ctx.instruction, ctx.examples, `## Evidence\n\n${ctx.evidence}`]
+		const judgePrompt = [ctx.system, ctx.instruction, ctx.examples, MARKERS, `## Evidence\n\n${annotate(ctx.evidence)}`]
 			.filter(Boolean)
 			.join("\n\n");
 		for (let attempt = 1; !statements; attempt++) {
-			const res = await llm.generate<Verdict>(judgePrompt, ctx.responseSchema);
+			const v = snap(await llm.generate<Verdict>(judgePrompt, ctx.responseSchema));
 			try {
-				check(res);
-				({ output, statements } = res);
+				check(v);
+				({ output, statements } = v);
 			} catch (e) {
 				if (attempt >= 2) throw e;
 			}

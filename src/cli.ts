@@ -14,6 +14,7 @@ import { mkdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { compile } from "json-schema-to-typescript";
 import { bind } from "./scripts.js";
+import { renderError } from "./errors.js";
 import { STORES, type AgentConfig } from "./stores/index.js";
 
 // Writable-property count of a described model (a JSON Schema's `properties`) — for the
@@ -60,7 +61,7 @@ program
 		console.error(`${client}: ${Object.keys(scripts).length} scripts → ${path}`);
 	});
 
-program.parseAsync().catch((e: Error) => {
-	console.error(`error: ${e.message}`);
+program.parseAsync().catch((e: unknown) => {
+	console.error(renderError(e));
 	process.exit(1);
 });

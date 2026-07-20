@@ -51,6 +51,67 @@ export const collectQuotes = (value: unknown): Quote[] => {
 	return out;
 };
 
+// snapQuote(evidence, q, window) — the offset-correction post-step (removable). Position markers
+// (`annotate`) get the judge within ~tens of chars of its quote but not exact; here we pin it,
+// deterministically, onto its OWN `intended_text`. The judge reproduces the RENDERED text (no `**`,
+// collapsed whitespace), so we match in `canonicalize`'s rendered space — the same projection the
+// human selection uses — then map the found span back to raw offsets via `at`. Local: the match is
+// the occurrence nearest the judge's reported offset, within `window`, so it is unambiguous, never
+// a global first-occurrence guess. A quote with no `intended_text` (a human's — already exact), or
+// whose text isn't in-window, is returned unchanged. On success `intended_text` becomes the raw
+// span, so `evidence.slice(start,end) === intended_text` holds.
+export const snapQuote = (evidence: string, q: Quote, window = 128): Quote => {
+	if (q.intended_text === undefined) return q; // human quote — position is already the truth
+	const needle = canonNormalize(q.intended_text.replace(/⟨\d+⟩/g, ""));
+	const { canon, at } = canonicalize(evidence);
+	if (!needle || !at.length) return q;
+	// the canon index nearest the judge's reported raw offset
+	let approx = 0;
+	for (let k = 1; k < at.length; k++)
+		if (Math.abs(at[k] - q.start) < Math.abs(at[approx] - q.start)) approx = k;
+	// the occurrence of the rendered needle nearest that index, within the window
+	let best = -1;
+	for (let i = canon.indexOf(needle); i >= 0; i = canon.indexOf(needle, i + 1))
+		if (Math.abs(i - approx) <= window && (best < 0 || Math.abs(i - approx) < Math.abs(best - approx)))
+			best = i;
+	if (best < 0) return q;
+	const start = at[best];
+	const end = at[best + needle.length - 1] + 1;
+	return { start, end, intended_text: evidence.slice(start, end) };
+};
+
+// mapQuotes(value, fn) — deep-copy a verdict, replacing every Quote in any `quotes:[]` with
+// fn(quote). The write-side twin of collectQuotes; here it applies snapQuote across statements
+// AND any quotes nested in the output.
+export const mapQuotes = (value: unknown, fn: (q: Quote) => Quote): unknown => {
+	if (Array.isArray(value)) return value.map((v) => mapQuotes(v, fn));
+	if (!value || typeof value !== "object") return value;
+	const out: Record<string, unknown> = {};
+	for (const [k, v] of Object.entries(value as Record<string, unknown>))
+		out[k] = k === "quotes" && Array.isArray(v) ? (v as Quote[]).map(fn) : mapQuotes(v, fn);
+	return out;
+};
+
+// annotate(text, step) — the LLM prompt aid: interleave position landmarks ⟨N⟩ into a copy of
+// the evidence, one at the first whitespace past every `step` chars, where N is the offset of the
+// character right after the marker. An LLM can't count thousands of chars from 0 (offsets drift
+// worse the deeper the quote), but it can count <step chars from the nearest landmark. In-memory,
+// prompt-only: the model reports offsets into the CLEAN text; the markers just tell it where it is.
+// Stripping /⟨\d+⟩/g recovers the original exactly.
+export const annotate = (text: string, step = 100): string => {
+	let out = "";
+	let since = 0;
+	for (let i = 0; i < text.length; i++) {
+		if (since >= step && /\s/.test(text[i])) {
+			out += `⟨${i}⟩`;
+			since = 0;
+		}
+		out += text[i];
+		since++;
+	}
+	return out;
+};
+
 // canonicalize(E) — E projected into its RENDERED text space: whitespace runs collapse to a
 // single space (never leading), and markdown syntax the renderer removes — inline emphasis
 // (`**`) and line-leading block markers (`#`, `-`/`*`/`+`, `>`) — is stripped, with `at[k]`

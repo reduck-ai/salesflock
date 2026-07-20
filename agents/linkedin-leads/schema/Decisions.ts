@@ -8,7 +8,6 @@ export interface Decisions {
   Feedback?: string;
   "Final output"?: string;
   "Final reasoning"?: string;
-  "Human verdict"?: "Accepted" | "Rejected";
   "Include as example"?: boolean;
   Input?: string;
   /**
