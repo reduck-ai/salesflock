@@ -15,7 +15,8 @@ export interface Quote {
 }
 
 // A reasoning statement: a claim, its stance (for/against the verdict), and the evidence spans
-// that back it — at least one; an unbacked claim is not a statement.
+// that back it — one per distinct proof, or none when the claim rests on the ABSENCE of evidence
+// (nothing to point at; the evidence's silence is the proof).
 export interface Statement {
 	claim: string;
 	supporting: boolean;

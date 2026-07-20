@@ -82,11 +82,11 @@ const STATEMENTS = {
 			},
 			quotes: {
 				type: "array",
-				minItems: 1,
 				description:
-					"the spans of the Evidence backing the claim — the shortest that prove the point, " +
-					"one per distinct proof. Each is a {start,end} exactly as `search_quotes` returned " +
-					"it for the text you cite; every claim needs at least one.",
+					"the Evidence spans that PROVE this claim — the shortest that do, one per distinct " +
+					"proof, each a {start,end} exactly as `search_quotes` returned it. A claim resting on " +
+					"the ABSENCE of evidence (e.g. 'no mention of X') has nothing to point at: give an empty " +
+					"array — the Evidence's silence is the proof. Never cite unrelated text to fill it.",
 				items: {
 					type: "object",
 					required: ["start", "end"],
