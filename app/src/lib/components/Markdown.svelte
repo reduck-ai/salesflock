@@ -109,6 +109,10 @@
 	.md :global(mark.hl.noted) {
 		--hl: #d97706;
 	}
+	/* a human-added quote reads blue — provenance wins over stance (green/red) */
+	.md :global(mark.hl.userq) {
+		--hl: #2563eb;
+	}
 	.md :global(mark.hl.active) {
 		background: color-mix(in oklch, var(--hl) 18%, transparent);
 		box-shadow: inset 2px 0 0 var(--hl);

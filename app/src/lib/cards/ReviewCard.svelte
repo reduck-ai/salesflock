@@ -49,8 +49,27 @@
 	// the human's editable copy of the reasoning — comments and added claims/quotes land here;
 	// the judge's statements stay canonical on the prop (the card remounts per id)
 	let statements = $state<Statement[]>(structuredClone(judgment.draft?.reasoning ?? judgment.statements));
-	// the selection menu — its selector is minted at mouseup: verbatim-or-refuse, the judge's contract
-	let menu = $state<{ selector: Selector | null; x: number; y: number } | null>(null);
+	// the floating popover over a span — one primitive, two kinds: "add" (minted at mouseup over a
+	// fresh selection, verbatim-or-refuse) and "remove" (opened by clicking a user-added quote's
+	// mark). x/top/bottom are the span's rect; the placement rule flips it to whichever side has room.
+	let menu = $state<
+		| { kind: "add"; selector: Selector | null; x: number; top: number; bottom: number }
+		| { kind: "remove"; mi: number; x: number; top: number; bottom: number }
+		| null
+	>(null);
+	// place the popover on the roomier side of the span and cap its height to fit — no measuring,
+	// no flash, so the tall "attach" list is always fully on-screen (near the top it opens below).
+	const MARGIN = 8;
+	const place = $derived.by(() => {
+		if (!menu) return null;
+		const below = menu.top < window.innerHeight - menu.bottom;
+		const maxH = Math.min(
+			window.innerHeight * 0.4,
+			(below ? window.innerHeight - menu.bottom : menu.top) - 16
+		);
+		const x = Math.min(Math.max(menu.x, MARGIN + 160), window.innerWidth - MARGIN - 160);
+		return { below, top: below ? menu.bottom : menu.top, maxH, x };
+	});
 	let menuMode = $state<"acts" | "claim" | "attach">("acts");
 	let stance = $state(true); // the new claim's stance, picked before its text is typed
 	let claimText = $state("");
@@ -102,7 +121,9 @@
 		const mi = activeMi;
 		el?.querySelectorAll("mark.hl").forEach((m) => {
 			const s = statements[Number(m.getAttribute("data-si"))];
+			const mIdx = Number(m.getAttribute("data-mi"));
 			m.classList.toggle("against", s ? !s.supporting : false);
+			m.classList.toggle("userq", isUserQuote(statements[marks[mIdx].si].claim, marks[mIdx].sel));
 			m.classList.toggle("active", si !== null && m.getAttribute("data-si") === String(si));
 			m.classList.toggle("current", mi !== null && m.getAttribute("data-mi") === String(mi));
 			// a claim carrying the human's note reads gold — reading .comment here keeps this effect
@@ -224,7 +245,13 @@
 		const r = s!.getRangeAt(0).getBoundingClientRect();
 		menuMode = "acts";
 		claimText = "";
-		menu = { selector: resolveVisible(judgment.evidence, text), x: r.left + r.width / 2, y: r.top };
+		menu = {
+			kind: "add",
+			selector: resolveVisible(judgment.evidence, text),
+			x: r.left + r.width / 2,
+			top: r.top,
+			bottom: r.bottom
+		};
 	};
 	const closeMenu = () => {
 		menu = null;
@@ -232,12 +259,12 @@
 	};
 	const addClaim = () => {
 		const claim = claimText.trim();
-		if (!claim || !menu?.selector) return;
+		if (!claim || menu?.kind !== "add" || !menu.selector) return;
 		statements.push({ claim, supporting: stance, quotes: [menu.selector] });
 		closeMenu();
 	};
 	const attach = (si: number) => {
-		if (menu?.selector) statements[si].quotes.push(menu.selector);
+		if (menu?.kind === "add" && menu.selector) statements[si].quotes.push(menu.selector);
 		closeMenu();
 	};
 
@@ -249,9 +276,14 @@
 	$effect(() => {
 		const onkey = (e: KeyboardEvent) => {
 			if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-			// the selection menu owns the keys while open — Esc closes it, nothing else fires
+			// the popover owns the keys while open — Esc closes it; over a user quote ⌫ still removes
 			if (menu) {
 				if (e.key === "Escape") closeMenu();
+				else if (menu.kind === "remove" && (e.key === "Backspace" || e.key === "Delete")) {
+					e.preventDefault();
+					removeFocused();
+					menu = null;
+				}
 				return;
 			}
 			// a focused button already turns Enter into its own click — don't commit twice
@@ -284,8 +316,15 @@
 		// A click anywhere else — outside a quote, its pin, or a dock claim — unselects.
 		const t = e.target as Element;
 		const m = t.closest?.("mark.hl");
-		if (m && evEl?.contains(m)) activeMi = Number(m.getAttribute("data-mi"));
-		else if (!t.closest?.(".note-pin, .claim, .selmenu")) activeMi = null;
+		if (m && evEl?.contains(m)) {
+			const mi = Number(m.getAttribute("data-mi"));
+			activeMi = mi;
+			// a user-added quote carries an inline remove popover, right at the highlight
+			if (canRemove(mi)) {
+				const r = m.getBoundingClientRect();
+				menu = { kind: "remove", mi, x: r.left + r.width / 2, top: r.top, bottom: r.bottom };
+			}
+		} else if (!t.closest?.(".note-pin, .claim, .selmenu")) activeMi = null;
 	}}
 />
 
@@ -375,9 +414,32 @@
 
 <div class="veil"></div>
 
-{#if menu}
-	<div class="selmenu" bind:this={menuEl} style={`left:${menu.x}px; top:${menu.y}px`}>
-		{#if !menu.selector}
+{#if menu && place}
+	<div
+		class="selmenu"
+		class:below={place.below}
+		bind:this={menuEl}
+		style={`left:${place.x}px; top:${place.top}px; --maxh:${place.maxH}px; transform: translate(-50%, ${place.below ? "10px" : "calc(-100% - 10px)"})`}
+	>
+		{#if menu.kind === "remove"}
+			<button class="act rm-act" onclick={() => (removeFocused(), (menu = null))}>
+				<svg
+					width="14"
+					height="14"
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+					aria-hidden="true"
+					><path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path
+						d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+					/><line x1="10" x2="10" y1="11" y2="17" /><line x1="14" x2="14" y1="11" y2="17" /></svg
+				>
+				Remove quote
+			</button>
+		{:else if !menu.selector}
 			<span class="nohit">Can't anchor — select the text verbatim, within one block</span>
 		{:else if menuMode === "acts"}
 			<button class="act for" onclick={() => ((stance = true), (menuMode = "claim"))}> ✓ New claim </button>
@@ -455,14 +517,6 @@
 						></button>
 					{/each}
 				</span>
-				{#if activeSi === i && canRemove(activeMi)}
-					<button
-						class="rm"
-						title="Remove this quote (⌫)"
-						aria-label="Remove this quote"
-						onclick={removeFocused}>✕</button
-					>
-				{/if}
 			</div>
 		{/each}
 	</div>
@@ -759,10 +813,10 @@
 		background: linear-gradient(to top, var(--background) 36%, transparent);
 	}
 
-	/* the selection menu — Notion-style, floated just above the highlighted text */
+	/* the span popover — Notion-style, floated at the highlight; the transform (which side it
+	   opens on) is set inline by the placement rule, so it always lands fully on-screen */
 	.selmenu {
 		position: fixed;
-		transform: translate(-50%, calc(-100% - 10px));
 		z-index: 30;
 		display: flex;
 		align-items: stretch;
@@ -801,6 +855,16 @@
 	.selmenu .act.against {
 		color: #dc2626;
 	}
+	/* the inline remove — a trash icon + label; reddens on hover like the intent it carries */
+	.selmenu .rm-act {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+	}
+	.selmenu .rm-act:hover {
+		color: #dc2626;
+		background: color-mix(in oklch, #dc2626 12%, transparent);
+	}
 	.selmenu .claim-in {
 		width: 320px;
 		max-width: calc(100vw - 60px);
@@ -815,7 +879,7 @@
 	.selmenu .attach {
 		display: flex;
 		flex-direction: column;
-		max-height: 40vh;
+		max-height: var(--maxh, 40vh); /* capped to the room on the chosen side, then scrolls */
 		overflow-y: auto;
 		min-width: 260px;
 	}
@@ -916,22 +980,6 @@
 	.claim .text.edit:focus {
 		box-shadow: inset 0 0 0 1px var(--input);
 	}
-	/* the ✕ removes the focused human quote (its claim too, if it was the last proof) */
-	.claim .rm {
-		flex: none;
-		border: none;
-		background: none;
-		cursor: pointer;
-		color: var(--muted-foreground);
-		font-size: 12px;
-		line-height: 1;
-		padding: 2px 3px;
-		border-radius: 5px;
-	}
-	.claim .rm:hover {
-		color: #dc2626;
-		background: color-mix(in oklch, #dc2626 12%, transparent);
-	}
 	/* the stance mark: ✓ argues for the verdict, ✕ against — shape first, colour second */
 	.claim .mark {
 		flex: none;
@@ -961,13 +1009,10 @@
 	.claim.against .dot {
 		background: #dc2626;
 	}
-	/* a human-attached proof reads hollow — the judge's are solid (labelling data) */
-	.claim .dot.userq {
-		background: transparent;
-		box-shadow: inset 0 0 0 1.5px #16a34a;
-	}
+	/* a human-added proof reads blue — provenance over stance (matches the evidence highlight) */
+	.claim .dot.userq,
 	.claim.against .dot.userq {
-		box-shadow: inset 0 0 0 1.5px #dc2626;
+		background: #2563eb;
 	}
 	.claim .dot.on {
 		box-shadow:
@@ -979,17 +1024,11 @@
 			0 0 0 2px var(--card),
 			0 0 0 3px #dc2626;
 	}
-	.claim .dot.userq.on {
-		box-shadow:
-			inset 0 0 0 1.5px #16a34a,
-			0 0 0 2px var(--card),
-			0 0 0 3px #16a34a;
-	}
+	.claim .dot.userq.on,
 	.claim.against .dot.userq.on {
 		box-shadow:
-			inset 0 0 0 1.5px #dc2626,
 			0 0 0 2px var(--card),
-			0 0 0 3px #dc2626;
+			0 0 0 3px #2563eb;
 	}
 
 	/* OUTPUT — the agent's proposal, editable within its schema; committing it IS the decision */
