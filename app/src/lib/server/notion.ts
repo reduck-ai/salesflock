@@ -167,12 +167,16 @@ export const record = async (
 		finalReasoning
 	}: { committedOutput?: unknown; feedback: string; finalReasoning?: string }
 ) => {
+	// The learning channel is a full snapshot of the human's live draft, not a sparse patch:
+	// both columns always land as exactly what the human has — empty included, which CLEARS the
+	// column (a rich_text stays stale unless you write it). So reverting a note to nothing
+	// persists, where omitting the key would leave the old value untouched.
 	const learning = {
-		...(feedback ? { Feedback: { rich_text: chunks(feedback) } } : {}),
-		...(finalReasoning ? { "Final reasoning": { rich_text: chunks(finalReasoning) } } : {})
+		Feedback: { rich_text: chunks(feedback) },
+		"Final reasoning": { rich_text: chunks(finalReasoning ?? "") }
 	};
 	if (committedOutput === undefined) {
-		if (Object.keys(learning).length) await patch(pageId, learning); // a Save — decision withheld
+		await patch(pageId, learning); // a Save — decision withheld, draft snapshotted
 		return;
 	}
 
