@@ -62,9 +62,12 @@ export const collectQuotes = (value: unknown): Quote[] => {
 // span, so `evidence.slice(start,end) === intended_text` holds.
 export const snapQuote = (evidence: string, q: Quote, window = 128): Quote => {
 	if (q.intended_text === undefined) return q; // human quote — position is already the truth
-	const needle = canonNormalize(q.intended_text.replace(/⟨\d+⟩/g, ""));
+	const stripped = q.intended_text.replace(/⟨\d+⟩/g, ""); // clean text for the best-effort fallback
+	// project the judge's quote through the SAME canonicalization as the haystack, so it matches
+	// whether the judge copied the rendered text or the raw markdown (`**`, bullets, headers).
+	const needle = canonicalize(stripped).canon;
 	const { canon, at } = canonicalize(evidence);
-	if (!needle || !at.length) return q;
+	if (!needle || !at.length) return { ...q, intended_text: stripped };
 	// the canon index nearest the judge's reported raw offset
 	let approx = 0;
 	for (let k = 1; k < at.length; k++)
@@ -74,7 +77,7 @@ export const snapQuote = (evidence: string, q: Quote, window = 128): Quote => {
 	for (let i = canon.indexOf(needle); i >= 0; i = canon.indexOf(needle, i + 1))
 		if (Math.abs(i - approx) <= window && (best < 0 || Math.abs(i - approx) < Math.abs(best - approx)))
 			best = i;
-	if (best < 0) return q;
+	if (best < 0) return { ...q, intended_text: stripped }; // best-effort: keep the judge's offsets
 	const start = at[best];
 	const end = at[best + needle.length - 1] + 1;
 	return { start, end, intended_text: evidence.slice(start, end) };

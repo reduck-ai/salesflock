@@ -13,7 +13,16 @@ import { getStore } from "../../src/stores/index.js";
 import { idOf } from "../../src/stores/notion.js";
 import { reviewOf } from "../../src/review.js";
 import * as llm from "../../src/ai/llm.js";
-import { annotate, collectQuotes, inRange, mapQuotes, snapQuote, type Statement } from "../../src/anchor.js";
+import {
+	annotate,
+	collectQuotes,
+	inRange,
+	mapQuotes,
+	quoteText,
+	snapQuote,
+	type Quote,
+	type Statement
+} from "../../src/anchor.js";
 import { schemaError } from "../../src/output.js";
 import { stringify } from "yaml";
 import config from "./config.js";
@@ -113,6 +122,9 @@ const MARKERS =
 	"immediately after ⟨N⟩ is at offset N in the evidence. The markers are NOT part of the evidence — " +
 	"ignore them when copying quoted text. Give each quote's start/end as offsets into the evidence " +
 	"WITH THE MARKERS REMOVED; find the nearest preceding ⟨N⟩ and count forward to be exact.";
+
+// How many judge attempts to anchor every quote — the first, plus one corrective retry.
+const MAX_ATTEMPTS = 2;
 
 // A judgment, whoever judged: the domain output plus its claim→proof statements. What
 // the LLM returns, and what a manual judge hands to `qualify` via --verdict.
@@ -257,49 +269,65 @@ const decide = async (
 	{ dependsOn, verdict }: { dependsOn?: string[]; verdict?: Verdict } = {}
 ) => {
 	const ctx = await judgmentContext(key, profile);
-	// Hold the verdict to the contract before the single write — schemaError on the output, and
-	// every quote (statements' and any nested in the output) held to one gate: its [start,end)
-	// range must lie within the Evidence. A range denotes exactly one span, so there is nothing
-	// to resolve and nothing to guess — the offsets are the anchor, frozen as-is.
-	const check = (v: Verdict): void => {
-		const err = schemaError(ctx.outputSchema, v.output);
-		if (err) throw new Error(`output violates Output schema: ${err}`);
-		const bad = collectQuotes({ output: v.output, statements: v.statements }).filter(
-			(q) => !inRange(ctx.evidence, q)
-		);
-		if (bad.length)
-			throw new Error(
-				`quote ranges out of bounds (0..${ctx.evidence.length}):\n- ${bad
-					.map((q) => JSON.stringify(q))
-					.join("\n- ")}`
-			);
-	};
-
-	// Offset-correction post-step (removable): the position markers get the judge within tens of
-	// chars of its quote; snap each quote onto its own intended_text nearby so the range is exact.
-	// Applied to whoever judged, BEFORE the contract check, so we validate and store the corrected
-	// form. To remove: drop this and pass the raw verdict/res to check.
+	// Offset-correction post-step: the position markers get the judge within tens of chars of its
+	// quote; snap pins each quote onto its own intended_text (canon space). On success the quote's
+	// [start,end) exactly covers its text; on a miss it keeps the judge's offsets (best-effort).
 	const snap = (v: Verdict): Verdict => mapQuotes(v, (q) => snapQuote(ctx.evidence, q)) as Verdict;
+	// A quote is anchored iff its span renders to its text — after snap that is a plain equality.
+	const anchored = (q: { start: number; end: number; intended_text?: string }): boolean =>
+		q.intended_text === undefined ||
+		(inRange(ctx.evidence, q) && quoteText(ctx.evidence, q) === q.intended_text);
+	// The re-quote instruction for one unanchored quote: its text + the evidence where it pointed.
+	const describe = (q: { start: number; intended_text?: string }): string => {
+		const near = ctx.evidence.slice(Math.max(0, q.start - 60), q.start + 60);
+		return `the quote "${q.intended_text}" is not verbatim in the Evidence; nearby it reads "…${near}…" — re-quote an exact substring.`;
+	};
 
 	let output: Record<string, unknown> | undefined;
 	let statements: Statement[] | undefined;
 	if (verdict) {
+		// the manual path is one-shot — the calling agent is its own retry loop. Quotes are
+		// best-effort (snap pins what it can); only the schema is a hard gate.
 		const v = snap(verdict);
-		check(v);
+		const err = schemaError(ctx.outputSchema, v.output);
+		if (err) throw new Error(`verdict Output violates its schema: ${err}`);
 		({ output, statements } = v);
 	} else {
+		// The judge loop with a per-quote tracker (removable): `resolved` caches every quote that
+		// has anchored, keyed by the text the judge meant — so once a quote is pinned it is locked,
+		// and attempts UNION their wins. Feedback lists only the still-unresolved quotes; we stop
+		// early when an attempt adds nothing new (temp 0 would just repeat). The merge takes the
+		// anchored quote where we have one, else the judge's own offsets — not perfect but likely
+		// close, never dropped. Schema stays a hard gate.
 		const judgePrompt = [ctx.system, ctx.instruction, ctx.examples, MARKERS, `## Evidence\n\n${annotate(ctx.evidence)}`]
 			.filter(Boolean)
 			.join("\n\n");
-		for (let attempt = 1; !statements; attempt++) {
-			const v = snap(await llm.generate<Verdict>(judgePrompt, ctx.responseSchema));
-			try {
-				check(v);
-				({ output, statements } = v);
-			} catch (e) {
-				if (attempt >= 2) throw e;
-			}
+		const resolved = new Map<string, Quote>();
+		let last!: Verdict;
+		let feedback = "";
+		for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+			last = snap(
+				await llm.generate<Verdict>([judgePrompt, feedback].filter(Boolean).join("\n\n"), ctx.responseSchema)
+			);
+			const quotes = collectQuotes(last);
+			const before = resolved.size;
+			for (const q of quotes) if (anchored(q) && q.intended_text !== undefined) resolved.set(q.intended_text, q);
+			const pending = quotes.filter((q) => q.intended_text !== undefined && !resolved.has(q.intended_text));
+			const schemaErr = schemaError(ctx.outputSchema, last.output);
+			if (!pending.length && !schemaErr) break; // fully anchored + valid
+			if (attempt >= 2 && resolved.size === before && !schemaErr) break; // no progress — stop retrying
+			feedback =
+				"## Corrections needed\n\nFix ONLY these and return the full answer again:\n- " +
+				[schemaErr && `the Output does not satisfy its schema: ${schemaErr}`, ...pending.map(describe)]
+					.filter(Boolean)
+					.join("\n- ");
 		}
+		const err = schemaError(ctx.outputSchema, last.output);
+		if (err) throw new Error(`judge Output violates its schema after ${MAX_ATTEMPTS} attempts: ${err}`);
+		// merge: the anchored version of each quote, else the judge's best-effort offsets.
+		({ output, statements } = mapQuotes(last, (q) =>
+			q.intended_text !== undefined ? (resolved.get(q.intended_text) ?? q) : q
+		) as Verdict);
 	}
 
 	const name = String(ctx.person.fields.Name ?? ctx.publicId);
