@@ -7,13 +7,13 @@
 	// quote span in <mark data-si> so a claim can light up its proof.
 	import { renderMd } from "$lib/md";
 	import { highlightEvidence } from "$lib/cards/highlight";
-	import type { Selector } from "$lib/cards/types";
+	import type { Quote } from "$lib/cards/types";
 
 	let {
 		source,
 		class: klass = "",
 		highlights
-	}: { source: string; class?: string; highlights?: { si: number; sel: Selector }[] } = $props();
+	}: { source: string; class?: string; highlights?: { si: number; q: Quote }[] } = $props();
 
 	// marked's autolinking is off (see $lib/md), and our sources carry bare URLs (evidence is
 	// raw field values). Linkify them in the rendered HTML's text segments — never inside a
@@ -87,20 +87,25 @@
 		font-family: ui-monospace, monospace;
 		font-size: 0.85em;
 	}
-	/* a claim's proof: always lit, subtly, in its stance's colour — light wash plus a darker
-	   left bar. The cursor's claim (.active) deepens; the cursor's own quote (.current) gets
-	   the ring. Stance is the claim's (.against set by the card), green by default. */
+	/* a claim's proof: always lit, subtly, in its stance's colour. A quote that crosses tags or
+	   lines is several <mark> fragments sharing one si/mi (highlight.ts); the wash is on every
+	   fragment so the band is seamless (no padding/radius between them), while the darker left
+	   bar and the cursor ring sit only on the FIRST fragment (.hl-start) — one accent per quote,
+	   not stripes. The cursor's claim (.active) deepens the whole band; its own quote (.current)
+	   rings its start. Stance is the claim's (.against set by the card), green by default. */
 	.md :global(mark.hl) {
 		--hl: #16a34a;
 		background: color-mix(in oklch, var(--hl) 9%, transparent);
-		box-shadow: inset 2px 0 0 color-mix(in oklch, var(--hl) 55%, transparent);
 		color: inherit;
-		border-radius: 3px;
-		padding: 0 1px;
 		cursor: pointer; /* clicking a quote focuses it — its margin comment expands */
 		transition:
 			background 0.18s ease,
 			box-shadow 0.18s ease;
+	}
+	.md :global(mark.hl.hl-start) {
+		box-shadow: inset 2px 0 0 color-mix(in oklch, var(--hl) 55%, transparent);
+		border-top-left-radius: 3px;
+		border-bottom-left-radius: 3px;
 	}
 	.md :global(mark.hl.against) {
 		--hl: #dc2626;
@@ -115,9 +120,11 @@
 	}
 	.md :global(mark.hl.active) {
 		background: color-mix(in oklch, var(--hl) 18%, transparent);
+	}
+	.md :global(mark.hl.active.hl-start) {
 		box-shadow: inset 2px 0 0 var(--hl);
 	}
-	.md :global(mark.hl.current) {
+	.md :global(mark.hl.current.hl-start) {
 		box-shadow:
 			inset 2px 0 0 var(--hl),
 			0 0 0 1.5px color-mix(in oklch, var(--hl) 70%, transparent);

@@ -16,11 +16,9 @@
 	// move server-side. Otherwise the committed output IS the decision and travels as-is (its
 	// schema is the Prompt's). Edited statements travel as finalReasoning.
 	const judge = (j: Judgment) => {
-		// store the human's reasoning like the judge's: quotes as verbatim strings, not resolved
-		// Selectors — the anchor is derived live on read (decision.ts), never frozen.
-		const finalReasoning = j.reasoning
-			? JSON.stringify(j.reasoning.map((s) => ({ ...s, quotes: s.quotes.map((q) => q.exact) })))
-			: undefined;
+		// store the human's reasoning as-is: quotes are already [start,end) ranges into the
+		// evidence (a human quote carries no intended_text — the position IS the span).
+		const finalReasoning = j.reasoning ? JSON.stringify(j.reasoning) : undefined;
 		fetch("/api/decide", {
 			method: "POST",
 			headers: { "content-type": "application/json" },

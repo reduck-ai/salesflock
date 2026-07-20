@@ -2,6 +2,8 @@
 // EvidencedJudgment (see decision.ts, the worked example), the card renders and edits it, and a
 // Judgment carries the human's decision back. Types only — no markup, no persistence.
 
+import type { Quote } from "$core/anchor";
+
 // The output of reviewing one card: the committed output plus optional free-text. The committed
 // output IS the decision (schema-valid, seeded from the judge's and edited in place); `reasoning`
 // is the human's edited statements (comments and added claims/quotes), present only when it differs
@@ -14,14 +16,9 @@ export interface Judgment {
 	reasoning?: Statement[];
 }
 
-// A quote located unambiguously in the evidence — W3C TextQuoteSelector shape. The judge's
-// quotes are resolved to these at qualify time (see salesflock/src/anchor.ts); prefix/suffix
-// carry only when the quote repeats.
-export interface Selector {
-	exact: string;
-	prefix?: string;
-	suffix?: string;
-}
+// A quote is a [start,end) char range into the evidence (see salesflock/src/anchor.ts) — its
+// text is evidence.slice(start,end). Re-exported so the card imports one name.
+export type { Quote };
 
 // One reasoning statement: a claim, its stance (for or against the verdict), and the
 // evidence spans that back it — at least one; an unbacked claim is not a statement.
@@ -29,7 +26,7 @@ export interface Selector {
 export interface Statement {
 	claim: string;
 	supporting: boolean;
-	quotes: Selector[];
+	quotes: Quote[];
 	comment?: string;
 }
 

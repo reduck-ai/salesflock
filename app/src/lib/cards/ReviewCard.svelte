@@ -16,9 +16,9 @@
 	// output; meaning is the caller's.
 	import Markdown from "$lib/components/Markdown.svelte";
 	import OutputForm from "./OutputForm.svelte";
-	import { resolveVisible, quoteKey } from "$core/anchor";
+	import { quoteAt, canonNormalize, quoteKey } from "$core/anchor";
 	import { schemaError } from "$core/output";
-	import type { EvidencedJudgment, Selector, Statement } from "./types";
+	import type { EvidencedJudgment, Quote, Statement } from "./types";
 
 	let {
 		judgment,
@@ -50,10 +50,10 @@
 	// the judge's statements stay canonical on the prop (the card remounts per id)
 	let statements = $state<Statement[]>(structuredClone(judgment.draft?.reasoning ?? judgment.statements));
 	// the floating popover over a span — one primitive, two kinds: "add" (minted at mouseup over a
-	// fresh selection, verbatim-or-refuse) and "remove" (opened by clicking a user-added quote's
+	// fresh selection, anchored-or-refuse) and "remove" (opened by clicking a user-added quote's
 	// mark). x/top/bottom are the span's rect; the placement rule flips it to whichever side has room.
 	let menu = $state<
-		| { kind: "add"; selector: Selector | null; x: number; top: number; bottom: number }
+		| { kind: "add"; quote: Quote | null; x: number; top: number; bottom: number }
 		| { kind: "remove"; mi: number; x: number; top: number; bottom: number }
 		| null
 	>(null);
@@ -82,7 +82,7 @@
 	// every quote in claim order, tagged with its statement index — the flat list the cursor
 	// walks; a claim's marks are adjacent, so stepping reads claim by claim, proof by proof.
 	// The output is not on the walk: it IS the editable proposal in the dock, not a claim to verify.
-	const marks = $derived(statements.flatMap((s, i) => s.quotes.map((sel) => ({ si: i, sel }))));
+	const marks = $derived(statements.flatMap((s, i) => s.quotes.map((q) => ({ si: i, q }))));
 	// the mark index of a statement's first quote — how the claim list addresses the cursor
 	const miOf = (si: number) => statements.slice(0, si).reduce((n, s) => n + s.quotes.length, 0);
 	const activeSi = $derived(activeMi === null ? null : marks[activeMi].si);
@@ -94,7 +94,7 @@
 		new Map(judgment.statements.map((s) => [s.claim, new Set(s.quotes.map(quoteKey))]))
 	);
 	const isUserClaim = (claim: string) => !original.has(claim);
-	const isUserQuote = (claim: string, sel: Selector) => !original.get(claim)?.has(quoteKey(sel));
+	const isUserQuote = (claim: string, q: Quote) => !original.get(claim)?.has(quoteKey(q));
 	// the focused quote is the human's — the one removal predicate the ✕ and ⌫ both gate on
 	const canRemove = (mi: number | null): boolean => {
 		if (mi === null) return false;
@@ -123,7 +123,7 @@
 			const s = statements[Number(m.getAttribute("data-si"))];
 			const mIdx = Number(m.getAttribute("data-mi"));
 			m.classList.toggle("against", s ? !s.supporting : false);
-			m.classList.toggle("userq", isUserQuote(statements[marks[mIdx].si].claim, marks[mIdx].sel));
+			m.classList.toggle("userq", isUserQuote(statements[marks[mIdx].si].claim, marks[mIdx].q));
 			m.classList.toggle("active", si !== null && m.getAttribute("data-si") === String(si));
 			m.classList.toggle("current", mi !== null && m.getAttribute("data-mi") === String(mi));
 			// a claim carrying the human's note reads gold — reading .comment here keeps this effect
@@ -231,23 +231,31 @@
 		onjudge?.(undefined, feedback.trim(), reasoningEdit());
 	}
 
-	// the selection menu opens on mouseup over a selection inside the evidence; the selector
-	// is minted right away — an unresolvable selection (markdown syntax in the span) shows a
+	// the selection menu opens on mouseup over a selection inside the evidence; the quote is
+	// minted right away from the selection's POSITION — its offset in the evidence, disambiguated
+	// against the visible text before it — so a repeated span resolves to the occurrence the
+	// cursor is on, never the first. A selection with no source span (pure render chrome) shows a
 	// hint instead of actions, never a guessed anchor.
 	const onselect = (e: MouseEvent) => {
 		if (menuEl?.contains(e.target as Node)) return;
 		const s = window.getSelection();
-		const text = s && !s.isCollapsed ? s.toString().trim() : "";
-		if (!text || !evEl?.contains(s!.anchorNode)) {
+		const text = s && !s.isCollapsed ? s.toString() : "";
+		if (!text.trim() || !evEl || !evEl.contains(s!.anchorNode)) {
 			menu = null;
 			return;
 		}
-		const r = s!.getRangeAt(0).getBoundingClientRect();
+		const range = s!.getRangeAt(0);
+		// the selection's approximate offset in canon-space = the visible text before it, normalized
+		const pre = document.createRange();
+		pre.selectNodeContents(evEl);
+		pre.setEnd(range.startContainer, range.startOffset);
+		const approx = canonNormalize(pre.toString()).length;
+		const r = range.getBoundingClientRect();
 		menuMode = "acts";
 		claimText = "";
 		menu = {
 			kind: "add",
-			selector: resolveVisible(judgment.evidence, text),
+			quote: quoteAt(judgment.evidence, text, approx),
 			x: r.left + r.width / 2,
 			top: r.top,
 			bottom: r.bottom
@@ -259,12 +267,12 @@
 	};
 	const addClaim = () => {
 		const claim = claimText.trim();
-		if (!claim || menu?.kind !== "add" || !menu.selector) return;
-		statements.push({ claim, supporting: stance, quotes: [menu.selector] });
+		if (!claim || menu?.kind !== "add" || !menu.quote) return;
+		statements.push({ claim, supporting: stance, quotes: [menu.quote] });
 		closeMenu();
 	};
 	const attach = (si: number) => {
-		if (menu?.kind === "add" && menu.selector) statements[si].quotes.push(menu.selector);
+		if (menu?.kind === "add" && menu.quote) statements[si].quotes.push(menu.quote);
 		closeMenu();
 	};
 
@@ -439,7 +447,7 @@
 				>
 				Remove quote
 			</button>
-		{:else if !menu.selector}
+		{:else if !menu.quote}
 			<span class="nohit">Can't anchor — select the text verbatim, within one block</span>
 		{:else if menuMode === "acts"}
 			<button class="act for" onclick={() => ((stance = true), (menuMode = "claim"))}> ✓ New claim </button>
@@ -507,11 +515,11 @@
 					<button class="text" onclick={() => focusClaim(i)}>{s.claim}</button>
 				{/if}
 				<span class="dots">
-					{#each s.quotes as sel, j (j)}
+					{#each s.quotes as q, j (j)}
 						<button
 							class="dot"
 							class:on={activeMi === miOf(i) + j}
-							class:userq={isUserQuote(s.claim, sel)}
+							class:userq={isUserQuote(s.claim, q)}
 							aria-label="proof"
 							onclick={() => goto(miOf(i) + j)}
 						></button>

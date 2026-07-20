@@ -13,7 +13,7 @@ import { getStore } from "../../src/stores/index.js";
 import { idOf } from "../../src/stores/notion.js";
 import { reviewOf } from "../../src/review.js";
 import * as llm from "../../src/ai/llm.js";
-import { resolveQuotes, validate, type RawStatement } from "../../src/anchor.js";
+import { collectQuotes, inRange, type Statement } from "../../src/anchor.js";
 import { schemaError } from "../../src/output.js";
 import { stringify } from "yaml";
 import config from "./config.js";
@@ -53,7 +53,9 @@ const hq = (
 
 // The judge's response envelope: the domain `output` — its shape declared by the Prompt's
 // Output schema — plus `statements`, the fixed claim→evidence anchoring layer every evidenced
-// judgment carries. The verbatim-quote contract lives here, in code, not in the per-agent prompt.
+// judgment carries. A quote is a [start,end) char range into the Evidence (plus the text the
+// judge means to cite, as its own cross-check); this contract lives here, in code, not in the
+// per-agent prompt.
 const STATEMENTS = {
 	type: "array",
 	description:
@@ -75,11 +77,29 @@ const STATEMENTS = {
 			quotes: {
 				type: "array",
 				minItems: 1,
-				items: { type: "string" },
 				description:
-					"the exact text from the Evidence backing the claim, copied verbatim — character-for-character substrings, " +
-					"no paraphrase, no ellipses; the shortest that proves the point, one per distinct proof. " +
-					"Every claim needs at least one quote — a point the evidence can't back is not a statement."
+					"the spans of the Evidence backing the claim, as character offsets — the shortest " +
+					"that prove the point, one per distinct proof. Every claim needs at least one; a " +
+					"point the Evidence can't back is not a statement.",
+				items: {
+					type: "object",
+					required: ["start", "end", "intended_text"],
+					properties: {
+						start: {
+							type: "integer",
+							description: "0-based character offset into the Evidence where the quote begins"
+						},
+						end: {
+							type: "integer",
+							description: "character offset just past the quote's end (half-open, so end - start = length)"
+						},
+						intended_text: {
+							type: "string",
+							description:
+								"the exact Evidence text the [start,end) range covers, copied verbatim — your own check that the offsets are right"
+						}
+					}
+				}
 			}
 		}
 	}
@@ -89,8 +109,55 @@ const STATEMENTS = {
 // the LLM returns, and what a manual judge hands to `qualify` via --verdict.
 export interface Verdict {
 	output: Record<string, unknown>;
-	statements: RawStatement[];
+	statements: Statement[];
 }
+
+// showDecision(handle) — one Decision by the shared id, shaped for reading: the judge's
+// judgment always (Output, Reasoning statements, frozen Input evidence), plus the human review
+// diff once ruled. The `show` tool and the few-shot example builder share this exact shaping —
+// an example is literally "a decision, shown the way `leads show` shows it".
+const showDecision = async (handle: string) => {
+	const { id, fields } = await store.get(idOf(handle));
+	const name = String(fields.Name ?? id);
+	const base = {
+		id,
+		name,
+		kind: kindOf(name),
+		output: JSON.parse(String(fields.Output)) as Record<string, unknown>,
+		statements: JSON.parse(String(fields.Reasoning)) as Statement[],
+		evidence: String(fields.Input),
+		open: appLink(id)
+	};
+	// present once ruled; JSON.stringify drops the key when undefined, so `show`'s output is unchanged.
+	const review = fields["Final output"] ? reviewOf(fields) : undefined;
+	return { ...base, review };
+};
+
+// examplesFor(key, excludeName) — the few-shot block: the Decisions a human flagged
+// `Include as example` in Notion (and committed — Final output set), of this prompt kind, minus
+// the person being judged. Each is shown exactly as `leads show` shows it; the committed output
+// (the human's, when they overrode the judge) is the gold label. "" when nothing is flagged.
+const EXAMPLE_LIMIT = 4;
+const examplesFor = async (key: PromptKey, excludeName: string): Promise<string> => {
+	const spec = config.prompts[key];
+	const rows = await store.query(config.models.Decisions, {
+		and: [
+			{ property: "Include as example", checkbox: { equals: true } },
+			{ property: "Final output", rich_text: { is_not_empty: true } }
+		]
+	});
+	const mine = rows
+		.filter((r) => kindOf(String(r.fields.Name)) === spec.name)
+		.filter((r) => !String(r.fields.Name).startsWith(excludeName))
+		.slice(0, EXAMPLE_LIMIT);
+	const shown = await Promise.all(mine.map((r) => showDecision(r.id)));
+	const blocks = shown.map((s) => {
+		const output = s.review?.human.output ?? s.output;
+		const response = JSON.stringify({ output, statements: s.statements }, null, 2);
+		return `<example>\n<evidence>\n${s.evidence}\n</evidence>\n<response>\n${response}\n</response>\n</example>`;
+	});
+	return blocks.length ? `## Examples\n\n<examples>\n${blocks.join("\n")}\n</examples>` : "";
+};
 
 // The judgment context: the Prompt row's full contract plus the Person's frozen evidence —
 // everything a judge needs, nothing written. Both judges read the exact same context:
@@ -102,7 +169,15 @@ const judgmentContext = async (key: PromptKey, profile: string) => {
 	const person = await store.read(config.models.People, "LinkedIn URL", url);
 	const f = person.fields;
 
-	const prompt = await store.read(config.models.Prompts, "Name", spec.name);
+	// Prompts are append-only versions sharing a Name; the live contract is the highest Version.
+	const versions = await store.query(config.models.Prompts, {
+		property: "Name",
+		title: { equals: spec.name }
+	});
+	if (!versions.length) throw new Error(`no prompt "${spec.name}"`);
+	const prompt = versions.reduce((a, b) =>
+		Number(b.fields.Version ?? 0) > Number(a.fields.Version ?? 0) ? b : a
+	);
 	const [system, instruction] = (["System prompt", "Instruction"] as const).map((k) => {
 		if (!prompt.fields[k]) throw new Error(`prompt "${spec.name}" has no ${k}`);
 		return String(prompt.fields[k]);
@@ -130,6 +205,7 @@ const judgmentContext = async (key: PromptKey, profile: string) => {
 		required: ["output", "statements"],
 		properties: { output: outputSchema, statements: STATEMENTS }
 	};
+	const examples = await examplesFor(key, String(f.Name ?? ""));
 	return {
 		spec,
 		publicId,
@@ -137,6 +213,7 @@ const judgmentContext = async (key: PromptKey, profile: string) => {
 		prompt,
 		system,
 		instruction,
+		examples,
 		outputSchema,
 		input,
 		evidence,
@@ -150,14 +227,15 @@ const judgmentContext = async (key: PromptKey, profile: string) => {
 // nudges it); with one (the manual path, `--verdict`), the caller already judged and a
 // violation fails loud immediately — the calling agent is the retry loop. Either way the
 // verdict is held to the same contract BEFORE the single write — schemaError on the output,
-// anchor.validate on the verbatim quotes — so no Decision is ever persisted with input,
-// output, or reasoning that disagrees with the contract. Decisions are an append-only log:
-// each run is a distinct event, so the page Name carries the run time (like Sourcing) and
-// the latest row at a gate is the live one. The Decision freezes the SEED, not the flower:
-// `Input` the lossless projected data (JSON map), `Reasoning` the statements with verbatim quote
-// STRINGS, `Output` the structured verdict (its quotes strings too), `Model` the model that judged
-// (its AI SDK id, or "manual"). The review app renders the evidence and re-derives each quote's
-// anchor live, so this renderer can improve without re-judging.
+// and every quote's [start,end) range checked in-bounds against the Evidence — so no Decision
+// is ever persisted with input, output, or reasoning that disagrees with the contract.
+// Decisions are an append-only log: each run is a distinct event, so the page Name carries the
+// run time (like Sourcing) and the latest row at a gate is the live one. The Decision freezes
+// `Input` the lossless projected data (JSON map), `Reasoning` the statements whose quotes are
+// char ranges into the deterministically-rendered Evidence, `Output` the structured verdict
+// (its quotes ranges too), `Model` the model that judged (its AI SDK id, or "manual"). The app
+// re-renders the same Evidence from the frozen Input and slices each range, so the highlight is
+// exact with no matching.
 //
 // dependsOn makes the Decision a DAG node: it is reviewable only once every upstream
 // Decision is Accepted (derived by the review app, never stored). A dependency-free
@@ -170,26 +248,33 @@ const decide = async (
 	{ dependsOn, verdict }: { dependsOn?: string[]; verdict?: Verdict } = {}
 ) => {
 	const ctx = await judgmentContext(key, profile);
-	// Hold the verdict to the contract before the single write — schemaError on the output, anchor
-	// on the verbatim quotes (statements' and any in the output) — but keep the RAW quote strings: the
-	// Decision freezes the words, the app re-derives the anchor live. resolveQuotes mutates, so
-	// validate output quotes on a clone; validate() returns the resolved form, which we discard.
+	// Hold the verdict to the contract before the single write — schemaError on the output, and
+	// every quote (statements' and any nested in the output) held to one gate: its [start,end)
+	// range must lie within the Evidence. A range denotes exactly one span, so there is nothing
+	// to resolve and nothing to guess — the offsets are the anchor, frozen as-is.
 	const check = (v: Verdict): void => {
 		const err = schemaError(ctx.outputSchema, v.output);
 		if (err) throw new Error(`output violates Output schema: ${err}`);
-		resolveQuotes(ctx.evidence, structuredClone(v.output));
-		validate(ctx.evidence, v.statements);
+		const bad = collectQuotes({ output: v.output, statements: v.statements }).filter(
+			(q) => !inRange(ctx.evidence, q)
+		);
+		if (bad.length)
+			throw new Error(
+				`quote ranges out of bounds (0..${ctx.evidence.length}):\n- ${bad
+					.map((q) => JSON.stringify(q))
+					.join("\n- ")}`
+			);
 	};
 
 	let output: Record<string, unknown> | undefined;
-	let statements: RawStatement[] | undefined;
+	let statements: Statement[] | undefined;
 	if (verdict) {
 		check(verdict);
 		({ output, statements } = verdict);
 	} else {
-		const judgePrompt = [ctx.system, ctx.instruction, `## Evidence\n\n${ctx.evidence}`].join(
-			"\n\n"
-		);
+		const judgePrompt = [ctx.system, ctx.instruction, ctx.examples, `## Evidence\n\n${ctx.evidence}`]
+			.filter(Boolean)
+			.join("\n\n");
 		for (let attempt = 1; !statements; attempt++) {
 			const res = await llm.generate<Verdict>(judgePrompt, ctx.responseSchema);
 			try {
@@ -341,11 +426,11 @@ export const tools = {
 	// calling agent) reads the exact context the LLM would: the contract plus the frozen
 	// evidence, with the response's expected shape. `--show` prints this; nothing is written.
 	context: async (key: PromptKey, profile: string) => {
-		const { system, instruction, evidence, responseSchema } = await judgmentContext(
+		const { system, instruction, examples, evidence, responseSchema } = await judgmentContext(
 			key,
 			profile
 		);
-		return { system, instruction, evidence, responseSchema };
+		return { system, instruction, examples, evidence, responseSchema };
 	},
 
 	// list — the decisions awaiting review (the queue), newest edits first as the app orders
@@ -367,20 +452,7 @@ export const tools = {
 	// the judge's judgment always (Output, Reasoning statements, frozen Input evidence), and —
 	// once a human has ruled — the review diff too (reviewOf). Reads only. The id-keyed superset
 	// of the old Name-keyed review: what I open when the human pastes me a decision link.
-	show: async (handle: string) => {
-		const { id, fields } = await store.get(idOf(handle));
-		const name = String(fields.Name ?? id);
-		const base = {
-			id,
-			name,
-			kind: kindOf(name),
-			output: JSON.parse(String(fields.Output)),
-			statements: JSON.parse(String(fields.Reasoning)),
-			evidence: String(fields.Input),
-			open: appLink(id)
-		};
-		return fields["Final output"] ? { ...base, review: reviewOf(fields) } : base;
-	},
+	show: (handle: string) => showDecision(handle),
 
 	// qualify — one decide against the qualification contract: does this person fit the ICP?
 	// Internal effect only (CRM state); dependency-free, so it opens its own human gate.

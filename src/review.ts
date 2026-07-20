@@ -6,31 +6,31 @@
 // Pure and agent-agnostic on purpose: a function of a Decision's fields (no store, no I/O)
 // touching only columns every Decision has, with `Output` kept opaque. `Input` is the frozen
 // lossless data map (JSON — the example's X); a consumer renders it via the agent's renderer.
-// Quotes are verbatim strings (the seed the judge learns to emit), so the delta is a plain
-// string-set difference — no anchoring here.
+// Quotes are char ranges into that rendered evidence, so the delta compares them by span
+// identity (`quoteKey`) — no anchoring, no text matching here.
 
-import type { RawStatement } from "./anchor.js";
+import { quoteKey, type Quote, type Statement } from "./anchor.js";
 
 // A Decision's fields as the store hands them back (Row.fields) — scalars keyed by column.
 type Fields = Record<string, string | number | boolean>;
 const text = (v: string | number | boolean | undefined): string => (v == null ? "" : String(v));
 
-// A statement as Final reasoning stores it: a judge RawStatement optionally carrying the human's
+// A statement as Final reasoning stores it: a judge Statement optionally carrying the human's
 // note (the review app writes `comment` onto the claim it annotates).
-export type Commented = RawStatement & { comment?: string };
+export type Commented = Statement & { comment?: string };
 
 // The delta a review adds over the judge's reasoning. Comments annotate a judge claim; added are
 // the human's own claims; attached are extra proofs pinned onto a judge claim. Deletions can't
 // occur — review is comment+add only, by construction.
 export interface ReasoningDelta {
 	comments: { claim: string; comment: string }[];
-	added: RawStatement[];
-	attached: { claim: string; quotes: string[] }[];
+	added: Statement[];
+	attached: { claim: string; quotes: Quote[] }[];
 }
 
 export interface Review {
 	input: string; // the frozen evidence data (JSON) — the example's X, rendered by the consumer
-	judge: { verdict: unknown; reasoning: RawStatement[] }; // the original judgment (Output opaque)
+	judge: { verdict: unknown; reasoning: Statement[] }; // the original judgment (Output opaque)
 	human: {
 		verdict: string; // "Accepted" | "Rejected" — agree with / overturn the judge
 		feedback?: string; // the note: the correction rationale
@@ -40,15 +40,15 @@ export interface Review {
 
 // diffStatements — the human layer, matched by claim text (a review never edits or reorders a
 // judge claim): a claim absent from the original is added; a shared claim's quotes beyond the
-// original set are attached; a non-empty `comment` is a comment. Quotes compare as verbatim text.
-export const diffStatements = (original: RawStatement[], final: Commented[]): ReasoningDelta => {
-	const origQuotes = new Map(original.map((s) => [s.claim, new Set(s.quotes)]));
+// original set are attached; a non-empty `comment` is a comment. Quotes compare by span identity.
+export const diffStatements = (original: Statement[], final: Commented[]): ReasoningDelta => {
+	const origQuotes = new Map(original.map((s) => [s.claim, new Set(s.quotes.map(quoteKey))]));
 	const delta: ReasoningDelta = { comments: [], added: [], attached: [] };
 	for (const s of final) {
 		const base = origQuotes.get(s.claim);
 		if (!base) delta.added.push({ claim: s.claim, supporting: s.supporting, quotes: s.quotes });
 		else {
-			const extra = s.quotes.filter((q) => !base.has(q));
+			const extra = s.quotes.filter((q) => !base.has(quoteKey(q)));
 			if (extra.length) delta.attached.push({ claim: s.claim, quotes: extra });
 		}
 		if (s.comment?.trim()) delta.comments.push({ claim: s.claim, comment: s.comment.trim() });
@@ -76,7 +76,7 @@ export const reviewOf = (fields: Fields): Review => {
 	const output = json<unknown>(fields, "Output");
 	const corrected = json<unknown>(fields, "Final output");
 	const verdict = JSON.stringify(output) === JSON.stringify(corrected) ? "Accepted" : "Rejected";
-	const reasoning = json<RawStatement[]>(fields, "Reasoning");
+	const reasoning = json<Statement[]>(fields, "Reasoning");
 	const delta = fields["Final reasoning"]
 		? diffStatements(reasoning, json<Commented[]>(fields, "Final reasoning"))
 		: { comments: [], added: [], attached: [] };

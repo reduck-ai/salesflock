@@ -1,88 +1,62 @@
-// Text anchoring — tie a claim to the exact evidence it cites. The judge quotes the evidence
-// verbatim; this resolves each quote to a W3C-style TextQuoteSelector that matches EXACTLY one
-// span. A Decision freezes the quote TEXT and the input DATA — not the rendered evidence: the
-// evidence is re-rendered deterministically from that data by the one renderer, and each quote
-// is resolved against it live at read. No drift, because that render is deterministic over the
-// frozen data and keeps cited value text verbatim; a quote a renderer change moves under simply
-// fails to resolve and drops from the highlight. No char offsets, no fuzzy matching: uniqueness
-// of the exact quote is necessary and sufficient.
+// Text anchoring — a quote is a half-open char range `[start, end)` into the frozen evidence
+// `E = renderEvidence(Input)`. Because Input is fixed and the renderer deterministic, E is
+// fixed, so a range denotes exactly one span: no content matching, no occurrence guessing, no
+// drift. `E.slice(start, end)` is the quoted text — derived, never stored as truth. The LLM
+// judge additionally reports the text it MEANT to cite (`intended_text`) as a debug + retry
+// signal; a human quote omits it, because a selection's position already IS the span.
 
-// A quote located unambiguously: `exact`, plus just enough neighbouring text (prefix/suffix)
-// to single out one occurrence when the quote repeats. Shape follows the W3C Web Annotation
-// TextQuoteSelector (w3.org/TR/annotation-model/#text-quote-selector).
-export interface Selector {
-	exact: string;
-	prefix?: string;
-	suffix?: string;
+// A quote located by its bounds in E. `intended_text` is the LLM's self-report (present ⇒
+// LLM-authored); humans omit it. The span is the whole anchor — nothing else is needed.
+export interface Quote {
+	start: number;
+	end: number;
+	intended_text?: string;
 }
 
-// What the judge emits (quotes as raw strings) → what we store (quotes resolved to Selectors).
-// `supporting` is the statement's stance: for or against the verdict it argues.
-export interface RawStatement {
-	claim: string;
-	supporting: boolean;
-	quotes: string[];
-}
+// A reasoning statement: a claim, its stance (for/against the verdict), and the evidence spans
+// that back it — at least one; an unbacked claim is not a statement.
 export interface Statement {
 	claim: string;
 	supporting: boolean;
-	quotes: Selector[];
+	quotes: Quote[];
 }
 
-// The order-insensitive identity of a quote — the one place a Selector's equality is defined.
-// Shared by both sides of a review: the app derives "the human's vs the judge's" as a set
-// difference against the frozen judgment, and `diffStatements` recovers the same delta for
-// learning. Lives with Selector so there is a single definition.
-export const quoteKey = (s: Selector): string => `${s.exact} ${s.prefix ?? ""} ${s.suffix ?? ""}`;
+// A quote's identity is its span — the one place equality is defined, shared by the review
+// diff, provenance (judge's vs human's) and dedupe.
+export const quoteKey = (q: Quote): string => `${q.start}:${q.end}`;
 
-// Every start index of `needle` in `haystack`.
-const indicesOf = (haystack: string, needle: string): number[] => {
-	const out: number[] = [];
-	for (let i = haystack.indexOf(needle); i >= 0; i = haystack.indexOf(needle, i + 1)) out.push(i);
+// The text a quote resolves to in E — the single source of the displayed string.
+export const quoteText = (evidence: string, q: Quote): string => evidence.slice(q.start, q.end);
+
+// A quote is well-formed iff its half-open range lies within E — the one gate before a write.
+export const inRange = (evidence: string, q: Quote): boolean =>
+	Number.isInteger(q.start) &&
+	Number.isInteger(q.end) &&
+	0 <= q.start &&
+	q.start <= q.end &&
+	q.end <= evidence.length;
+
+// Every Quote reachable in a verdict — the objects in any `quotes: []` array within it
+// (statements plus any nested in the output). One deep-walk validates them all at once.
+export const collectQuotes = (value: unknown): Quote[] => {
+	const out: Quote[] = [];
+	const walk = (v: unknown): void => {
+		if (!v || typeof v !== "object") return;
+		for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+			if (k === "quotes" && Array.isArray(val)) out.push(...(val as Quote[]));
+			else walk(val);
+		}
+	};
+	walk(value);
 	return out;
 };
 
-// resolve(evidence, quote) → the unique Selector for the quote, or null when the quote is
-// absent (the judge paraphrased instead of quoting). One occurrence needs no context; on
-// several, grow a minimal symmetric prefix/suffix around the first until the triple is
-// unambiguous.
-export const resolve = (evidence: string, quote: string): Selector | null => {
-	const hits = indicesOf(evidence, quote);
-	if (hits.length === 0) return null;
-	if (hits.length === 1) return { exact: quote };
-	const at = hits[0];
-	const end = at + quote.length;
-	for (let k = 1; k <= evidence.length; k++) {
-		const prefix = evidence.slice(Math.max(0, at - k), at);
-		const suffix = evidence.slice(end, end + k);
-		const collides = hits.some(
-			(j) =>
-				j !== at &&
-				evidence.slice(Math.max(0, j - k), j) === prefix &&
-				evidence.slice(j + quote.length, j + quote.length + k) === suffix
-		);
-		if (!collides) return { exact: quote, prefix, suffix };
-	}
-	// Identical text with identical surroundings throughout — every occurrence is equal
-	// proof, so any single one is a valid anchor.
-	return { exact: quote };
-};
-
-// resolveVisible(evidence, selection) — the HUMAN seam. A DOM selection is the RENDERED
-// VIEW of the source markdown: the renderer collapses whitespace AND strips syntax — inline
-// emphasis (`**`) and line-leading block markers (`#`, `-`/`*`/`+`, `>`) — so an exact match
-// against the raw evidence fails wherever a span crosses a bold label or a block boundary.
-// This is a coordinate mismatch, not a bad quote. Project the source into that same rendered
-// space — skip exactly what the render removes, collapse whitespace runs to one space —
-// recording each kept char's raw index in `at`; match the (equally-projected) selection there,
-// map the endpoints back to raw offsets, then defer to `resolve` for uniqueness. The raw slice
-// re-includes the skipped syntax verbatim, so a human quote is a real source span like the
-// judge's and everything downstream (locate, highlight, diff) is untouched. null when the text
-// is genuinely absent from the source — a true "can't anchor", never a guess.
-export const resolveVisible = (evidence: string, selection: string): Selector | null => {
-	// canon(evidence) + at[k] = the raw index of canon[k], in one pass. Whitespace runs become a
-	// single space (never leading); the endpoints we read back are always the selection's
-	// non-space, non-syntax edges, so their raw indices are exact.
+// canonicalize(E) — E projected into its RENDERED text space: whitespace runs collapse to a
+// single space (never leading), and markdown syntax the renderer removes — inline emphasis
+// (`**`) and line-leading block markers (`#`, `-`/`*`/`+`, `>`) — is stripped, with `at[k]`
+// the source index of `canon[k]`. A browser selection is matched in this space (the visible
+// text the human sees ≈ `canon`), and its approximate position disambiguates a repeat.
+export const canonicalize = (evidence: string): { canon: string; at: number[] } => {
 	let canon = "";
 	const at: number[] = [];
 	let lineStart = true;
@@ -94,8 +68,6 @@ export const resolveVisible = (evidence: string, selection: string): Selector | 
 			i++;
 			continue;
 		}
-		// a line-leading block marker (heading / list bullet / blockquote) is chrome the renderer
-		// removes; skip it and stay at line-start so a nested `> >` peels fully.
 		const m = lineStart && /^(?:#{1,6}|[-*+]|>)[ \t]+/.exec(evidence.slice(i));
 		if (m) {
 			i += m[0].length;
@@ -105,55 +77,28 @@ export const resolveVisible = (evidence: string, selection: string): Selector | 
 		if (c === "*" && evidence[i + 1] === "*") {
 			i += 2;
 			continue;
-		} // ** emphasis
+		}
 		(canon += c), at.push(i), i++;
 	}
 	if (canon.endsWith(" ")) (canon = canon.slice(0, -1), at.pop());
+	return { canon, at };
+};
 
-	const needle = selection.replace(/\s+/g, " ").trim();
+// Collapse a browser-visible string the way `canonicalize` collapses whitespace, so its length
+// is an offset into `canon` and it matches `canon` substrings.
+export const canonNormalize = (s: string): string => s.replace(/\s+/g, " ").trim();
+
+// quoteAt(E, selection, approx) — the HUMAN seam. A DOM selection is the rendered view of E;
+// canon-match its text and, when it repeats, pick the occurrence nearest `approx` (the canon-
+// space offset of the text before the selection) — position in, right occurrence out, never a
+// first-match guess. null when the text is genuinely absent from E (a true "can't anchor").
+export const quoteAt = (evidence: string, selection: string, approx: number): Quote | null => {
+	const { canon, at } = canonicalize(evidence);
+	const needle = canonNormalize(selection);
 	if (!needle) return null;
-	const cs = canon.indexOf(needle);
-	if (cs < 0) return null;
-	return resolve(evidence, evidence.slice(at[cs], at[cs + needle.length - 1] + 1));
-};
-
-// resolveQuotes(evidence, value) — deep-walk a judge's structured output and resolve every
-// `quotes: string[]` field to Selectors, in place. The statements rule, generalized: in a
-// verdict, ANY field named `quotes` cites the evidence verbatim, so persistence always
-// stores resolved anchors — never raw strings. Loud on a missing quote, like validate.
-export const resolveQuotes = (evidence: string, value: unknown): void => {
-	if (!value || typeof value !== "object") return;
-	for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-		if (k === "quotes" && Array.isArray(v) && v.every((q) => typeof q === "string")) {
-			const sels = (v as string[]).map((q) => resolve(evidence, q));
-			const missing = (v as string[]).filter((_, i) => !sels[i]);
-			if (missing.length)
-				throw new Error(
-					`quotes not found verbatim in evidence:\n- ${missing.join("\n- ")}`
-				);
-			(value as Record<string, unknown>)[k] = sels;
-		} else resolveQuotes(evidence, v);
-	}
-};
-
-// validate(evidence, statements) → statements with every quote resolved to a unique Selector.
-// Loud on failure: a statement with no quote is an unsupported claim, and a quote absent from
-// the evidence is a broken anchor — either way we name the offenders and throw rather than
-// store a dead link. The caller may retry the judge once.
-export const validate = (evidence: string, statements: RawStatement[]): Statement[] => {
-	const unsupported = statements.filter((s) => !s.quotes.length).map((s) => s.claim);
-	if (unsupported.length)
-		throw new Error(`statements with no quote:\n- ${unsupported.join("\n- ")}`);
-	const missing: string[] = [];
-	const resolved = statements.map((s) => ({
-		...s,
-		quotes: s.quotes.map((q) => {
-			const sel = resolve(evidence, q);
-			if (!sel) missing.push(q);
-			return sel;
-		})
-	}));
-	if (missing.length)
-		throw new Error(`quotes not found verbatim in evidence:\n- ${missing.join("\n- ")}`);
-	return resolved as Statement[];
+	const hits: number[] = [];
+	for (let i = canon.indexOf(needle); i >= 0; i = canon.indexOf(needle, i + 1)) hits.push(i);
+	if (!hits.length) return null;
+	const cs = hits.reduce((best, h) => (Math.abs(h - approx) < Math.abs(best - approx) ? h : best));
+	return { start: at[cs], end: at[cs + needle.length - 1] + 1 };
 };

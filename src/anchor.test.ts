@@ -1,90 +1,76 @@
-// anchor invariants: absent → null, unique → bare exact, repeated → minimal context that
-// re-locates to exactly one span, and validate is loud on a paraphrase.
+// anchor invariants: a quote is a [start,end) range into E; its text is E.slice(start,end);
+// inRange gates a write; a human selection resolves to the occurrence nearest its position.
 // Run: npm run build && node --test dist/src/anchor.test.js
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolve, resolveVisible, validate } from "./anchor.js";
+import { quoteText, quoteKey, inRange, collectQuotes, canonicalize, quoteAt } from "./anchor.js";
 
 const ev =
 	"### About\n\nFounding PM at AgentAchieve. Based in San Francisco Bay Area.\n\n### Now\n\nVP at Automation Anywhere, San Francisco Bay Area.";
 
-test("absent quote → null", () => {
-	assert.equal(resolve(ev, "Chief Robot Officer"), null);
+test("quoteText slices E; quoteKey is the span", () => {
+	const q = { start: 11, end: 38 };
+	assert.equal(quoteText(ev, q), "Founding PM at AgentAchieve");
+	assert.equal(quoteKey(q), "11:38");
 });
 
-test("unique quote → bare exact, no context", () => {
-	assert.deepEqual(resolve(ev, "Founding PM at AgentAchieve"), {
-		exact: "Founding PM at AgentAchieve"
+test("inRange gates the bounds", () => {
+	assert.ok(inRange(ev, { start: 0, end: ev.length }));
+	assert.ok(!inRange(ev, { start: 5, end: ev.length + 1 }));
+	assert.ok(!inRange(ev, { start: 10, end: 3 }));
+	assert.ok(!inRange(ev, { start: 1.5, end: 4 }));
+});
+
+test("collectQuotes gathers every quotes[] in a verdict (statements + nested output)", () => {
+	const quotes = collectQuotes({
+		output: { action: "comment", quotes: [{ start: 1, end: 2 }] },
+		statements: [{ claim: "c", supporting: true, quotes: [{ start: 3, end: 4 }] }]
 	});
+	assert.equal(quotes.length, 2);
+	assert.deepEqual(new Set(quotes.map(quoteKey)), new Set(["1:2", "3:4"]));
 });
 
-test("repeated quote → carries minimal context and re-locates uniquely", () => {
-	const q = "San Francisco Bay Area"; // appears twice
-	const sel = resolve(ev, q)!;
-	assert.equal(sel.exact, q);
-	assert.ok(sel.prefix || sel.suffix, "a repeated quote must carry disambiguating context");
-	const triple = (sel.prefix ?? "") + sel.exact + (sel.suffix ?? "");
-	assert.equal(
-		ev.split(triple).length - 1,
-		1,
-		"the prefix+exact+suffix triple must occur exactly once"
-	);
+test("quoteAt: unique selection → its exact range", () => {
+	const q = quoteAt(ev, "Founding PM at AgentAchieve", 0)!;
+	assert.ok(q);
+	assert.equal(quoteText(ev, q), "Founding PM at AgentAchieve");
 });
 
-test("validate throws on a paraphrase and names it", () => {
-	assert.throws(
-		() =>
-			validate(ev, [
-				{ claim: "x", supporting: true, quotes: ["totally not in the evidence"] }
-			]),
-		/not found verbatim/
-	);
+test("quoteAt: a repeated selection resolves to the occurrence nearest the cursor", () => {
+	const phrase = "San Francisco Bay Area"; // appears twice
+	const { canon } = canonicalize(ev);
+	const near = quoteAt(ev, phrase, 0)!; // cursor near the top → first occurrence
+	const far = quoteAt(ev, phrase, canon.length)!; // cursor near the end → second occurrence
+	assert.equal(quoteText(ev, near), phrase);
+	assert.equal(quoteText(ev, far), phrase);
+	assert.ok(near.start < far.start, "position picks distinct occurrences");
 });
 
-test("validate throws on a statement with no quote and names it", () => {
-	assert.throws(
-		() => validate(ev, [{ claim: "unbacked", supporting: false, quotes: [] }]),
-		/no quote/
-	);
+test("quoteAt: absent text → null", () => {
+	assert.equal(quoteAt(ev, "Chief Robot Officer", 0), null);
 });
 
-test("validate resolves a good set to Selectors, stance intact", () => {
-	const out = validate(ev, [
-		{ claim: "founder", supporting: true, quotes: ["Founding PM at AgentAchieve"] }
-	]);
-	assert.deepEqual(out, [
-		{ claim: "founder", supporting: true, quotes: [{ exact: "Founding PM at AgentAchieve" }] }
-	]);
-});
-
-// resolveVisible — the human seam: a DOM selection (rendered view, whitespace collapsed and
-// markdown syntax stripped) maps back to a verbatim SOURCE span, so it can cross bold labels
-// and block boundaries.
+// the visible seam: a selection spanning bold labels / block markers maps to a RAW range whose
+// slice re-includes the stripped syntax verbatim.
 const experiences =
 	"### Experiences\n\n- **title:** Director of Product Management, AI\n  **company:** Automation Anywhere\n  **duration:** 3 yrs 4 mos";
 
-test("visible selection spanning bold labels → a raw source span with `**` preserved", () => {
-	const sel = resolveVisible(experiences, "title: Director of Product Management, AI company: Automation Anywhere")!;
-	assert.ok(sel, "must anchor across the label boundary");
-	// the stored exact is the raw source slice — syntax re-included — and re-locates verbatim
-	assert.match(sel.exact, /\*\*company:\*\*/);
-	assert.equal(experiences.split(sel.exact).length - 1, 1, "the span re-locates to exactly one occurrence");
-	assert.ok(resolve(experiences, sel.exact), "resolve finds the returned span");
+test("quoteAt across bold labels → a raw range with `**` preserved, located once", () => {
+	const q = quoteAt(
+		experiences,
+		"title: Director of Product Management, AI company: Automation Anywhere",
+		0
+	)!;
+	assert.ok(q, "must anchor across the label boundary");
+	const text = quoteText(experiences, q);
+	assert.match(text, /\*\*company:\*\*/);
+	assert.equal(experiences.split(text).length - 1, 1, "the range's text occurs once");
 });
 
-test("visible selection crossing a `> ` blockquote line resolves", () => {
+test("quoteAt across a `> ` blockquote line resolves", () => {
 	const activity = "**Posted**\n> **Jane Doe** · CEO\n> Scaling our platform to 1,000 customers.";
-	const sel = resolveVisible(activity, "Jane Doe · CEO Scaling our platform to 1,000 customers.")!;
-	assert.ok(sel, "must anchor across the blockquote lines");
-	assert.equal(activity.split(sel.exact).length - 1, 1);
-});
-
-test("a bare value / prose selection still resolves (no regression)", () => {
-	assert.deepEqual(resolveVisible(experiences, "Automation Anywhere"), { exact: "Automation Anywhere" });
-	assert.deepEqual(resolveVisible(ev, "Founding PM at AgentAchieve"), { exact: "Founding PM at AgentAchieve" });
-});
-
-test("genuinely-absent visible text → null", () => {
-	assert.equal(resolveVisible(experiences, "Chief Robot Officer"), null);
+	const q = quoteAt(activity, "Jane Doe · CEO Scaling our platform to 1,000 customers.", 0)!;
+	assert.ok(q, "must anchor across the blockquote lines");
+	assert.match(quoteText(activity, q), /Scaling our platform/);
 });
