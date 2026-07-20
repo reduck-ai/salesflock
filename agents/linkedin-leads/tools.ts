@@ -14,13 +14,10 @@ import { idOf } from "../../src/stores/notion.js";
 import { reviewOf } from "../../src/review.js";
 import * as llm from "../../src/ai/llm.js";
 import {
-	annotate,
 	collectQuotes,
+	findQuotes,
 	inRange,
-	mapQuotes,
-	quoteText,
-	snapQuote,
-	type Quote,
+	quoteKey,
 	type Statement
 } from "../../src/anchor.js";
 import { schemaError } from "../../src/output.js";
@@ -62,9 +59,9 @@ const hq = (
 
 // The judge's response envelope: the domain `output` — its shape declared by the Prompt's
 // Output schema — plus `statements`, the fixed claim→evidence anchoring layer every evidenced
-// judgment carries. A quote is a [start,end) char range into the Evidence (plus the text the
-// judge means to cite, as its own cross-check); this contract lives here, in code, not in the
-// per-agent prompt.
+// judgment carries. A quote is a [start,end) char range into the Evidence, obtained from the
+// `search_quotes` tool: the judge never invents offsets, it cites text and search returns the span.
+// This contract lives here, in code, not in the per-agent prompt.
 const STATEMENTS = {
 	type: "array",
 	description:
@@ -87,25 +84,20 @@ const STATEMENTS = {
 				type: "array",
 				minItems: 1,
 				description:
-					"the spans of the Evidence backing the claim, as character offsets — the shortest " +
-					"that prove the point, one per distinct proof. Every claim needs at least one; a " +
-					"point the Evidence can't back is not a statement.",
+					"the spans of the Evidence backing the claim — the shortest that prove the point, " +
+					"one per distinct proof. Each is a {start,end} exactly as `search_quotes` returned " +
+					"it for the text you cite; every claim needs at least one.",
 				items: {
 					type: "object",
-					required: ["start", "end", "intended_text"],
+					required: ["start", "end"],
 					properties: {
 						start: {
 							type: "integer",
-							description: "0-based character offset into the Evidence where the quote begins"
+							description: "start offset of the span, from search_quotes"
 						},
 						end: {
 							type: "integer",
-							description: "character offset just past the quote's end (half-open, so end - start = length)"
-						},
-						intended_text: {
-							type: "string",
-							description:
-								"the exact Evidence text the [start,end) range covers, copied verbatim with the ⟨N⟩ position markers removed — your own check that the offsets are right"
+							description: "end offset (half-open), from search_quotes"
 						}
 					}
 				}
@@ -113,18 +105,6 @@ const STATEMENTS = {
 		}
 	}
 } as const;
-
-// The evidence carries position landmarks (anchor.ts `annotate`) so the judge can place exact
-// offsets: an LLM counting chars from 0 drifts worse the deeper the quote, but it can count the
-// few chars from the nearest ⟨N⟩. Prompt-only — the offsets it returns index the CLEAN evidence.
-const MARKERS =
-	"The Evidence below carries position markers like ⟨1200⟩ every ~100 characters: the character " +
-	"immediately after ⟨N⟩ is at offset N in the evidence. The markers are NOT part of the evidence — " +
-	"ignore them when copying quoted text. Give each quote's start/end as offsets into the evidence " +
-	"WITH THE MARKERS REMOVED; find the nearest preceding ⟨N⟩ and count forward to be exact.";
-
-// How many judge attempts to anchor every quote — the first, plus one corrective retry.
-const MAX_ATTEMPTS = 2;
 
 // A judgment, whoever judged: the domain output plus its claim→proof statements. What
 // the LLM returns, and what a manual judge hands to `qualify` via --verdict.
@@ -134,9 +114,12 @@ export interface Verdict {
 }
 
 // showDecision(handle) — one Decision by the shared id, shaped for reading: the judge's
-// judgment always (Output, Reasoning statements, frozen Input evidence), plus the human review
-// diff once ruled. The `show` tool and the few-shot example builder share this exact shaping —
-// an example is literally "a decision, shown the way `leads show` shows it".
+// judgment always (Output, Reasoning statements, and the Evidence RE-RENDERED from the frozen
+// Input the way the judge and the app render it), plus the human review diff once ruled. The
+// quotes' offsets index this rendered evidence — `Input` stores the lossless MAP, so we must
+// render it here (not hand back the raw map) for `evidence.slice(start,end)` to resolve. The
+// `show` tool and the few-shot example builder share this exact shaping — an example is literally
+// "a decision, shown the way `leads show` shows it".
 const showDecision = async (handle: string) => {
 	const { id, fields } = await store.get(idOf(handle));
 	const name = String(fields.Name ?? id);
@@ -146,7 +129,7 @@ const showDecision = async (handle: string) => {
 		kind: kindOf(name),
 		output: JSON.parse(String(fields.Output)) as Record<string, unknown>,
 		statements: JSON.parse(String(fields.Reasoning)) as Statement[],
-		evidence: String(fields.Input),
+		evidence: renderEvidence(JSON.parse(String(fields.Input)) as Record<string, string>),
 		open: appLink(id)
 	};
 	// present once ruled; JSON.stringify drops the key when undefined, so `show`'s output is unchanged.
@@ -244,12 +227,14 @@ const judgmentContext = async (key: PromptKey, profile: string) => {
 
 // decide — the one judgment machine, whatever the contract: judge the person against a
 // Prompt row (the LLM, or a manual verdict) and persist one Decision. The judge is pluggable:
-// without a verdict, the LLM judges (one retry — temperature 0 varies little, but the error
-// nudges it); with one (the manual path, `--verdict`), the caller already judged and a
-// violation fails loud immediately — the calling agent is the retry loop. Either way the
-// verdict is held to the same contract BEFORE the single write — schemaError on the output,
-// and every quote's [start,end) range checked in-bounds against the Evidence — so no Decision
-// is ever persisted with input, output, or reasoning that disagrees with the contract.
+// without a verdict the LLM judges in a two-tool loop — `search_quotes` turns the text it wants
+// to cite into {start,end} spans (the judge never invents offsets; code owns them) and
+// `submit_claims` commits, the loop stopping the moment a submit is accepted; with one (the
+// manual path, `--verdict`) the caller already judged and a violation fails loud immediately —
+// the calling agent is the retry loop. Either way the verdict is held to the same contract BEFORE
+// the single write — schemaError on the output, and every quote's [start,end) range checked
+// in-bounds against the Evidence — so no Decision is ever persisted with input, output, or
+// reasoning that disagrees with the contract.
 // Decisions are an append-only log: each run is a distinct event, so the page Name carries the
 // run time (like Sourcing) and the latest row at a gate is the live one. The Decision freezes
 // `Input` the lossless projected data (JSON map), `Reasoning` the statements whose quotes are
@@ -269,65 +254,87 @@ const decide = async (
 	{ dependsOn, verdict }: { dependsOn?: string[]; verdict?: Verdict } = {}
 ) => {
 	const ctx = await judgmentContext(key, profile);
-	// Offset-correction post-step: the position markers get the judge within tens of chars of its
-	// quote; snap pins each quote onto its own intended_text (canon space). On success the quote's
-	// [start,end) exactly covers its text; on a miss it keeps the judge's offsets (best-effort).
-	const snap = (v: Verdict): Verdict => mapQuotes(v, (q) => snapQuote(ctx.evidence, q)) as Verdict;
-	// A quote is anchored iff its span renders to its text — after snap that is a plain equality.
-	const anchored = (q: { start: number; end: number; intended_text?: string }): boolean =>
-		q.intended_text === undefined ||
-		(inRange(ctx.evidence, q) && quoteText(ctx.evidence, q) === q.intended_text);
-	// The re-quote instruction for one unanchored quote: its text + the evidence where it pointed.
-	const describe = (q: { start: number; intended_text?: string }): string => {
-		const near = ctx.evidence.slice(Math.max(0, q.start - 60), q.start + 60);
-		return `the quote "${q.intended_text}" is not verbatim in the Evidence; nearby it reads "…${near}…" — re-quote an exact substring.`;
-	};
 
 	let output: Record<string, unknown> | undefined;
 	let statements: Statement[] | undefined;
+	let obs: Record<string, number> | undefined;
 	if (verdict) {
-		// the manual path is one-shot — the calling agent is its own retry loop. Quotes are
-		// best-effort (snap pins what it can); only the schema is a hard gate.
-		const v = snap(verdict);
-		const err = schemaError(ctx.outputSchema, v.output);
+		// manual path — one-shot; the calling agent is its own retry loop. Both gates are hard:
+		// the Output schema, and every quote in-range (its span already resolved by whoever judged).
+		const err = schemaError(ctx.outputSchema, verdict.output);
 		if (err) throw new Error(`verdict Output violates its schema: ${err}`);
-		({ output, statements } = v);
+		const bad = collectQuotes(verdict).find((q) => !inRange(ctx.evidence, q));
+		if (bad) throw new Error(`verdict quote ${quoteKey(bad)} is out of the Evidence range`);
+		({ output, statements } = verdict);
 	} else {
-		// The judge loop with a per-quote tracker (removable): `resolved` caches every quote that
-		// has anchored, keyed by the text the judge meant — so once a quote is pinned it is locked,
-		// and attempts UNION their wins. Feedback lists only the still-unresolved quotes; we stop
-		// early when an attempt adds nothing new (temp 0 would just repeat). The merge takes the
-		// anchored quote where we have one, else the judge's own offsets — not perfect but likely
-		// close, never dropped. Schema stays a hard gate.
-		const judgePrompt = [ctx.system, ctx.instruction, ctx.examples, MARKERS, `## Evidence\n\n${annotate(ctx.evidence)}`]
+		// The two-tool loop. `search_quotes` is the ONLY source of offsets: it canon-matches the text
+		// the judge cites and returns every occurrence as a {start,end} span with surrounding context,
+		// so repeats are disambiguated by the judge reading that context — not a positional guess. It
+		// records each span in `returned`; `submit_claims` then commits only when the Output satisfies
+		// its schema and every quote is one of those recorded spans. A rejected submit (its {ok,error}
+		// fed back) just continues the loop; the SDK stops the moment one is accepted.
+		const returned = new Set<string>();
+		let submitted: Verdict | undefined; // set by submit_claims once a judgment passes both gates
+		const search_quotes = llm.jsonTool<{ texts: string[] }>({
+			description:
+				"Locate verbatim quotes in the Evidence. Pass the exact text you intend to cite; get back, " +
+				"per text, every occurrence as a {start,end} span with its surrounding `before`/`after` " +
+				"context. When a quote occurs more than once, read the context and take the {start,end} of " +
+				"the occurrence that fits your point. An empty match list means re-quote an exact substring.",
+			schema: {
+				type: "object",
+				required: ["texts"],
+				properties: {
+					texts: {
+						type: "array",
+						items: { type: "string" },
+						description: "verbatim substrings of the Evidence you mean to cite"
+					}
+				}
+			},
+			execute: ({ texts }) =>
+				texts.map((text) => ({
+					text,
+					matches: findQuotes(ctx.evidence, text).map((q) => {
+						returned.add(quoteKey(q));
+						return {
+							start: q.start,
+							end: q.end,
+							before: ctx.evidence.slice(Math.max(0, q.start - 48), q.start),
+							after: ctx.evidence.slice(q.end, q.end + 48)
+						};
+					})
+				}))
+		});
+		const submit_claims = llm.jsonTool<Verdict>({
+			description:
+				"Commit the final judgment: the domain Output plus the claim→proof statements. Every quote " +
+				"{start,end} must be one `search_quotes` returned — search for the text first, then submit that span.",
+			schema: ctx.responseSchema,
+			execute: (v) => {
+				const err = schemaError(ctx.outputSchema, v.output);
+				if (err) return { ok: false, error: `the Output does not satisfy its schema: ${err}` };
+				const bad = collectQuotes(v).find((q) => !inRange(ctx.evidence, q) || !returned.has(quoteKey(q)));
+				if (bad)
+					return {
+						ok: false,
+						error: `quote ${quoteKey(bad)} was not returned by search_quotes — search for its text, then submit the span you got back.`
+					};
+				submitted = v;
+				return { ok: true };
+			}
+		});
+		const prompt = [ctx.system, ctx.instruction, ctx.examples, `## Evidence\n\n${ctx.evidence}`]
 			.filter(Boolean)
 			.join("\n\n");
-		const resolved = new Map<string, Quote>();
-		let last!: Verdict;
-		let feedback = "";
-		for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-			last = snap(
-				await llm.generate<Verdict>([judgePrompt, feedback].filter(Boolean).join("\n\n"), ctx.responseSchema)
-			);
-			const quotes = collectQuotes(last);
-			const before = resolved.size;
-			for (const q of quotes) if (anchored(q) && q.intended_text !== undefined) resolved.set(q.intended_text, q);
-			const pending = quotes.filter((q) => q.intended_text !== undefined && !resolved.has(q.intended_text));
-			const schemaErr = schemaError(ctx.outputSchema, last.output);
-			if (!pending.length && !schemaErr) break; // fully anchored + valid
-			if (attempt >= 2 && resolved.size === before && !schemaErr) break; // no progress — stop retrying
-			feedback =
-				"## Corrections needed\n\nFix ONLY these and return the full answer again:\n- " +
-				[schemaErr && `the Output does not satisfy its schema: ${schemaErr}`, ...pending.map(describe)]
-					.filter(Boolean)
-					.join("\n- ");
-		}
-		const err = schemaError(ctx.outputSchema, last.output);
-		if (err) throw new Error(`judge Output violates its schema after ${MAX_ATTEMPTS} attempts: ${err}`);
-		// merge: the anchored version of each quote, else the judge's best-effort offsets.
-		({ output, statements } = mapQuotes(last, (q) =>
-			q.intended_text !== undefined ? (resolved.get(q.intended_text) ?? q) : q
-		) as Verdict);
+		const t0 = Date.now();
+		// stop on a SUCCESSFUL submit, not merely a submit CALL — hasToolCall("submit_claims") would
+		// also halt on a rejected ({ok:false}) submit, killing the retry. Keep this a `submitted` probe.
+		const result = await llm.agent(prompt, { search_quotes, submit_claims }, () => submitted !== undefined);
+		if (!submitted) throw new Error("judge did not submit a valid decision within the step budget");
+		const s = llm.runStats(result, Date.now() - t0);
+		obs = { ms: s.ms, steps: s.steps, tokens: s.tokens, searches: s.calls.search_quotes ?? 0, rejected: s.rejects.submit_claims ?? 0 };
+		({ output, statements } = submitted);
 	}
 
 	const name = String(ctx.person.fields.Name ?? ctx.publicId);
@@ -357,7 +364,8 @@ const decide = async (
 		output,
 		claims: statements.map((s) => s.claim),
 		where: d.url,
-		open: appLink(d.id)
+		open: appLink(d.id),
+		...(obs ? { obs } : {})
 	};
 };
 

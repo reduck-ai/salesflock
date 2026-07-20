@@ -4,7 +4,7 @@
 // judge must be deterministic. Structured output is the AI SDK's generateObject — it unifies
 // Gemini's responseSchema and Claude's tool-use behind the same schema-in/object-out contract.
 
-import { generateObject, jsonSchema } from "ai";
+import { generateObject, generateText, jsonSchema, stepCountIs, tool, type ToolSet } from "ai";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock";
 import { fromNodeProviderChain } from "@aws-sdk/credential-providers";
@@ -47,4 +47,57 @@ export const generate = async <T>(prompt: string, schema: object): Promise<T> =>
 		temperature: 0
 	});
 	return object;
+};
+
+// jsonTool — a tool from a JSON Schema, closed the same way `generate`'s schema is (Claude/Bedrock
+// reject open objects). `strict` makes providers that support it emit only schema-valid tool calls,
+// cutting malformed-arg round-trips before our own gate. `execute` gets the validated input and its
+// return is fed back to the model.
+export const jsonTool = <I>(def: {
+	description: string;
+	schema: object;
+	execute: (input: I) => unknown | Promise<unknown>;
+}) =>
+	tool({
+		description: def.description,
+		inputSchema: jsonSchema<I>(strict(def.schema) as never),
+		strict: true,
+		execute: (input) => Promise.resolve(def.execute(input))
+	});
+
+// agent(prompt, tools, done) — the multi-step judge seam: run the tool loop until `done()` (the
+// caller's success flag — e.g. a valid decision was submitted) or the step budget. `generate`'s
+// one-shot generateObject can't loop over tools; this is the same model, temperature 0, as a loop.
+export const agent = (prompt: string, tools: ToolSet, done: () => boolean, maxSteps = 10) => {
+	if (provider === "google" && !process.env.GEMINI_API_KEY) throw new Error("set GEMINI_API_KEY");
+	return generateText({ model, tools, prompt, temperature: 0, stopWhen: [done, stepCountIs(maxSteps)] });
+};
+
+// runStats(result, ms) — domain-agnostic observability for a tool-loop result: wall-clock, step
+// count, total tokens, and per-tool tallies of how often the model called each tool and how often a
+// tool's own result said `{ok:false}`. The caller names the tools it cares about (this seam stays
+// free of any one agent's vocabulary). Structural type so we don't drag in the generic result type.
+export interface RunStats {
+	ms: number;
+	steps: number;
+	tokens: number;
+	calls: Record<string, number>; // toolName → times the model called it
+	rejects: Record<string, number>; // toolName → times its result was { ok: false }
+}
+type ToolLoopResult = {
+	steps: { toolCalls: { toolName: string }[]; toolResults: { toolName: string; output: unknown }[] }[];
+	totalUsage: { totalTokens?: number };
+};
+export const runStats = (result: ToolLoopResult, ms: number): RunStats => {
+	const tally = (xs: { toolName: string }[]) =>
+		xs.reduce<Record<string, number>>((m, x) => ((m[x.toolName] = (m[x.toolName] ?? 0) + 1), m), {});
+	return {
+		ms,
+		steps: result.steps.length,
+		tokens: result.totalUsage.totalTokens ?? 0,
+		calls: tally(result.steps.flatMap((s) => s.toolCalls)),
+		rejects: tally(
+			result.steps.flatMap((s) => s.toolResults).filter((r) => (r.output as { ok?: boolean }).ok === false)
+		)
+	};
 };

@@ -1,16 +1,17 @@
 // Text anchoring — a quote is a half-open char range `[start, end)` into the frozen evidence
 // `E = renderEvidence(Input)`. Because Input is fixed and the renderer deterministic, E is
 // fixed, so a range denotes exactly one span: no content matching, no occurrence guessing, no
-// drift. `E.slice(start, end)` is the quoted text — derived, never stored as truth. The LLM
-// judge additionally reports the text it MEANT to cite (`intended_text`) as a debug + retry
-// signal; a human quote omits it, because a selection's position already IS the span.
+// drift. `E.slice(start, end)` is the quoted text — derived, never stored as truth. Neither source
+// invents a range: the LLM cites text and `findQuotes` returns the span (the `search_quotes` tool),
+// a human selects and `quoteAt` returns it — so the span is the whole anchor, nothing else stored.
 
-// A quote located by its bounds in E. `intended_text` is the LLM's self-report (present ⇒
-// LLM-authored); humans omit it. The span is the whole anchor — nothing else is needed.
+// A quote located by its bounds in E. The span is the whole anchor — nothing else is needed, and
+// nothing else is stored: both sources produce it deterministically (the LLM via `search_quotes`
+// over `findQuotes`, a human via `quoteAt` over a DOM selection), so E.slice(start,end) is the
+// text, always — no self-reported `intended_text` to reconcile.
 export interface Quote {
 	start: number;
 	end: number;
-	intended_text?: string;
 }
 
 // A reasoning statement: a claim, its stance (for/against the verdict), and the evidence spans
@@ -51,67 +52,19 @@ export const collectQuotes = (value: unknown): Quote[] => {
 	return out;
 };
 
-// snapQuote(evidence, q, window) — the offset-correction post-step (removable). Position markers
-// (`annotate`) get the judge within ~tens of chars of its quote but not exact; here we pin it,
-// deterministically, onto its OWN `intended_text`. The judge reproduces the RENDERED text (no `**`,
-// collapsed whitespace), so we match in `canonicalize`'s rendered space — the same projection the
-// human selection uses — then map the found span back to raw offsets via `at`. Local: the match is
-// the occurrence nearest the judge's reported offset, within `window`, so it is unambiguous, never
-// a global first-occurrence guess. A quote with no `intended_text` (a human's — already exact), or
-// whose text isn't in-window, is returned unchanged. On success `intended_text` becomes the raw
-// span, so `evidence.slice(start,end) === intended_text` holds.
-export const snapQuote = (evidence: string, q: Quote, window = 128): Quote => {
-	if (q.intended_text === undefined) return q; // human quote — position is already the truth
-	const stripped = q.intended_text.replace(/⟨\d+⟩/g, ""); // clean text for the best-effort fallback
-	// project the judge's quote through the SAME canonicalization as the haystack, so it matches
-	// whether the judge copied the rendered text or the raw markdown (`**`, bullets, headers).
-	const needle = canonicalize(stripped).canon;
+// findQuotes(evidence, text) — the one anchoring primitive: every span in E whose RENDERED text is
+// `text`, as raw {start,end} ranges. Match in `canonicalize`'s rendered space so a verbatim quote
+// resolves whether it was copied from the rendered view or the raw markdown (`**`, bullets, headers),
+// then map each canon occurrence back to raw offsets via `at`. This is what code — never the LLM —
+// uses to turn text into offsets: `search_quotes` returns these (with context) for the judge to pick
+// from, and `quoteAt` picks the one nearest a human selection. [] when the text isn't in E.
+export const findQuotes = (evidence: string, text: string): Quote[] => {
 	const { canon, at } = canonicalize(evidence);
-	if (!needle || !at.length) return { ...q, intended_text: stripped };
-	// the canon index nearest the judge's reported raw offset
-	let approx = 0;
-	for (let k = 1; k < at.length; k++)
-		if (Math.abs(at[k] - q.start) < Math.abs(at[approx] - q.start)) approx = k;
-	// the occurrence of the rendered needle nearest that index, within the window
-	let best = -1;
+	const needle = canonNormalize(text);
+	if (!needle) return [];
+	const out: Quote[] = [];
 	for (let i = canon.indexOf(needle); i >= 0; i = canon.indexOf(needle, i + 1))
-		if (Math.abs(i - approx) <= window && (best < 0 || Math.abs(i - approx) < Math.abs(best - approx)))
-			best = i;
-	if (best < 0) return { ...q, intended_text: stripped }; // best-effort: keep the judge's offsets
-	const start = at[best];
-	const end = at[best + needle.length - 1] + 1;
-	return { start, end, intended_text: evidence.slice(start, end) };
-};
-
-// mapQuotes(value, fn) — deep-copy a verdict, replacing every Quote in any `quotes:[]` with
-// fn(quote). The write-side twin of collectQuotes; here it applies snapQuote across statements
-// AND any quotes nested in the output.
-export const mapQuotes = (value: unknown, fn: (q: Quote) => Quote): unknown => {
-	if (Array.isArray(value)) return value.map((v) => mapQuotes(v, fn));
-	if (!value || typeof value !== "object") return value;
-	const out: Record<string, unknown> = {};
-	for (const [k, v] of Object.entries(value as Record<string, unknown>))
-		out[k] = k === "quotes" && Array.isArray(v) ? (v as Quote[]).map(fn) : mapQuotes(v, fn);
-	return out;
-};
-
-// annotate(text, step) — the LLM prompt aid: interleave position landmarks ⟨N⟩ into a copy of
-// the evidence, one at the first whitespace past every `step` chars, where N is the offset of the
-// character right after the marker. An LLM can't count thousands of chars from 0 (offsets drift
-// worse the deeper the quote), but it can count <step chars from the nearest landmark. In-memory,
-// prompt-only: the model reports offsets into the CLEAN text; the markers just tell it where it is.
-// Stripping /⟨\d+⟩/g recovers the original exactly.
-export const annotate = (text: string, step = 100): string => {
-	let out = "";
-	let since = 0;
-	for (let i = 0; i < text.length; i++) {
-		if (since >= step && /\s/.test(text[i])) {
-			out += `⟨${i}⟩`;
-			since = 0;
-		}
-		out += text[i];
-		since++;
-	}
+		out.push({ start: at[i], end: at[i + needle.length - 1] + 1 });
 	return out;
 };
 
