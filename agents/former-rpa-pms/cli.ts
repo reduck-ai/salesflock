@@ -12,9 +12,16 @@ const out = (v: unknown) => console.log(JSON.stringify(v, null, 2));
 
 // Batch a per-profile tool over many, ≤4 in flight (the shared reduck cap throttles scrapes under
 // it). Resilient by construction: one profile's failure becomes an {profile, error} entry rather
-// than aborting the whole run — a batch never loses its good results to one bad scrape.
-const batch = <R>(profiles: string[], fn: (p: string) => Promise<R>) =>
-	mapLimit(profiles, (p) => fn(p).catch((e: unknown) => ({ profile: p, error: renderError(e) })));
+// than aborting the whole run — a batch never loses its good results to one bad scrape. The error
+// still flows to the shell: if any item failed, the process exits non-zero (a run is never silently
+// "successful" while an item errored).
+const batch = async <R>(profiles: string[], fn: (p: string) => Promise<R>) => {
+	const results = await mapLimit(profiles, (p) =>
+		fn(p).catch((e: unknown) => ({ profile: p, error: renderError(e) }))
+	);
+	if (results.some((r) => r && typeof r === "object" && "error" in r)) process.exitCode = 1;
+	return results;
+};
 
 const program = new Command()
 	.name("rpa")
@@ -23,9 +30,9 @@ const program = new Command()
 program
 	.command("search")
 	.argument("<query>", `Google query, e.g. site:www.linkedin.com/in Ex-UiPath senior product manager`)
-	.option("--n <count>", "max result cards", parseInt)
-	.description("Discover profiles via Google (one run); write Person stubs + Sourcing + new Leads (To pre-qualify).")
-	.action(async (query, { n }) => out(await tools.search(query, n)));
+	.option("--page <n>", "0-based results page (→ Google &start=page*10); each page is a full ~10-card SERP, near-disjoint from the others", parseInt)
+	.description("Discover profiles via Google (one run of one results page); write Person stubs + Sourcing + new Leads (To pre-qualify).")
+	.action(async (query, { page }) => out(await tools.search(query, page)));
 
 program
 	.command("pre-qualify")

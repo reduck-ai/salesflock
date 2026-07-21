@@ -44,8 +44,9 @@ const LADDER = [
 const rank = (s: string | null): number => (s ? LADDER.indexOf(s as (typeof LADDER)[number]) : -1);
 
 // The lead's current Status by its LinkedIn URL (the sole key), or null if no lead exists yet.
+// `query` returns [] for not-found and throws on a real store error — no catch to swallow either.
 const leadStatus = async (u: string): Promise<string | null> => {
-	const lead = await store.read(config.models.Leads, "LinkedIn URL", u).catch(() => null);
+	const [lead] = await store.query(config.models.Leads, { property: "LinkedIn URL", url: { equals: u } });
 	return lead ? String(lead.fields.Status ?? "") : null;
 };
 
@@ -54,8 +55,8 @@ export const tools = {
 	// URL) and, only if no Lead exists for that URL yet, a Lead at the funnel start ("To pre-qualify").
 	// A hit already in the CRM is reported (`existing`, with its Status), never re-added. Then ONE
 	// Sourcing row for the run, linking every Person it yielded.
-	search: async (query: string, n?: number) => {
-		const { script, args, hits } = await lkSearchProfiles(query, n);
+	search: async (query: string, page?: number) => {
+		const { script, args, hits } = await lkSearchProfiles(query, page);
 		const ranAt = new Date().toISOString();
 		const out = [];
 		const personIds: string[] = [];
@@ -94,7 +95,7 @@ export const tools = {
 		const status = await leadStatus(u);
 		if (status === "Not qualified" || rank(status) >= rank("To qualify"))
 			return { publicId, skipped: true, status };
-		const existing = await store.read(config.models.People, "LinkedIn URL", u).catch(() => null);
+		const [existing] = await store.query(config.models.People, { property: "LinkedIn URL", url: { equals: u } });
 		const experience = await getExperience(profile);
 		const pq = classify(experience);
 		const name = existing?.fields.Name ? String(existing.fields.Name) : publicId;

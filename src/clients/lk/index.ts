@@ -20,20 +20,6 @@ export const publicIdOf = (profile: string): string =>
 export const profileUrl = (profile: string): string =>
 	`https://www.linkedin.com/in/${publicIdOf(profile)}`;
 
-// Best-effort run for the activity lens: posts/comments are enrichment, not identity, and
-// their feeds are the slowest — a timeout there must never drop the whole profile. The
-// error is explicitly silenced (logged, not thrown); the caller gets an empty result.
-const tryRun = async <T>(addr: string, args: Args, fallback: T): Promise<T> => {
-	try {
-		return await run<T>(addr, args);
-	} catch (e) {
-		console.error(
-			`activity ${addr} skipped (best-effort): ${(e as Error).message.split("\n")[0]}`
-		);
-		return fallback;
-	}
-};
-
 // The assembled profile — each field is its script's contract output (see lk.schema.ts).
 // posts/comments are the activity lens: what the person publishes and where they engage.
 export interface Profile {
@@ -59,9 +45,9 @@ export interface ProfileHit {
 // provenance without knowing addresses.
 export const searchProfiles = async (
 	query: string,
-	n?: number
+	page?: number
 ): Promise<{ script: string; args: Args; hits: ProfileHit[] }> => {
-	const args: Args = { query, ...(n ? { n } : {}) };
+	const args: Args = { query, ...(page ? { page } : {}) };
 	const results = await run<Search>(google.search, args);
 	const hits = results.flatMap((r) => {
 		const publicId = r.url.match(/linkedin\.com\/in\/([^/?#]+)/)?.[1];
@@ -82,24 +68,25 @@ export const searchProfiles = async (
 export const getExperience = (profile: string): Promise<Experience> =>
 	run<Experience>(scripts.experience, { publicId: publicIdOf(profile), count: 50 });
 
-// The rest of the profile — card (identity, fails loud) + the activity lens (posts/comments,
-// best-effort) — WITHOUT experience. What `enrich` needs once pre-qualify has already stored it,
-// so experience is never pulled twice across the funnel.
+// The rest of the profile — card (identity) + the activity lens (posts/comments) — WITHOUT
+// experience. What `enrich` needs once pre-qualify has already stored it, so experience is never
+// pulled twice across the funnel. Every run fails loud: a scrape failure throws (never a fake-empty
+// result); a genuinely empty feed returns [] on its own.
 export const getProfileRest = async (
 	profile: string
 ): Promise<{ publicId: string; card: Card; posts: Posts; comments: Comments }> => {
 	const publicId = publicIdOf(profile);
 	const card = await run<Card>(scripts.card, { publicId });
 	const [posts, comments] = await Promise.all([
-		tryRun<Posts>(scripts.posts, { publicId, count: 10 }, { posts: [] }),
-		tryRun<Comments>(scripts.comments, { publicId, count: 10 }, { comments: [] })
+		run<Posts>(scripts.posts, { publicId, count: 10 }),
+		run<Comments>(scripts.comments, { publicId, count: 10 })
 	]);
 	return { publicId, card, posts, comments };
 };
 
 // get_profile — the full record, composed from the experience pull and the rest (card + activity),
-// each fetched in parallel. Core identity (card, experience) fails loud; the activity lens is
-// best-effort, so a timeout yields empty instead of losing the whole profile.
+// each fetched in parallel. Every underlying run fails loud, so any scrape failure surfaces rather
+// than yielding a partial record.
 export const getProfile = async (profile: string): Promise<Profile> => {
 	const [experience, rest] = await Promise.all([getExperience(profile), getProfileRest(profile)]);
 	return { publicId: rest.publicId, card: rest.card, experience, posts: rest.posts, comments: rest.comments };
