@@ -9,8 +9,13 @@ import { promisify } from "node:util";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { parse } from "yaml";
+import { gate } from "../concurrency.js";
 
 const exec = promisify(execFile);
+
+// The single global ceiling on concurrent reduck runs (one browser device). Every `run` acquires a
+// slot, so any fan-out — a profile's parallel scripts, a batched tool — is throttled to the limit.
+const slot = gate();
 const require = createRequire(import.meta.url);
 
 // The bundled CLI's entry, run under this same node. Falls back to a `reduck` on
@@ -28,13 +33,14 @@ function reduckArgv(): string[] {
 
 export type Args = Record<string, string | number | boolean>;
 
-export const run = async <T = unknown>(addr: string, args: Args): Promise<T> => {
-	const pairs = Object.entries(args).map(([k, v]) => `${k}=${v}`);
-	const [cmd, ...pre] = reduckArgv();
-	// `reduck run` prints the result as JSON on stdout (run id + errors on stderr).
-	const { stdout } = await exec(cmd, [...pre, "run", "--script", addr, ...pairs]);
-	return JSON.parse(stdout) as T;
-};
+export const run = <T = unknown>(addr: string, args: Args): Promise<T> =>
+	slot(async () => {
+		const pairs = Object.entries(args).map(([k, v]) => `${k}=${v}`);
+		const [cmd, ...pre] = reduckArgv();
+		// `reduck run` prints the result as JSON on stdout (run id + errors on stderr).
+		const { stdout } = await exec(cmd, [...pre, "run", "--script", addr, ...pairs]);
+		return JSON.parse(stdout) as T;
+	});
 
 // A script's contract — the ground truth. input/output are JSON Schemas (server-enforced
 // on every run); `bind` compiles `output` into a TS type.

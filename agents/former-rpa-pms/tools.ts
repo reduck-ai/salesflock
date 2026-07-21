@@ -2,18 +2,24 @@
 // generic judgment engine lives in src/decide.ts; this file is the agent-specific wiring. The one
 // novel stage is pre-qualify: the deterministic vendor gate (vendors.ts) on the cheap experience
 // pull, which kills non-fits before the slow feeds and the LLM ever run.
+//
+// One identity key throughout: the canonical LinkedIn URL (`profileUrl`). Every Person and Lead is
+// upserted on it, so a re-run converges instead of duplicating. The funnel is monotonic — an earlier
+// stage never drags a lead backward: it no-ops (and reports `skipped`/`existing`) once the lead has
+// advanced past its own target, "Not qualified" being the terminal miss.
 
 import {
 	searchProfiles as lkSearchProfiles,
 	getExperience,
 	getProfileRest,
-	publicIdOf
+	publicIdOf,
+	profileUrl
 } from "../../src/clients/lk/index.js";
 import { getStore } from "../../src/stores/index.js";
 import { createDecider } from "../../src/decide.js";
 import { renderEvidence } from "../../src/linkedin/evidence.js";
 import { projectInput } from "../../src/linkedin/project.js";
-import { classify } from "./vendors.js";
+import { classify, disposition } from "./vendors.js";
 import { stringify } from "yaml";
 import config from "./config.js";
 import type { People } from "./schema/People.js";
@@ -23,42 +29,47 @@ import type { Sourcing } from "./schema/Sourcing.js";
 const store = getStore(config.destination);
 const decider = createDecider({ config, store, renderEvidence, projectInput });
 
-const url = (publicId: string) => `https://www.linkedin.com/in/${publicId}`;
-
-// Lead statuses AFTER pre-qualify — enrich or later has already acted. pre-qualify no-ops on these
-// so a re-run never drags a moved lead backwards; it owns only To pre-qualify / To enrich / Not qualified.
-const DOWNSTREAM = new Set([
+// The funnel's forward order. Each stage no-ops if the lead already sits at or past the stage's own
+// target, so a re-run never drags it backward; "Not qualified" is the terminal miss, off the ladder.
+const LADDER = [
+	"To pre-qualify",
+	"To enrich",
 	"To qualify",
 	"Qualification pending approval",
 	"To engage",
 	"Engagement pending approval",
 	"Engaged - waiting for lead",
 	"Meeting booked"
-]);
+] as const;
+const rank = (s: string | null): number => (s ? LADDER.indexOf(s as (typeof LADDER)[number]) : -1);
+
+// The lead's current Status by its LinkedIn URL (the sole key), or null if no lead exists yet.
+const leadStatus = async (u: string): Promise<string | null> => {
+	const lead = await store.read(config.models.Leads, "LinkedIn URL", u).catch(() => null);
+	return lead ? String(lead.fields.Status ?? "") : null;
+};
 
 export const tools = {
-	// search — discover profiles via one Google run. Per hit: a Person stub (idempotent on the
-	// canonical LinkedIn URL) and, for a NEW person, a Lead at the funnel start ("To pre-qualify").
-	// Then ONE Sourcing row for the run, linking the People it yielded.
+	// search — discover profiles via one Google run. Per hit: a Person (idempotent on the LinkedIn
+	// URL) and, only if no Lead exists for that URL yet, a Lead at the funnel start ("To pre-qualify").
+	// A hit already in the CRM is reported (`existing`, with its Status), never re-added. Then ONE
+	// Sourcing row for the run, linking every Person it yielded.
 	search: async (query: string, n?: number) => {
 		const { script, args, hits } = await lkSearchProfiles(query, n);
 		const ranAt = new Date().toISOString();
 		const out = [];
 		const personIds: string[] = [];
 		for (const hit of hits) {
-			const person: People = {
-				Name: hit.name,
-				Headline: hit.headline,
-				"LinkedIn URL": hit.profileUrl,
-				Updated: ranAt
-			};
+			const u = profileUrl(hit.publicId);
+			const person: People = { Name: hit.name, Headline: hit.headline, "LinkedIn URL": u, Updated: ranAt };
 			const p = await store.upsert(config.models.People, person, "LinkedIn URL");
 			personIds.push(p.id);
-			if (p.created) {
-				const lead: Leads = { Name: hit.name, Person: [p.id], Status: "To pre-qualify" };
-				await store.upsert(config.models.Leads, lead, "Person");
+			const status = await leadStatus(u);
+			if (status === null) {
+				const lead: Leads = { Name: hit.name, Person: [p.id], "LinkedIn URL": u, Status: "To pre-qualify" };
+				await store.upsert(config.models.Leads, lead, "LinkedIn URL");
 			}
-			out.push({ publicId: hit.publicId, name: hit.name, person: p.url, created: p.created });
+			out.push({ publicId: hit.publicId, name: hit.name, person: p.url, existing: status !== null, ...(status !== null ? { status } : {}) });
 		}
 		const terms = query.replace(/\bsite:\S+\s*/g, "").trim();
 		const sourcing: Sourcing = {
@@ -72,44 +83,47 @@ export const tools = {
 		return out;
 	},
 
-	// pre-qualify — the deterministic gate. ONE cheap run (experience only), stored on the Person,
-	// then `classify`: was a senior PM at an RPA vendor and has left? PASS ⇒ Lead "To enrich"
-	// (advance to the full fetch); FAIL ⇒ Lead "Not qualified" (funnel stops — the slow feeds and
-	// the LLM never run). Name is taken from the Person the search wrote (fallback: the publicId).
+	// pre-qualify — the deterministic gate. No-ops on a settled lead: already advanced past pre-qualify
+	// (someone enriched it) or terminally "Not qualified". Otherwise ONE cheap run (experience only),
+	// stored on the Person, then
+	// `classify`: was a senior PM at an RPA vendor and has left? PASS ⇒ Lead "To enrich"; FAIL ⇒ Lead
+	// "Not qualified" (funnel stops — the slow feeds and the LLM never run).
 	preQualify: async (profile: string) => {
 		const publicId = publicIdOf(profile);
-		// No-op if this lead has already advanced past pre-qualify — never refetch or reset a lead that
-		// enrich/qualify has moved on. Re-running on To pre-qualify / To enrich / Not qualified is fine.
-		const existing = await store.read(config.models.People, "LinkedIn URL", url(publicId)).catch(() => null);
-		if (existing) {
-			const lead = await store.read(config.models.Leads, "Person", existing.id).catch(() => null);
-			const status = lead ? String(lead.fields.Status ?? "") : "";
-			if (DOWNSTREAM.has(status))
-				return { publicId, name: String(existing.fields.Name ?? publicId), skipped: true, status };
-		}
+		const u = profileUrl(publicId);
+		const status = await leadStatus(u);
+		if (status === "Not qualified" || rank(status) >= rank("To qualify"))
+			return { publicId, skipped: true, status };
+		const existing = await store.read(config.models.People, "LinkedIn URL", u).catch(() => null);
 		const experience = await getExperience(profile);
 		const pq = classify(experience);
 		const name = existing?.fields.Name ? String(existing.fields.Name) : publicId;
-
 		const person: People = {
 			Name: name,
-			"LinkedIn URL": url(publicId),
+			"LinkedIn URL": u,
 			Updated: new Date().toISOString(),
 			Experiences: experience.positions.length
 				? stringify(experience.positions, { lineWidth: 0 })
 				: undefined
 		};
 		const p = await store.upsert(config.models.People, person, "LinkedIn URL");
-		const lead: Leads = { Name: name, Person: [p.id], Status: pq.pass ? "To enrich" : "Not qualified" };
-		const l = await store.upsert(config.models.Leads, lead, "Person");
+		const lead: Leads = { Name: name, Person: [p.id], "LinkedIn URL": u, Status: pq.pass ? "To enrich" : "Not qualified" };
+		const l = await store.upsert(config.models.Leads, lead, "LinkedIn URL");
+		// A rejection is terminal (the monotonic guard never re-runs pre-qualify on it), so this
+		// records the reason exactly once — no duplicate comments on re-run.
+		if (!pq.pass) await store.comment(l.id, disposition(pq));
 		return { publicId, name, ...pq, person: p.url, lead: l.url };
 	},
 
-	// enrich — only for pre-qualify survivors. Fetches the REST of the profile (card + activity),
-	// NOT experience (pre-qualify already wrote it — one experience pull per funnel). Fills the
-	// Person (Headline/About/Location/Activity, Experiences left intact) and moves the Lead to
-	// "To qualify". Idempotent.
+	// enrich — only for pre-qualify survivors. No-ops on a settled lead (Not qualified, or already at
+	// the human gate / engaged). Fetches the REST of the profile (card + activity), NOT experience
+	// (pre-qualify already wrote it — one experience pull per funnel), fills the Person, and moves the
+	// Lead to "To qualify". Idempotent.
 	enrich: async (profile: string) => {
+		const u = profileUrl(publicIdOf(profile));
+		const status = await leadStatus(u);
+		if (status === "Not qualified" || rank(status) >= rank("Qualification pending approval"))
+			return { publicId: publicIdOf(profile), skipped: true, status };
 		const { publicId, card, posts, comments } = await getProfileRest(profile);
 		const name = card.name ?? publicId;
 		const person: People = {
@@ -117,7 +131,7 @@ export const tools = {
 			Headline: card.headline ?? undefined,
 			About: card.about ?? undefined,
 			Location: card.location ?? undefined,
-			"LinkedIn URL": url(publicId),
+			"LinkedIn URL": u,
 			Updated: new Date().toISOString(),
 			Activity:
 				posts.posts.length || comments.comments.length
@@ -125,8 +139,8 @@ export const tools = {
 					: undefined
 		};
 		const p = await store.upsert(config.models.People, person, "LinkedIn URL");
-		const lead: Leads = { Name: name, Person: [p.id], Status: "To qualify" };
-		const l = await store.upsert(config.models.Leads, lead, "Person");
+		const lead: Leads = { Name: name, Person: [p.id], "LinkedIn URL": u, Status: "To qualify" };
+		const l = await store.upsert(config.models.Leads, lead, "LinkedIn URL");
 		return { person: p.url, lead: l.url, publicId, name, posts: posts.posts.length, comments: comments.comments.length };
 	},
 
@@ -135,6 +149,13 @@ export const tools = {
 
 	// context — the read half of the judgment (contract + frozen evidence), for a manual judge.
 	context: (profile: string) => decider.context("qualify", publicIdOf(profile)),
+
+	// check-lead-stages — the follow-up worklist: everyone whose Lead sits at `status`, each with the
+	// LinkedIn URL (the sole key) you pass straight into the next stage command. One query, one table.
+	checkLeadStages: async (status: string) => {
+		const rows = await store.query(config.models.Leads, { property: "Status", select: { equals: status } });
+		return rows.map((r) => ({ name: r.fields.Name, url: r.fields["LinkedIn URL"] }));
+	},
 
 	// list — the decisions awaiting a human verdict (the review queue).
 	list: () => decider.list(),

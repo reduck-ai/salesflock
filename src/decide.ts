@@ -11,6 +11,7 @@
 import { getStore } from "./stores/index.js";
 import type { AgentConfig, Store } from "./stores/index.js";
 import { idOf } from "./stores/notion.js";
+import { profileUrl } from "./clients/lk/index.js";
 import { reviewOf } from "./review.js";
 import * as llm from "./ai/llm.js";
 import { collectQuotes, findQuotes, inRange, quoteKey, type Statement } from "./anchor.js";
@@ -264,9 +265,10 @@ export const createDecider = ({ config, renderEvidence, projectInput, store: giv
 		const lead = {
 			Name: name,
 			Person: [ctx.person.id],
+			"LinkedIn URL": profileUrl(ctx.publicId),
 			...(dependsOn?.length ? {} : { Status: ctx.spec.pending })
 		};
-		const l = await store.upsert(config.models.Leads, lead, "Person");
+		const l = await store.upsert(config.models.Leads, lead, "LinkedIn URL");
 		const d = await store.upsert(
 			config.models.Decisions,
 			{

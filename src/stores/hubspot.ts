@@ -92,5 +92,6 @@ export const hubspot: Store = {
 	read: notImplemented,
 	query: notImplemented,
 	get: notImplemented,
-	title: notImplemented
+	title: notImplemented,
+	comment: notImplemented
 };

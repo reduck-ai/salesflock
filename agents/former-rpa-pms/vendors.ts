@@ -38,6 +38,23 @@ export interface PreQual {
 	vendorRoles: { title: string | null; dateRange: string | null; vendor: string }[];
 }
 
+// disposition(pq) — the one-line, human-readable reason a pre-qualify verdict reached its Status,
+// for the Lead's comment trail. The negative branches say why it was rejected; the pass branch why
+// it advanced. A pure function of the verdict already computed — no re-derivation.
+export const disposition = (pq: PreQual): string => {
+	const at = pq.vendors.join(", ") || "an RPA vendor";
+	switch (pq.verdict) {
+		case "never":
+			return "Not qualified — no RPA-vendor position in their experience";
+		case "still-at-vendor":
+			return `Not qualified — still at ${at} (current), not a former PM`;
+		case "former-non-pm":
+			return `Not qualified — former ${at}, but never a senior product manager there`;
+		case "former-senior-pm":
+			return `Pre-qualified — former ${at} senior product manager`;
+	}
+};
+
 // classify(experience) — the gate. `pass` ⇔ has ≥1 vendor position, none current (they left), and
 // at least one vendor role is a senior PM. Otherwise the reason why: still-at-vendor / former-non-pm
 // / never (the tool/skill-mention false positives this session's checks exposed).

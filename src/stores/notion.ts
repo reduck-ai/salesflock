@@ -255,6 +255,14 @@ export const title = async (_model: string, id: string): Promise<string> => {
 	return t.map((x) => x.plain_text).join("");
 };
 
+// comment(id, text) — append a top-level comment to a page: the append-only obs trail for why a
+// record landed where it did (a deterministic reject reason, a human's overturn). Reuses the same
+// rich-text codec as a property write; a page id already implies its parent, so no model is needed.
+export const comment = async (id: string, text: string): Promise<void> => {
+	const body = { parent: { page_id: idOf(id) }, rich_text: chunks(text) };
+	await ntn(["api", "-X", "POST", "/v1/comments", "-d", JSON.stringify(body)]);
+};
+
 // describe(model) — a JSON Schema of the model's writable properties. The data source
 // id rides in `$id` so a writer can recover it; `title` names the dump file. Properties
 // are sorted by name so the file is stable and `git diff` reads as a changelog.
@@ -285,4 +293,4 @@ export const describe = async (model: string): Promise<Record<string, unknown>> 
 };
 
 // The Store this module implements (Notion is the full System of Record).
-export const notion: Store = { describe, upsert, read, query, get, title };
+export const notion: Store = { describe, upsert, read, query, get, title, comment };

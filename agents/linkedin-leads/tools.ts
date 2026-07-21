@@ -7,7 +7,8 @@ import {
 	searchProfiles as lkSearchProfiles,
 	getProfile as lkGetProfile,
 	getCompany as lkGetCompany,
-	publicIdOf
+	publicIdOf,
+	profileUrl
 } from "../../src/clients/lk/index.js";
 import { getStore } from "../../src/stores/index.js";
 import { createDecider } from "../../src/decide.js";
@@ -48,8 +49,8 @@ export const tools = {
 			const p = await store.upsert(config.models.People, person, "LinkedIn URL");
 			personIds.push(p.id);
 			if (p.created) {
-				const lead: Leads = { Name: hit.name, Person: [p.id], Status: "To enrich" };
-				await store.upsert(config.models.Leads, lead, "Person");
+				const lead: Leads = { Name: hit.name, Person: [p.id], "LinkedIn URL": hit.profileUrl, Status: "To enrich" };
+				await store.upsert(config.models.Leads, lead, "LinkedIn URL");
 			}
 			out.push({ publicId: hit.publicId, name: hit.name, person: p.url, created: p.created });
 		}
@@ -86,8 +87,8 @@ export const tools = {
 					: undefined
 		};
 		const p = await store.upsert(config.models.People, person, "LinkedIn URL");
-		const lead: Leads = { Name: name, Person: [p.id], Status: "To qualify" };
-		const l = await store.upsert(config.models.Leads, lead, "Person");
+		const lead: Leads = { Name: name, Person: [p.id], "LinkedIn URL": profileUrl(publicId), Status: "To qualify" };
+		const l = await store.upsert(config.models.Leads, lead, "LinkedIn URL");
 		return {
 			person: p.url,
 			lead: l.url,
@@ -136,16 +137,18 @@ export const tools = {
 	engage: (profile: string, opts: { dependsOn?: string[] } = {}) =>
 		decider.decide("engage", publicIdOf(profile), opts),
 
-	// put-lead — the join: a Lead is a person, so it needs only that person; its Name is derived
-	// from the Person it points at. Idempotent on Name.
+	// put-lead — the join: a Lead is a person, so it needs only that person; its Name and the
+	// canonical LinkedIn URL it keys on are both read from the Person it points at. Idempotent on URL.
 	putLead: async ({ personId, companyId }: { personId: string; companyId?: string }) => {
+		const person = await store.get(personId);
 		const lead: Leads = {
-			Name: await store.title(config.models.People, personId),
+			Name: String(person.fields.Name ?? ""),
 			Person: [personId],
+			"LinkedIn URL": String(person.fields["LinkedIn URL"]),
 			...(companyId ? { Company: [companyId] } : {}),
 			Status: "To enrich"
 		};
-		const { id, url, created } = await store.upsert(config.models.Leads, lead, "Person");
+		const { id, url, created } = await store.upsert(config.models.Leads, lead, "LinkedIn URL");
 		return { where: url, id, created };
 	}
 };

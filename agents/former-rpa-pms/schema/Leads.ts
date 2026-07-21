@@ -5,6 +5,7 @@ export interface Leads {
    * relation → eddcfaaf-e6f1-4cea-a112-2b9d98426eb4
    */
   Decision?: string[];
+  "LinkedIn URL"?: string;
   Name: string;
   /**
    * relation → 180ff6c9-e29d-4853-adf5-754948a20fe4

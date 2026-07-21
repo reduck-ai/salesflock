@@ -20,6 +20,7 @@ export interface Store {
 	query(model: string, filter: object): Promise<Row[]>; // every row matching a store-native filter
 	get(id: string): Promise<Row>; // the row with this id — model-agnostic (an id implies its model)
 	title(model: string, id: string): Promise<string>; // a record's name, by id (the join)
+	comment(id: string, text: string): Promise<void>; // append a comment to a page — the obs trail
 }
 
 import { notion } from "./notion.js";

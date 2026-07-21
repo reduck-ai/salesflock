@@ -14,6 +14,12 @@ import type { Card, Experience, Posts, Comments, Company } from "./schema.js";
 export const publicIdOf = (profile: string): string =>
 	profile.match(/\/in\/([^/?]+)/)?.[1] ?? profile;
 
+// The canonical LinkedIn URL for a profile — the ONE identity key every store row (Person, Lead)
+// is upserted on. Accepts a URL or a bare publicId; always normalizes to the /in/<publicId> form,
+// so a rename or a re-derived page can never fork the row it keys.
+export const profileUrl = (profile: string): string =>
+	`https://www.linkedin.com/in/${publicIdOf(profile)}`;
+
 // Best-effort run for the activity lens: posts/comments are enrichment, not identity, and
 // their feeds are the slowest — a timeout there must never drop the whole profile. The
 // error is explicitly silenced (logged, not thrown); the caller gets an empty result.
