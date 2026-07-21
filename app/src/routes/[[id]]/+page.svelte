@@ -39,14 +39,19 @@
 		}
 	};
 
-	// ⌘S / Ctrl+S saves — page-level so it fires even while typing a note (the card's own
-	// key handler ignores keys inside inputs).
+	// The page-level chords: ⌘S saves, ⌘⏎ confirms the front card. Both live here (not in the
+	// card) so they fire even while typing a note, and neither bare key commits — a stray ⏎ is
+	// inert. The card's own handler owns only navigation (←/→, Tab, ⌫), ignored inside inputs.
 	$effect(() => {
 		if (!data.user) return;
 		const onkey = (e: KeyboardEvent) => {
-			if ((e.metaKey || e.ctrlKey) && e.key === "s") {
+			if (!(e.metaKey || e.ctrlKey)) return;
+			if (e.key === "s") {
 				e.preventDefault();
 				save();
+			} else if (e.key === "Enter") {
+				e.preventDefault();
+				stack?.confirm();
 			}
 		};
 		window.addEventListener("keydown", onkey);

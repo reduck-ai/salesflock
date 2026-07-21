@@ -64,6 +64,11 @@
 		card.save();
 		return true;
 	}
+
+	// Confirm the front card — the twin of save(), routing the page's ⌘⏎ chord to the deck.
+	export function confirm(): void {
+		card?.confirm();
+	}
 </script>
 
 {#if receipts.length}

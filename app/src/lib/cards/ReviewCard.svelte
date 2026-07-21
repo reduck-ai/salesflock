@@ -230,6 +230,12 @@
 	export function save() {
 		onjudge?.(undefined, feedback.trim(), reasoningEdit());
 	}
+	// ⌘⏎ confirm — driven page-level (the twin of ⌘S), so it fires even mid-note. Inert while
+	// the selection popover is open (a commit would drop the in-progress claim); commit() owns
+	// the schema gate.
+	export function confirm() {
+		if (!menu) commit();
+	}
 
 	// the selection menu opens on mouseup over a selection inside the evidence; the quote is
 	// minted right away from the selection's POSITION — its offset in the evidence, disambiguated
@@ -279,8 +285,8 @@
 	// the window scroll is shared chrome — each card starts at the top of its evidence
 	$effect(() => window.scrollTo(0, 0));
 
-	// ⏎ accepts, Esc rejects, ←/→ navigate, Tab / Shift+Tab step through proofs — ignored
-	// while typing
+	// ←/→ navigate, Tab / Shift+Tab step through proofs, ⌫ removes a focused user quote —
+	// ignored while typing. (⌘⏎ confirm is page-level, beside ⌘S.)
 	$effect(() => {
 		const onkey = (e: KeyboardEvent) => {
 			if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
@@ -294,9 +300,7 @@
 				}
 				return;
 			}
-			// a focused button already turns Enter into its own click — don't commit twice
-			if (e.key === "Enter" && !(e.target instanceof HTMLButtonElement)) commit();
-			else if (e.key === "ArrowRight") onnav?.(1);
+			if (e.key === "ArrowRight") onnav?.(1);
 			else if (e.key === "ArrowLeft") onnav?.(-1);
 			else if ((e.key === "Backspace" || e.key === "Delete") && canRemove(activeMi)) {
 				e.preventDefault();
@@ -344,7 +348,7 @@
 		<div class="meta">
 			<span>{pos} / {total}</span>
 			<span class="hint">
-				<kbd>←</kbd><kbd>→</kbd> navigate · <kbd>Tab</kbd> proof · <kbd>⏎</kbd> confirm
+				<kbd>←</kbd><kbd>→</kbd> navigate · <kbd>Tab</kbd> proof · <kbd>⌘⏎</kbd> confirm
 			</span>
 		</div>
 	</div>
@@ -540,7 +544,7 @@
 	<div class="acts-wrap">
 		<div class="acts">
 			<button class="btn confirm" onclick={commit} disabled={!!outputError}>
-				Confirm <kbd>⏎</kbd>
+				Confirm <kbd>⌘⏎</kbd>
 			</button>
 			<button
 				class="btn-note"
