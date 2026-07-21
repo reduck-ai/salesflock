@@ -38,6 +38,7 @@ export const decisionToJudgment = (d: Decision): EvidencedJudgment => {
 		evidence,
 		output,
 		outputSchema: d.outputSchema,
+		proposal: d.proposal,
 		draft
 	};
 };

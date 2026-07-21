@@ -1,0 +1,34 @@
+// Copy to config.ts and fill in. The one place this agent binds to a store: which destination,
+// which store table each logical model maps to, and its Prompt specs. `sflock pull --agent <id>`
+// reads it to regenerate schema/*.ts; the runtime reads it to pick the store and address each table.
+// Committed (ids are already public in the schema banners), like knowledge/.
+
+import type { AgentConfig } from "../../src/stores/index.js";
+
+export default {
+	destination: "notion", // a key of STORES (notion | hubspot); notion is the full store today
+	models: {
+		// logical model name → the store's table/object id (a Notion data-source id here)
+		People: "<People data source id>",
+		Companies: "<Companies data source id>",
+		Leads: "<Leads data source id>",
+		Sourcing: "<Sourcing data source id>",
+		Decisions: "<Decisions data source id>",
+		Prompts: "<Prompts data source id>"
+	},
+	prompts: {
+		// decision kind → its contract row + transitions. The committed output IS the decision:
+		// `resolve(output)` yields both where the entity moves (`status`) and whether the outcome
+		// advances the pipeline (`advances`, read by the DAG gate). `pending` is the Status while it
+		// awaits the human gate. `name` matches the Prompt row's Name in the Prompts table.
+		qualify: {
+			name: "<the qualification Prompt row's Name>",
+			pending: "<Status while awaiting approval, e.g. Qualification pending approval>",
+			resolve: (o) =>
+				o.tier === "Not qualified"
+					? { status: "Not qualified", advances: false }
+					: { status: "To engage", advances: true }
+		}
+		// engage: { name: "…", pending: "…", resolve: () => ({ status: "…", advances: true }) }
+	}
+} as const satisfies AgentConfig;

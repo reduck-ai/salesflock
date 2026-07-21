@@ -25,10 +25,15 @@ export interface Decision {
 	deps: string[]; // upstream Decision ids ("Depends on") — the DAG edges
 	prompt?: string; // the Prompt page id — its Output schema governs the editable output
 	outputSchema?: Record<string, unknown>; // the Prompt's Output JSON Schema (the edit contract)
+	proposal?: string; // the Prompt's framing text — what the output proposes (the card's header)
 }
 
-// A Prompt page → its Name and Output JSON Schema (the contract the human's output obeys).
-const promptInfo = async (id: string): Promise<{ name: string; outputSchema?: Record<string, unknown> }> => {
+// A Prompt page → its Name, Output JSON Schema (the contract the human's output obeys), and
+// its framing text ("Proposal") — proposal-oriented copy the card heads the output with. All
+// optional: a fork's Prompt need not carry them, so each stays fail-soft.
+const promptInfo = async (
+	id: string
+): Promise<{ name: string; outputSchema?: Record<string, unknown>; proposal?: string }> => {
 	const { properties } = await page(id);
 	const name = String(
 		Object.values(properties)
@@ -36,7 +41,12 @@ const promptInfo = async (id: string): Promise<{ name: string; outputSchema?: Re
 			.map(plain)[0] ?? ""
 	);
 	const schema = plain(properties["Output schema"]);
-	return { name, outputSchema: schema ? (JSON.parse(String(schema)) as Record<string, unknown>) : undefined };
+	const proposal = plain(properties["Proposal"]);
+	return {
+		name,
+		outputSchema: schema ? (JSON.parse(String(schema)) as Record<string, unknown>) : undefined,
+		proposal: proposal ? String(proposal) : undefined
+	};
 };
 
 // The prompt's pipeline semantics, by its Name — the same `resolve` the runtime declares.
@@ -83,7 +93,11 @@ const toDecision = ({
 // whatever its state (decided or blocked); the DAG gate governs only the queue's ordering.
 export const decision = async (id: string): Promise<Decision> => {
 	const d = toDecision(await page(id));
-	if (d.prompt) d.outputSchema = (await promptInfo(d.prompt)).outputSchema;
+	if (d.prompt) {
+		const info = await promptInfo(d.prompt);
+		d.outputSchema = info.outputSchema;
+		d.proposal = info.proposal;
+	}
 	return d;
 };
 
@@ -105,15 +119,21 @@ export const decisions = async (): Promise<Decision[]> => {
 	};
 	const rows = results.map(toDecision);
 
-	// The editable output's contract: each row's Prompt Output schema (prompts deduped).
-	const schemas = new Map(
+	// The editable output's contract + framing text: each row's Prompt info (prompts deduped).
+	const infos = new Map(
 		await Promise.all(
 			[...new Set(rows.map((r) => r.prompt).filter((p): p is string => !!p))].map(
-				async (id) => [id, (await promptInfo(id)).outputSchema] as const
+				async (id) => [id, await promptInfo(id)] as const
 			)
 		)
 	);
-	for (const r of rows) if (r.prompt) r.outputSchema = schemas.get(r.prompt);
+	for (const r of rows) {
+		const info = r.prompt && infos.get(r.prompt);
+		if (info) {
+			r.outputSchema = info.outputSchema;
+			r.proposal = info.proposal;
+		}
+	}
 
 	// The DAG gate, derived at read time — never stored: a Decision is reviewable only once
 	// every upstream it depends on has *advanced* the pipeline. Polarity is derived from the

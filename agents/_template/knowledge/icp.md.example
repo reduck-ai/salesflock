@@ -1,0 +1,9 @@
+# ICP
+
+<!-- What makes a candidate worth a human's attention. The agent scores candidates against
+     this in the Qualify stage. Be concrete — vague criteria pass everyone. -->
+
+- **Who:** <the entity you target — a person, an account, a post>
+- **Signal:** <what says "worth engaging now" — reach, topic, timing, pain>
+- **Fit:** <why this candidate serves the goal>
+- **Disqualifiers:** <hard nos>

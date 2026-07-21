@@ -5,6 +5,7 @@
 	// the caller's. ←/→ navigate without deciding.
 	import { fly } from "svelte/transition";
 	import ReviewCard from "./ReviewCard.svelte";
+	import Toast from "./Toast.svelte";
 	import type { EvidencedJudgment, Judgment, Statement } from "./types";
 
 	let {
@@ -26,6 +27,10 @@
 	// committed output differs), else they confirmed it verbatim.
 	let receipts = $state<{ edited: boolean; title: string; href?: string }[]>([]);
 	let card = $state<ReviewCard>();
+	// the transient toast — both actions converge here, so this is its one trigger. Keyed by a
+	// monotonic id so a rapid re-fire remounts (restarting its bar); the count stays the rail's job.
+	let toast = $state<{ id: number; message: string } | null>(null);
+	let seq = 0;
 
 	// keep the URL naming the on-screen decision, on each advance. Skip the first run: the URL
 	// already names the start card (the server redirect / the deep link), and replaceState throws
@@ -45,7 +50,7 @@
 		const j = judgments[index];
 		onjudge?.({ id: j.id, committedOutput, feedback, reasoning });
 		// a Save (no committed output) persists the edits but leaves the deck put — receipts are
-		// for decided cards, and the row is still under review.
+		// for decided cards, and the row is still under review. Either way, one toast.
 		if (committedOutput) {
 			receipts.push({
 				edited: JSON.stringify(committedOutput) !== JSON.stringify(j.output),
@@ -53,23 +58,35 @@
 				href: j.href
 			});
 			index += 1;
+			toast = { id: ++seq, message: "Confirmed" };
+		} else {
+			toast = { id: ++seq, message: "Saved" };
 		}
 	};
 	const nav = (dir: -1 | 1) => (index = Math.min(judgments.length - 1, Math.max(0, index + dir)));
 
-	// Save the current card's draft — the page's Save icon + ⌘S call this. Returns whether
-	// there was a card to save (false when caught up), so the page flashes only on a real save.
-	export function save(): boolean {
-		if (!card) return false;
-		card.save();
-		return true;
+	// Save the current card's draft — the page's Save icon + ⌘S call this. No-ops when caught up
+	// (no card), so the "Saved" toast fires only on a real save.
+	export function save(): void {
+		card?.save();
 	}
 
 	// Confirm the front card — the twin of save(), routing the page's ⌘⏎ chord to the deck.
 	export function confirm(): void {
 		card?.confirm();
 	}
+
+	// Toggle the front card's note field — routing the page's ⌘E chord to the deck.
+	export function note(): void {
+		card?.note();
+	}
 </script>
+
+{#if toast}
+	{#key toast.id}
+		<Toast message={toast.message} ondone={() => (toast = null)} />
+	{/key}
+{/if}
 
 {#if receipts.length}
 	<div class="mb-4 space-y-1">

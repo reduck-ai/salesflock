@@ -18,6 +18,13 @@ type Position = Experience["positions"][number];
 const vendorOf = (p: Position): string | undefined =>
 	VENDORS[p.companyUrl?.match(/\/company\/(\d+)/)?.[1] ?? ""];
 
+// Recognize a vendor by NAME (not the stable company-id). Used ONLY to detect ambiguity — a
+// position that names a vendor but lost its companyUrl can't be confirmed by id — so it can defer
+// an elimination, never grant a pass (that stays strictly id-gated).
+const VENDOR_PATTERNS = [/uipath/i, /automation anywhere/i, /blue prism/i];
+const namesVendor = (company: string | null): boolean =>
+	!!company && VENDOR_PATTERNS.some((re) => re.test(company));
+
 const isCurrent = (p: Position): boolean => /present/i.test(p.dateRange ?? "");
 
 // A senior product-MANAGEMENT title: a seniority marker + "product", but NOT the adjacent functions
@@ -29,11 +36,17 @@ const isSeniorPM = (title: string | null): boolean =>
 	/\bproduct\b/i.test(title) &&
 	!/marketing|operations|design/i.test(title);
 
-export type PreQualVerdict = "former-senior-pm" | "still-at-vendor" | "former-non-pm" | "never";
+export type PreQualVerdict =
+	| "former-senior-pm"
+	| "still-at-vendor"
+	| "former-non-pm"
+	| "never"
+	| "insufficient-data";
 
 export interface PreQual {
 	verdict: PreQualVerdict;
-	pass: boolean; // the gate: former (left) AND was a senior PM at a vendor
+	pass: boolean; // advance to enrich: former (left) AND was a senior PM at a vendor
+	eliminate: boolean; // terminal "Not qualified": a data-backed miss. NEVER set on insufficient-data.
 	vendors: string[];
 	vendorRoles: { title: string | null; dateRange: string | null; vendor: string }[];
 }
@@ -52,6 +65,8 @@ export const disposition = (pq: PreQual): string => {
 			return `Not qualified — former ${at}, but never a senior product manager there`;
 		case "former-senior-pm":
 			return `Pre-qualified — former ${at} senior product manager`;
+		case "insufficient-data":
+			return "Deferred — not enough experience data to eliminate; retry pre-qualify";
 	}
 };
 
@@ -59,19 +74,38 @@ export const disposition = (pq: PreQual): string => {
 // at least one vendor role is a senior PM. Otherwise the reason why: still-at-vendor / former-non-pm
 // / never (the tool/skill-mention false positives this session's checks exposed).
 export const classify = (experience: Experience): PreQual => {
-	const vps = experience.positions
+	const positions = experience.positions;
+	const vps = positions
 		.map((p) => ({ p, vendor: vendorOf(p) }))
 		.filter((x): x is { p: Position; vendor: string } => !!x.vendor);
 	const vendors = [...new Set(vps.map((x) => x.vendor))];
 	const vendorRoles = vps.map((x) => ({ title: x.p.title, dateRange: x.p.dateRange, vendor: x.vendor }));
 	const atVendorNow = vps.some((x) => isCurrent(x.p));
 	const seniorPM = vps.some((x) => isSeniorPM(x.p.title));
-	const verdict: PreQualVerdict = !vps.length
-		? "never"
-		: atVendorNow
-			? "still-at-vendor"
-			: seniorPM
-				? "former-senior-pm"
-				: "former-non-pm";
-	return { verdict, pass: verdict === "former-senior-pm", vendors, vendorRoles };
+
+	// We eliminate ONLY on sufficient data — never drop a lead for want of it. Two gaps make an
+	// elimination unsafe, so both defer to "insufficient-data" (the lead stays "To pre-qualify" for a
+	// retry, never "Not qualified"): (1) no positions at all — the scrape gave us nothing to judge on;
+	// (2) no vendor matched by company-id, yet a position NAMES a vendor but lost its companyUrl — our
+	// stable key can't confirm it, so a "never" verdict isn't trustworthy while that ambiguity stands.
+	const insufficient =
+		!positions.length ||
+		(!vps.length && positions.some((p) => !p.companyUrl && namesVendor(p.company)));
+
+	const verdict: PreQualVerdict = insufficient
+		? "insufficient-data"
+		: !vps.length
+			? "never"
+			: atVendorNow
+				? "still-at-vendor"
+				: seniorPM
+					? "former-senior-pm"
+					: "former-non-pm";
+	return {
+		verdict,
+		pass: verdict === "former-senior-pm",
+		eliminate: verdict === "never" || verdict === "still-at-vendor" || verdict === "former-non-pm",
+		vendors,
+		vendorRoles
+	};
 };

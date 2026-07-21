@@ -9,7 +9,6 @@
 	let stack = $state<JudgmentStack>();
 	let menuOpen = $state(false);
 	let userEl = $state<HTMLElement>();
-	let saved = $state(false);
 
 	// Persist a judgment to its source record; fire-and-forget so the deck keeps its snappy feel.
 	// A judgment with no `committedOutput` is a Save — the write skips the decision + pipeline
@@ -31,17 +30,12 @@
 		}).catch((e) => console.error("decide failed", e));
 	};
 
-	// Save the current card's draft; flash the icon only when there was one to save.
-	const save = () => {
-		if (stack?.save()) {
-			saved = true;
-			setTimeout(() => (saved = false), 1200);
-		}
-	};
+	// Save the current card's draft — the deck fires the "Saved" toast, so no header flash here.
+	const save = () => stack?.save();
 
-	// The page-level chords: ⌘S saves, ⌘⏎ confirms the front card. Both live here (not in the
-	// card) so they fire even while typing a note, and neither bare key commits — a stray ⏎ is
-	// inert. The card's own handler owns only navigation (←/→, Tab, ⌫), ignored inside inputs.
+	// The page-level chords: ⌘S saves, ⌘E toggles the note field, ⌘⏎ confirms the front card. All
+	// live here (not in the card) so they fire even while typing a note, and no bare key commits —
+	// a stray ⏎ is inert. The card's own handler owns only navigation (←/→, Tab, ⌫), ignored inside inputs.
 	$effect(() => {
 		if (!data.user) return;
 		const onkey = (e: KeyboardEvent) => {
@@ -49,6 +43,9 @@
 			if (e.key === "s") {
 				e.preventDefault();
 				save();
+			} else if (e.key === "e") {
+				e.preventDefault();
+				stack?.note();
 			} else if (e.key === "Enter") {
 				e.preventDefault();
 				stack?.confirm();
@@ -86,33 +83,20 @@
 		<header class="appbar flex items-center justify-between">
 			<h1 class="text-2xl font-semibold">Decisions</h1>
 			<div class="toolbar">
-				<button class="tbtn" class:saved onclick={save} title="Save (⌘S)" aria-label="Save">
-					{#if saved}
-						<svg
-							width="16"
-							height="16"
-							viewBox="0 0 24 24"
-							fill="none"
-							stroke="currentColor"
-							stroke-width="2.4"
-							stroke-linecap="round"
-							stroke-linejoin="round"><path d="M20 6 9 17l-5-5" /></svg
-						>
-					{:else}
-						<svg
-							width="16"
-							height="16"
-							viewBox="0 0 24 24"
-							fill="none"
-							stroke="currentColor"
-							stroke-width="2"
-							stroke-linecap="round"
-							stroke-linejoin="round"
-							><path
-								d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"
-							/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7" /><path d="M7 3v4a1 1 0 0 0 1 1h7" /></svg
-						>
-					{/if}
+				<button class="tbtn" onclick={save} title="Save (⌘S)" aria-label="Save">
+					<svg
+						width="16"
+						height="16"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="2"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						><path
+							d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"
+						/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7" /><path d="M7 3v4a1 1 0 0 0 1 1h7" /></svg
+					>
 				</button>
 
 				<div class="user" bind:this={userEl}>
@@ -196,9 +180,6 @@
 	.tbtn.on {
 		color: var(--foreground);
 		background: var(--accent);
-	}
-	.tbtn.saved {
-		color: #16a34a;
 	}
 	.user {
 		position: relative;

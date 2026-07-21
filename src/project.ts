@@ -1,7 +1,8 @@
-// Project a Person's fields onto a Prompt's Input schema — the schema names the evidence — and
+// Project a store row's fields onto a Prompt's Input schema — the schema names the evidence — and
 // hold the projection to that contract. Returns the lossless {field: value} map, in schema order,
-// which is what a Decision freezes as `Input`. Judge-side + migration only: it needs `ajv`, so it
-// lives apart from `evidence.ts` (the shared renderer) to keep `ajv` out of the app's bundle.
+// which is what a Decision freezes as `Input`. Source-agnostic (every agent's decider uses it), so
+// it lives at src/ root, not under any one source. Judge-side + migration only: it needs `ajv`, so
+// it stays apart from the per-source evidence renderers to keep `ajv` out of the app's bundle.
 
 import { Ajv } from "ajv";
 

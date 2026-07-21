@@ -9,9 +9,8 @@
 // submit passes both gates (the Output schema, and every quote in-range) BEFORE the single write.
 
 import { getStore } from "./stores/index.js";
-import type { AgentConfig, Store } from "./stores/index.js";
+import type { AgentConfig, PromptSpec, Store } from "./stores/index.js";
 import { idOf } from "./stores/notion.js";
-import { profileUrl } from "./clients/lk/index.js";
 import { reviewOf } from "./review.js";
 import * as llm from "./ai/llm.js";
 import { collectQuotes, findQuotes, inRange, quoteKey, type Statement } from "./anchor.js";
@@ -72,6 +71,23 @@ export interface Verdict {
 	statements: Statement[];
 }
 
+// The subject of a decision — who/what is being judged: the frozen fields projectInput reads, a
+// display name for the Decision, and the subject's own store row id (for the entity link below).
+export interface Subject {
+	key: string; // the handle passed to decide (a LinkedIn publicId, a post URL) — the subject's identity
+	name: string; // display name, for the Decision's Name
+	fields: Record<string, string | number | boolean>; // source for projectInput
+	ref?: string; // the subject's own store row id, when the entity link needs it (e.g. a Lead's Person)
+}
+
+// The Decision's binding to its pipeline entity (a Lead, an X Engagement): which Decision property
+// relates to it, and the row id. linkEntity also moves that row to the prompt's `pending` Status
+// (unless the decision is a held DAG dependent) — the one place the domain funnel advances.
+export interface EntityLink {
+	relation: string;
+	id: string;
+}
+
 export interface DeciderDeps {
 	config: AgentConfig;
 	renderEvidence: (input: Record<string, string>) => string;
@@ -79,11 +95,15 @@ export interface DeciderDeps {
 		fields: Record<string, string | number | boolean>,
 		inputSchema: Record<string, unknown>
 	) => Record<string, string>;
+	// The agent-specific bridge (what decide.ts used to hardcode to LinkedIn): fetch the subject's
+	// evidence, and bind/advance its pipeline row. The two seams alongside renderEvidence/projectInput.
+	resolveSubject: (key: string) => Promise<Subject>;
+	linkEntity: (subject: Subject, spec: PromptSpec, opts: { dependsOn?: string[] }) => Promise<EntityLink>;
 	store?: Store; // defaults to the config's destination store
 }
 
 // createDecider(deps) — the decision tools bound to one agent's store + config + LinkedIn renderers.
-export const createDecider = ({ config, renderEvidence, projectInput, store: given }: DeciderDeps) => {
+export const createDecider = ({ config, renderEvidence, projectInput, resolveSubject, linkEntity, store: given }: DeciderDeps) => {
 	const store = given ?? getStore(config.destination);
 
 	// The review app's base URL (the deployed Decisions surface), if configured. Turns a Decision
@@ -141,11 +161,10 @@ export const createDecider = ({ config, renderEvidence, projectInput, store: giv
 	};
 
 	// The judgment context: the Prompt row's full contract plus the Person's frozen evidence.
-	const judgmentContext = async (key: string, publicId: string) => {
+	const judgmentContext = async (key: string, handle: string) => {
 		const spec = config.prompts![key];
-		const url = `https://www.linkedin.com/in/${publicId}`;
-		const person = await store.read(config.models.People, "LinkedIn URL", url);
-		const f = person.fields;
+		const subject = await resolveSubject(handle);
+		const f = subject.fields;
 
 		// Prompts are append-only versions sharing a Name; the live contract is the highest Version.
 		const versions = await store.query(config.models.Prompts, {
@@ -180,8 +199,8 @@ export const createDecider = ({ config, renderEvidence, projectInput, store: giv
 			required: ["output", "statements"],
 			properties: { output: outputSchema, statements: STATEMENTS }
 		};
-		const examples = await examplesFor(key, String(f.Name ?? ""));
-		return { spec, publicId, person, prompt, system, instruction, examples, outputSchema, input, evidence, responseSchema };
+		const examples = await examplesFor(key, String(f.Name ?? subject.name));
+		return { spec, subject, prompt, system, instruction, examples, outputSchema, input, evidence, responseSchema };
 	};
 
 	// decide — judge the person against a Prompt row (the LLM two-tool loop) and persist one
@@ -260,25 +279,18 @@ export const createDecider = ({ config, renderEvidence, projectInput, store: giv
 			({ output, statements } = submitted);
 		}
 
-		const name = String(ctx.person.fields.Name ?? ctx.publicId);
 		const ranAt = new Date().toISOString();
-		const lead = {
-			Name: name,
-			Person: [ctx.person.id],
-			"LinkedIn URL": profileUrl(ctx.publicId),
-			...(dependsOn?.length ? {} : { Status: ctx.spec.pending })
-		};
-		const l = await store.upsert(config.models.Leads, lead, "LinkedIn URL");
+		const link = await linkEntity(ctx.subject, ctx.spec, { dependsOn });
 		const d = await store.upsert(
 			config.models.Decisions,
 			{
-				Name: `${name} - ${ctx.spec.name} — ${ranAt.slice(0, 19).replace("T", " ")}`,
+				Name: `${ctx.subject.name} - ${ctx.spec.name} — ${ranAt.slice(0, 19).replace("T", " ")}`,
 				Output: JSON.stringify(output),
 				Reasoning: JSON.stringify(statements),
 				Input: JSON.stringify(ctx.input),
 				Model: llm.MODEL,
 				Prompt: [ctx.prompt.id],
-				Lead: [l.id],
+				[link.relation]: [link.id],
 				...(dependsOn?.length ? { "Depends on": dependsOn } : {})
 			},
 			"Name"

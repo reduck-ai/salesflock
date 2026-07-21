@@ -18,7 +18,9 @@ import {
 import { getStore } from "../../src/stores/index.js";
 import { createDecider } from "../../src/decide.js";
 import { renderEvidence } from "../../src/linkedin/evidence.js";
-import { projectInput } from "../../src/linkedin/project.js";
+import { projectInput } from "../../src/project.js";
+import type { Subject, EntityLink } from "../../src/decide.js";
+import type { PromptSpec } from "../../src/stores/index.js";
 import { classify, disposition } from "./vendors.js";
 import { stringify } from "yaml";
 import config from "./config.js";
@@ -27,7 +29,26 @@ import type { Leads } from "./schema/Leads.js";
 import type { Sourcing } from "./schema/Sourcing.js";
 
 const store = getStore(config.destination);
-const decider = createDecider({ config, store, renderEvidence, projectInput });
+
+// This agent's entity bridge (its own wiring, not the engine's): the subject is a Person, read by
+// the canonical LinkedIn URL; the Decision binds to a Lead upserted on that same URL and advanced
+// to the prompt's pending gate (unless the decision is a held DAG dependent).
+const resolveSubject = async (publicId: string): Promise<Subject> => {
+	const person = await store.read(config.models.People, "LinkedIn URL", profileUrl(publicId));
+	return { key: publicId, name: String(person.fields.Name ?? publicId), fields: person.fields, ref: person.id };
+};
+const linkEntity = async (subject: Subject, spec: PromptSpec, { dependsOn }: { dependsOn?: string[] }): Promise<EntityLink> => {
+	const lead = {
+		Name: subject.name,
+		...(subject.ref ? { Person: [subject.ref] } : {}),
+		"LinkedIn URL": profileUrl(subject.key),
+		...(dependsOn?.length ? {} : { Status: spec.pending })
+	};
+	const l = await store.upsert(config.models.Leads, lead, "LinkedIn URL");
+	return { relation: "Lead", id: l.id };
+};
+
+const decider = createDecider({ config, store, renderEvidence, projectInput, resolveSubject, linkEntity });
 
 // The funnel's forward order. Each stage no-ops if the lead already sits at or past the stage's own
 // target, so a re-run never drags it backward; "Not qualified" is the terminal miss, off the ladder.
@@ -86,9 +107,9 @@ export const tools = {
 
 	// pre-qualify — the deterministic gate. No-ops on a settled lead: already advanced past pre-qualify
 	// (someone enriched it) or terminally "Not qualified". Otherwise ONE cheap run (experience only),
-	// stored on the Person, then
-	// `classify`: was a senior PM at an RPA vendor and has left? PASS ⇒ Lead "To enrich"; FAIL ⇒ Lead
-	// "Not qualified" (funnel stops — the slow feeds and the LLM never run).
+	// stored on the Person, then `classify`: was a senior PM at an RPA vendor and has left? PASS ⇒ Lead
+	// "To enrich"; data-backed MISS ⇒ Lead "Not qualified" (funnel stops — slow feeds and LLM never run);
+	// INSUFFICIENT DATA (empty/corrupt scrape) ⇒ left at "To pre-qualify" to retry, never eliminated.
 	preQualify: async (profile: string) => {
 		const publicId = publicIdOf(profile);
 		const u = profileUrl(publicId);
@@ -108,11 +129,16 @@ export const tools = {
 				: undefined
 		};
 		const p = await store.upsert(config.models.People, person, "LinkedIn URL");
-		const lead: Leads = { Name: name, Person: [p.id], "LinkedIn URL": u, Status: pq.pass ? "To enrich" : "Not qualified" };
+		// Advance on a pass, eliminate on a data-backed miss, and — crucially — leave insufficient-data
+		// leads AT "To pre-qualify" (no Status write) so a corrupt/empty scrape defers to a retry rather
+		// than a false "Not qualified": we only eliminate people we have the data to eliminate.
+		const advance = pq.pass ? "To enrich" : pq.eliminate ? "Not qualified" : null;
+		const lead: Leads = { Name: name, Person: [p.id], "LinkedIn URL": u, ...(advance ? { Status: advance } : {}) };
 		const l = await store.upsert(config.models.Leads, lead, "LinkedIn URL");
 		// A rejection is terminal (the monotonic guard never re-runs pre-qualify on it), so this
-		// records the reason exactly once — no duplicate comments on re-run.
-		if (!pq.pass) await store.comment(l.id, disposition(pq));
+		// records the reason exactly once — no duplicate comments on re-run. Insufficient-data is not
+		// terminal, so it is never commented (a retry would duplicate it).
+		if (pq.eliminate) await store.comment(l.id, disposition(pq));
 		return { publicId, name, ...pq, person: p.url, lead: l.url };
 	},
 

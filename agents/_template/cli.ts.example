@@ -1,0 +1,45 @@
+#!/usr/bin/env node
+// Copy to cli.ts. The tools as CLI subcommands — JSON on stdout so the agent reads each result.
+// The canonical funnel: search → enrich → qualify (→ engage), plus list/show for the review queue.
+// Register the binary in package.json `bin`: "<binary>": "./dist/agents/<id>/cli.js".
+
+import "../../src/env.js";
+import { Command } from "commander";
+import { renderError } from "../../src/errors.js";
+import { tools } from "./tools.js";
+
+const out = (v: unknown) => console.log(JSON.stringify(v, null, 2));
+
+const program = new Command()
+	.name("<binary>")
+	.description("<one line: what this agent does>");
+
+program
+	.command("search")
+	.argument("<query>", "the source query")
+	.option("--n <count>", "max results", parseInt)
+	.description("Discover candidates via the source (one run); write entity stubs + Sourcing + new pipeline rows.")
+	.action(async (query, { n }) => out(await tools.search(query, n)));
+
+program
+	.command("enrich")
+	.argument("<handle>", "canonical URL or bare id")
+	.description("Assemble the full entity into its row; the pipeline row advances.")
+	.action(async (handle) => out(await tools.enrich(handle)));
+
+// program
+// 	.command("qualify")
+// 	.argument("<handle>", "canonical URL or bare id (must be enriched)")
+// 	.option("--show", "print the judgment context (contract + frozen evidence); writes nothing")
+// 	.description("Judge against the contract (LLM); the entity moves to the human gate.")
+// 	.action(async (handle, { show }) =>
+// 		out(show ? await tools.context("qualify", handle) : await tools.qualify(handle))
+// 	);
+
+// program.command("list").description("Decisions awaiting a human verdict.").action(async () => out(await tools.list()));
+// program.command("show").argument("<decision>", "Decision id / Notion URL / app URL").action(async (d) => out(await tools.show(d)));
+
+program.parseAsync().catch((e: unknown) => {
+	console.error(renderError(e));
+	process.exit(1);
+});

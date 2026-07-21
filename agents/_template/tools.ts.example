@@ -1,0 +1,54 @@
+// Copy to tools.ts. The agent-specific wiring: the record mappings (search/enrich) that do what
+// `reduck run` alone can't — fetch a source entity and persist it — plus the decider bound to this
+// agent's config. The generic judgment engine (judge → persist one Decision) lives in src/decide.ts;
+// single base scripts the agent runs with `reduck run reduck/<host>/<slug>` directly, no wrapper.
+//
+// One identity key throughout (the source's canonical URL). Every entity + pipeline row upserts on
+// it, so a re-run converges instead of duplicating; the funnel is monotonic (an earlier stage
+// no-ops once the entity has advanced past its target).
+
+import { getStore } from "../../src/stores/index.js";
+import { createDecider } from "../../src/decide.js";
+import config from "./config.js";
+
+// TODO(source seam): provide the source's client + renderers.
+//   - src/clients/<source>/  — compose the reduck scripts into records (cf. src/clients/lk)
+//   - src/<source>/evidence  — render an entity as the judge's Evidence (cf. src/linkedin/evidence)
+//   - projectInput           — src/linkedin/project.ts is generic (schema projection); reuse it
+// NOTE: src/decide.ts is LinkedIn-coupled today (keys People on "LinkedIn URL", builds
+// linkedin.com/in/<id>). A non-LinkedIn source must first lift that identity resolution into a
+// seam — see agents/_template/AGENT.md "Source seam".
+// import { renderEvidence } from "../../src/<source>/evidence.js";
+// import { projectInput } from "../../src/linkedin/project.js";
+// import { search as srcSearch, getEntity, idOf, entityUrl } from "../../src/clients/<source>/index.js";
+// import type { People } from "./schema/People.js";
+// import type { Leads } from "./schema/Leads.js";
+
+const store = getStore(config.destination);
+// const decider = createDecider({ config, store, renderEvidence, projectInput });
+
+export const tools = {
+	// search — discover candidates via one source run. Per hit: an entity row (idempotent on the
+	// canonical URL) and, only for a NEW one, a pipeline row at the funnel start. Then ONE Sourcing
+	// row for the run (append-only provenance), linking what it yielded.
+	search: async (_query: string, _n?: number) => {
+		throw new Error("TODO: wire the source's search + upsert");
+	},
+
+	// enrich — assemble the full entity (one or more source runs), fill the row, advance the pipeline.
+	enrich: async (_handle: string) => {
+		throw new Error("TODO: wire the source's fetch + upsert");
+	}
+
+	// qualify — one decide against the qualification contract; the entity moves to the human gate.
+	// qualify: (handle: string) => decider.decide("qualify", idOf(handle)),
+
+	// context — the read half of a decision (contract + frozen evidence), for a manual judge.
+	// context: (key: string, handle: string) => decider.context(key, idOf(handle)),
+
+	// list — the decisions awaiting review (the queue).
+	// list: () => decider.list(),
+
+	// show — one Decision by the shared id: the judge's judgment plus, once ruled, the review diff.
+	// show: (h: string) => decider.showDecision(h)
+};

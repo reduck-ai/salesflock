@@ -1,8 +1,9 @@
 <script lang="ts">
 	// One evidenced judgment, read like a chat: the evidence is the document (one column,
 	// window scroll), and the dock — the single interaction surface, styled like a composer —
-	// floats at the bottom in two zones: LEARNING (the claims, each with one dot per proof,
-	// annotatable) first, then OUTPUT (the agent's proposal, editable within its Prompt schema).
+	// floats at the bottom in two zones: PROPOSAL (the agent's proposal, headed by the Prompt's
+	// framing, editable within its schema) first, then LEARNING (the claims that justify it, each
+	// with one dot per proof, annotatable) — you decide, then read the reasoning.
 	// The committed output IS the decision — one Confirm; there is no Reject (disagreeing is
 	// editing the output). Every quote is highlighted in the evidence at all times, stance-
 	// coloured and subtle, with its claim pinned in the right margin like a doc comment. One
@@ -236,6 +237,11 @@
 	export function confirm() {
 		if (!menu) commit();
 	}
+	// ⌘E toggle the note field — driven page-level (beside ⌘S/⌘⏎) so it fires even while typing.
+	// The field auto-focuses on open via its own @attach.
+	export function note() {
+		noting = !noting;
+	}
 
 	// the selection menu opens on mouseup over a selection inside the evidence; the quote is
 	// minted right away from the selection's POSITION — its offset in the evidence, disambiguated
@@ -348,7 +354,7 @@
 		<div class="meta">
 			<span>{pos} / {total}</span>
 			<span class="hint">
-				<kbd>←</kbd><kbd>→</kbd> navigate · <kbd>Tab</kbd> proof · <kbd>⌘⏎</kbd> confirm
+				<kbd>←</kbd><kbd>→</kbd> navigate · <kbd>Tab</kbd> proof · <kbd>⌘E</kbd> note · <kbd>⌘⏎</kbd> confirm
 			</span>
 		</div>
 	</div>
@@ -480,7 +486,19 @@
 {/if}
 
 <div class="dock" bind:this={dockEl}>
-	<!-- LEARNING — the judge's reasoning, annotatable; first, so it reads before the decision -->
+	<!-- PROPOSAL — the agent's proposal, headed by the Prompt's framing, editable within its
+	     schema; committing it IS the decision. First, so you decide, then read the reasoning. -->
+	<div class="proposal">
+		{#if judgment.proposal}
+			<h2 class="proposal-head">{judgment.proposal}</h2>
+		{/if}
+		<OutputForm schema={judgment.outputSchema} bind:value={output} />
+		{#if outputError}
+			<p class="err">{outputError}</p>
+		{/if}
+	</div>
+
+	<!-- LEARNING — the judge's reasoning, annotatable; follows the proposal it justifies -->
 	<div class="why">
 		{#each statements as s, i (i)}
 			<div
@@ -533,14 +551,6 @@
 		{/each}
 	</div>
 
-	<!-- OUTPUT — the agent's proposal, editable within its schema; committing it IS the decision -->
-	<div class="output">
-		<OutputForm schema={judgment.outputSchema} bind:value={output} />
-		{#if outputError}
-			<p class="err">{outputError}</p>
-		{/if}
-	</div>
-
 	<div class="acts-wrap">
 		<div class="acts">
 			<button class="btn confirm" onclick={commit} disabled={!!outputError}>
@@ -549,24 +559,11 @@
 			<button
 				class="btn-note"
 				class:on={noting}
-				title="Add a note"
-				aria-label="Add a note"
+				title="Add a note (⌘E)"
 				aria-expanded={noting}
 				onclick={() => (noting = !noting)}
 			>
-				<svg
-					width="15"
-					height="15"
-					viewBox="0 0 24 24"
-					fill="none"
-					stroke="currentColor"
-					stroke-width="2"
-					stroke-linecap="round"
-					stroke-linejoin="round"
-					><path
-						d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"
-					/></svg
-				>
+				Note <kbd>⌘E</kbd>
 			</button>
 		</div>
 		{#if noting}
@@ -575,6 +572,7 @@
 				class="note"
 				placeholder="Optional note — why you (dis)agree"
 				{@attach (el) => el.focus()}
+				onkeydown={(e) => e.key === "Escape" && (noting = false)}
 			/>
 		{/if}
 	</div>
@@ -940,9 +938,27 @@
 		overflow: hidden;
 	}
 
-	/* the claims — LEARNING, first in the dock; one dot per proof, the cursor lives in the dots */
+	/* PROPOSAL — the dock's top zone: the Prompt's framing over the editable output */
+	.proposal {
+		padding: 14px 18px 12px;
+	}
+	/* the framing header — the card's title, in the dock's uppercase-mono label language but
+	   foregrounded so it reads as the heading, not a field label */
+	.proposal-head {
+		margin: 0 0 11px;
+		font-family: ui-monospace, monospace;
+		font-size: 11.5px;
+		font-weight: 600;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+		color: var(--foreground);
+	}
+
+	/* the claims — LEARNING, below the proposal they justify; one dot per proof, the cursor
+	   lives in the dots */
 	.why {
 		padding: 12px 10px 8px;
+		border-top: 1px solid var(--border);
 		max-height: 32vh;
 		overflow-y: auto;
 		display: flex;
@@ -1043,13 +1059,6 @@
 			0 0 0 3px #2563eb;
 	}
 
-	/* OUTPUT — the agent's proposal, editable within its schema; committing it IS the decision */
-	.output {
-		margin: 0 18px 12px;
-		padding-top: 10px;
-		border-top: 1px solid var(--border);
-	}
-
 	.acts-wrap {
 		border-top: 1px solid var(--border);
 		padding: 12px 14px;
@@ -1079,18 +1088,21 @@
 		display: flex;
 		gap: 10px;
 	}
-	/* the note toggle — small, beside Accept; the field unfolds below when asked for */
+	/* the note toggle — "Note" beside Confirm; the field unfolds below when asked for (⌘E) */
 	.btn-note {
 		flex: none;
-		width: 44px;
 		height: 44px;
+		padding: 0 14px;
 		border-radius: 12px;
 		border: 1px solid var(--input);
 		background: var(--card);
 		color: var(--muted-foreground);
 		cursor: pointer;
-		display: grid;
-		place-items: center;
+		display: inline-flex;
+		align-items: center;
+		gap: 7px;
+		font-size: 13.5px;
+		font-weight: 600;
 		transition:
 			color 0.15s ease,
 			background 0.15s ease;
@@ -1101,6 +1113,15 @@
 	.btn-note.on {
 		color: var(--foreground);
 		background: var(--accent);
+	}
+	.btn-note kbd {
+		font-family: ui-monospace, monospace;
+		font-size: 10.5px;
+		font-weight: 600;
+		padding: 2px 5px;
+		border-radius: 5px;
+		border: 1px solid var(--border);
+		color: var(--muted-foreground);
 	}
 	.btn {
 		flex: 1;
