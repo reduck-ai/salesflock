@@ -71,21 +71,32 @@ export const searchProfiles = async (
 	return { script: google.search, args, hits };
 };
 
-// get_profile — the profile calls threaded by publicId, assembled into one record. Core
-// identity is card + experience, fetched together and fails loud. The activity lens (posts,
-// comments — slow feeds) is best-effort, so a timeout yields empty instead of losing the
-// whole profile.
-export const getProfile = async (profile: string): Promise<Profile> => {
+// get_profile_experience alone — the cheap, fail-loud pull the deterministic pre-qualify gates on.
+// One run, no activity feeds: a funnel kills most leads here, before the slow feeds are ever fetched.
+export const getExperience = (profile: string): Promise<Experience> =>
+	run<Experience>(scripts.experience, { publicId: publicIdOf(profile), count: 50 });
+
+// The rest of the profile — card (identity, fails loud) + the activity lens (posts/comments,
+// best-effort) — WITHOUT experience. What `enrich` needs once pre-qualify has already stored it,
+// so experience is never pulled twice across the funnel.
+export const getProfileRest = async (
+	profile: string
+): Promise<{ publicId: string; card: Card; posts: Posts; comments: Comments }> => {
 	const publicId = publicIdOf(profile);
-	const [card, experience] = await Promise.all([
-		run<Card>(scripts.card, { publicId }),
-		run<Experience>(scripts.experience, { publicId, count: 50 })
-	]);
+	const card = await run<Card>(scripts.card, { publicId });
 	const [posts, comments] = await Promise.all([
 		tryRun<Posts>(scripts.posts, { publicId, count: 10 }, { posts: [] }),
 		tryRun<Comments>(scripts.comments, { publicId, count: 10 }, { comments: [] })
 	]);
-	return { publicId, card, experience, posts, comments };
+	return { publicId, card, posts, comments };
+};
+
+// get_profile — the full record, composed from the experience pull and the rest (card + activity),
+// each fetched in parallel. Core identity (card, experience) fails loud; the activity lens is
+// best-effort, so a timeout yields empty instead of losing the whole profile.
+export const getProfile = async (profile: string): Promise<Profile> => {
+	const [experience, rest] = await Promise.all([getExperience(profile), getProfileRest(profile)]);
+	return { publicId: rest.publicId, card: rest.card, experience, posts: rest.posts, comments: rest.comments };
 };
 
 // get_company_info — a single run (no composition), but the Lk client owns it so the

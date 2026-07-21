@@ -164,7 +164,14 @@ const locate = async (
 	const ds: DataSource = JSON.parse(await ntn(["api", `/v1/data_sources/${dsId}`]));
 	const key = ds.properties[keyProp];
 	if (!key) throw new Error(`notion: no key property "${keyProp}" on "${model}"`);
-	const filter = JSON.stringify({ property: keyProp, [key.type]: { equals: value } });
+	// A relation is keyed by "contains this one id" (Notion has no relation `equals`); every other
+	// writable type keys by equality. This lets a row be identified by the ENTITY it points at — a
+	// Lead by its Person — rather than a mutable label, so a rename updates the row instead of forking it.
+	const clause =
+		key.type === "relation"
+			? { relation: { contains: Array.isArray(value) ? value[0] : value } }
+			: { [key.type]: { equals: value } };
+	const filter = JSON.stringify({ property: keyProp, ...clause });
 	const { results } = JSON.parse(
 		await ntn(["datasources", "query", dsId, "--filter", filter, "--json"])
 	);

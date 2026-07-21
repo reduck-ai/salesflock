@@ -22,7 +22,7 @@ export default defineConfig({
 			// (first user: the Notion codec) — and the agent's config, the one map of
 			// decision kind → pipeline semantics (its store imports are type-only, so the
 			// app pulls in pure data). See APP.md → Deploy for the Vercel toggle.
-			alias: { $core: "../src", $agent: "../agents/linkedin-leads" }
+			alias: { $core: "../src", $agent: "../agents/former-rpa-pms" }
 		})
 	]
 });

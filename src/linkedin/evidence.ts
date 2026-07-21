@@ -1,11 +1,12 @@
-// The evidence seam — the ONE renderer, shared by the judge (tools.ts), the review app
-// ($agent/evidence), and the migration. A Decision freezes the lossless input MAP (the seed);
+// The evidence seam — the ONE renderer, shared by the judge (src/decide.ts), the review app
+// ($core/linkedin/evidence), and the migration. A Decision freezes the lossless input MAP (the seed);
 // presentation is derived from it here, so improving this renderer reflows every Decision on
 // read — no re-judge. Kept dependency-light on purpose (markdown + yaml only, no ajv) so the app
 // can import it without pulling projection machinery into its bundle; `projectInput` lives in
-// ./project.ts (judge/migration only).
+// ./project.ts (judge/migration only). Lives in src/linkedin/ because both LinkedIn agents
+// (linkedin-leads, former-rpa-pms) and the app render the same LinkedIn evidence.
 
-import { markdown } from "../../src/markdown.js";
+import { markdown } from "../markdown.js";
 import { renderActivity } from "./activity.js";
 
 // Per-field renderer: Activity mirrors LinkedIn's UI; everything else is generic Markdown.

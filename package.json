@@ -5,7 +5,8 @@
 	"type": "module",
 	"bin": {
 		"sflock": "./dist/src/cli.js",
-		"leads": "./dist/agents/linkedin-leads/cli.js"
+		"leads": "./dist/agents/linkedin-leads/cli.js",
+		"rpa": "./dist/agents/former-rpa-pms/cli.js"
 	},
 	"scripts": {
 		"build": "tsc"

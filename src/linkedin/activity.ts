@@ -10,7 +10,7 @@
 // the ones that matter, stay prefix-free).
 
 import { parse } from "yaml";
-import { markdown } from "../../src/markdown.js";
+import { markdown } from "../markdown.js";
 
 interface Post {
 	text?: string | null;
