@@ -41,6 +41,7 @@ const strict = (s: unknown): unknown => {
 // generate(prompt, schema) — the prompt in, the schema-shaped JSON out.
 export const generate = async <T>(prompt: string, schema: object): Promise<T> => {
 	if (provider === "google" && !process.env.GEMINI_API_KEY) throw new Error("set GEMINI_API_KEY");
+	log("llm", `${model.modelId} generate …`);
 	const t0 = Date.now();
 	const { object } = await generateObject({
 		model,
@@ -73,6 +74,7 @@ export const jsonTool = <I>(def: {
 // one-shot generateObject can't loop over tools; this is the same model, temperature 0, as a loop.
 export const agent = (prompt: string, tools: ToolSet, done: () => boolean, maxSteps = 10) => {
 	if (provider === "google" && !process.env.GEMINI_API_KEY) throw new Error("set GEMINI_API_KEY");
+	log("llm", `${model.modelId} …`);
 	const t0 = Date.now();
 	return generateText({
 		model,

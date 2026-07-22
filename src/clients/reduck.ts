@@ -38,9 +38,11 @@ export const run = <T = unknown>(addr: string, args: Args): Promise<T> =>
 	slot(async () => {
 		const pairs = Object.entries(args).map(([k, v]) => `${k}=${v}`);
 		const [cmd, ...pre] = reduckArgv();
+		// Log at the START — so a slow or hung run is visible immediately, not only once it returns —
+		// then again on completion with the run id (the handle into `read_run_trace`) and the elapsed.
+		// The args self-tag both lines, so concurrent runs stay paired across the interleaved output.
+		log("reduck", `${addr} ${pairs.join(" ")} …`);
 		const t0 = Date.now();
-		// `reduck run` prints the result as JSON on stdout, the run id + errors on stderr. Surface the
-		// run id — the handle into `read_run_trace` — with the elapsed; args self-tag concurrent runs.
 		const { stdout, stderr } = await exec(cmd, [...pre, "run", "--script", addr, ...pairs]);
 		const runId = stderr.match(/run_id:\s*(\S+)/)?.[1] ?? "?";
 		log("reduck", `${addr} ${pairs.join(" ")} → ${runId} (${Date.now() - t0}ms)`);
