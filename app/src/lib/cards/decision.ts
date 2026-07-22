@@ -8,7 +8,31 @@
 
 import type { Decision } from "$lib/server/notion";
 import { renderEvidence } from "$core/linkedin/evidence";
+import { hasFeedback, reviewOf } from "$core/review";
 import type { EvidencedJudgment, Quote, Statement } from "./types";
+
+// A list row — the cheap projection of a Decision (no `renderEvidence`, no Output/Input parse
+// beyond what the badge needs), so the list stays fast at any Past size. `verdict` is derived only
+// for a decided row: Accepted (committed ≡ judge's Output) → "Confirmed", Rejected → "Edited".
+export interface DecisionRow {
+	id: string;
+	name: string; // the Decision's title (the subject's name)
+	kind: string; // the Prompt Name — the badge + the per-Prompt filter/sort key
+	date: string; // created_time (ISO)
+	hasFeedback: boolean; // any human channel touched (note / reasoning edit / overturn), both states
+	verdict?: "Accepted" | "Rejected"; // past only — agreement, derived (never stored)
+}
+
+export const decisionToRow = (d: Decision): DecisionRow => ({
+	id: d.id,
+	name: d.title,
+	kind: d.promptName ?? "",
+	date: d.created,
+	hasFeedback: hasFeedback(d.fields),
+	verdict: d.fields["Final output"]
+		? (reviewOf(d.fields).human.verdict as "Accepted" | "Rejected")
+		: undefined
+});
 
 // quotes in order of appearance in the evidence, so a cursor stepping through them moves
 // strictly down the page.
@@ -39,6 +63,7 @@ export const decisionToJudgment = (d: Decision): EvidencedJudgment => {
 		output,
 		outputSchema: d.outputSchema,
 		proposal: d.proposal,
+		hasFeedback: hasFeedback(d.fields),
 		draft
 	};
 };

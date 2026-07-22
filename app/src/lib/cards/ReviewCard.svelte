@@ -17,6 +17,7 @@
 	// output; meaning is the caller's.
 	import Markdown from "$lib/components/Markdown.svelte";
 	import OutputForm from "./OutputForm.svelte";
+	import { Badge } from "$lib/components/ui/badge";
 	import { quoteAt, canonNormalize, quoteKey } from "$core/anchor";
 	import { schemaError } from "$core/output";
 	import type { EvidencedJudgment, Quote, Statement } from "./types";
@@ -352,7 +353,12 @@
 			<div class="fill" style={`width:${(pos / total) * 100}%`}></div>
 		</div>
 		<div class="meta">
-			<span>{pos} / {total}</span>
+			<span class="left">
+				{pos} / {total}
+				{#if judgment.hasFeedback}
+					<Badge variant="outline" class="fb">feedback</Badge>
+				{/if}
+			</span>
 			<span class="hint">
 				<kbd>←</kbd><kbd>→</kbd> navigate · <kbd>Tab</kbd> proof · <kbd>⌘E</kbd> note · <kbd>⌘⏎</kbd> confirm
 			</span>
@@ -612,6 +618,18 @@
 		font-size: 11.5px;
 		color: var(--muted-foreground);
 		margin-bottom: 14px;
+	}
+	.meta .left {
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+	}
+	/* the feedback marker — a subtle gold outline, the same "human touched this" language as .noted */
+	.meta :global(.fb) {
+		border-color: color-mix(in oklch, #d97706 55%, var(--border));
+		color: #d97706;
+		font-family: ui-monospace, monospace;
+		letter-spacing: 0.04em;
 	}
 	kbd {
 		border: 1px solid var(--border);

@@ -8,6 +8,7 @@ import { generateObject, generateText, jsonSchema, stepCountIs, tool, type ToolS
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock";
 import { fromNodeProviderChain } from "@aws-sdk/credential-providers";
+import { log } from "../log.js";
 
 const provider = process.env.LLM_PROVIDER ?? "google";
 
@@ -40,12 +41,14 @@ const strict = (s: unknown): unknown => {
 // generate(prompt, schema) — the prompt in, the schema-shaped JSON out.
 export const generate = async <T>(prompt: string, schema: object): Promise<T> => {
 	if (provider === "google" && !process.env.GEMINI_API_KEY) throw new Error("set GEMINI_API_KEY");
+	const t0 = Date.now();
 	const { object } = await generateObject({
 		model,
 		schema: jsonSchema<T>(strict(schema) as never),
 		prompt,
 		temperature: 0
 	});
+	log("llm", `${model.modelId} generate done (${Date.now() - t0}ms)`);
 	return object;
 };
 
@@ -70,34 +73,22 @@ export const jsonTool = <I>(def: {
 // one-shot generateObject can't loop over tools; this is the same model, temperature 0, as a loop.
 export const agent = (prompt: string, tools: ToolSet, done: () => boolean, maxSteps = 10) => {
 	if (provider === "google" && !process.env.GEMINI_API_KEY) throw new Error("set GEMINI_API_KEY");
-	return generateText({ model, tools, prompt, temperature: 0, stopWhen: [done, stepCountIs(maxSteps)] });
-};
-
-// runStats(result, ms) — domain-agnostic observability for a tool-loop result: wall-clock, step
-// count, total tokens, and per-tool tallies of how often the model called each tool and how often a
-// tool's own result said `{ok:false}`. The caller names the tools it cares about (this seam stays
-// free of any one agent's vocabulary). Structural type so we don't drag in the generic result type.
-export interface RunStats {
-	ms: number;
-	steps: number;
-	tokens: number;
-	calls: Record<string, number>; // toolName → times the model called it
-	rejects: Record<string, number>; // toolName → times its result was { ok: false }
-}
-type ToolLoopResult = {
-	steps: { toolCalls: { toolName: string }[]; toolResults: { toolName: string; output: unknown }[] }[];
-	totalUsage: { totalTokens?: number };
-};
-export const runStats = (result: ToolLoopResult, ms: number): RunStats => {
-	const tally = (xs: { toolName: string }[]) =>
-		xs.reduce<Record<string, number>>((m, x) => ((m[x.toolName] = (m[x.toolName] ?? 0) + 1), m), {});
-	return {
-		ms,
-		steps: result.steps.length,
-		tokens: result.totalUsage.totalTokens ?? 0,
-		calls: tally(result.steps.flatMap((s) => s.toolCalls)),
-		rejects: tally(
-			result.steps.flatMap((s) => s.toolResults).filter((r) => (r.output as { ok?: boolean }).ok === false)
+	const t0 = Date.now();
+	return generateText({
+		model,
+		tools,
+		prompt,
+		temperature: 0,
+		stopWhen: [done, stepCountIs(maxSteps)],
+		onStepFinish: (s) =>
+			log("llm", `${model.modelId} step: ${s.toolCalls.map((c) => c.toolName).join(", ") || "—"}`)
+	}).then(
+		(r) => (
+			log(
+				"llm",
+				`${model.modelId} done: ${r.steps.length} steps, ${r.totalUsage.totalTokens ?? 0} tok, ${Date.now() - t0}ms`
+			),
+			r
 		)
-	};
+	);
 };

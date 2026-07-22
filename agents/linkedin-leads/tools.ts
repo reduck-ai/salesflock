@@ -141,14 +141,8 @@ export const tools = {
 	},
 
 	// context — the read half of a decision (the contract + frozen evidence), for a manual judge.
+	// (Reviewing Decisions — list/show — is the agent-agnostic `sflock decisions` surface.)
 	context: (key: string, profile: string) => decider.context(key, publicIdOf(profile)),
-
-	// list — the decisions awaiting review (the queue).
-	list: () => decider.list(),
-
-	// show — one Decision by the shared id (id / Notion URL / app URL): the judge's judgment plus,
-	// once ruled, the review diff.
-	show: (handle: string) => decider.showDecision(handle),
 
 	// qualify — one decide against the qualification contract: does this person fit the ICP?
 	qualify: (profile: string) => decider.decide("qualify", publicIdOf(profile)),

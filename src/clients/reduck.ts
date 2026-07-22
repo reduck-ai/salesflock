@@ -10,6 +10,7 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { parse } from "yaml";
 import { gate } from "../concurrency.js";
+import { log } from "../log.js";
 
 const exec = promisify(execFile);
 
@@ -37,8 +38,12 @@ export const run = <T = unknown>(addr: string, args: Args): Promise<T> =>
 	slot(async () => {
 		const pairs = Object.entries(args).map(([k, v]) => `${k}=${v}`);
 		const [cmd, ...pre] = reduckArgv();
-		// `reduck run` prints the result as JSON on stdout (run id + errors on stderr).
-		const { stdout } = await exec(cmd, [...pre, "run", "--script", addr, ...pairs]);
+		const t0 = Date.now();
+		// `reduck run` prints the result as JSON on stdout, the run id + errors on stderr. Surface the
+		// run id — the handle into `read_run_trace` — with the elapsed; args self-tag concurrent runs.
+		const { stdout, stderr } = await exec(cmd, [...pre, "run", "--script", addr, ...pairs]);
+		const runId = stderr.match(/run_id:\s*(\S+)/)?.[1] ?? "?";
+		log("reduck", `${addr} ${pairs.join(" ")} → ${runId} (${Date.now() - t0}ms)`);
 		return JSON.parse(stdout) as T;
 	});
 

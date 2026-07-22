@@ -11,7 +11,7 @@
 import { getStore } from "./stores/index.js";
 import type { AgentConfig, PromptSpec, Store } from "./stores/index.js";
 import { idOf } from "./stores/notion.js";
-import { reviewOf } from "./review.js";
+import { reviewOf, feedbackOf } from "./review.js";
 import * as llm from "./ai/llm.js";
 import { collectQuotes, findQuotes, inRange, quoteKey, type Statement } from "./anchor.js";
 import { schemaError } from "./output.js";
@@ -88,22 +88,22 @@ export interface EntityLink {
 	id: string;
 }
 
-export interface DeciderDeps {
+// createReviewer(deps) — the READ side of the review surface, needing NO agent entity bridge: list
+// decisions by review state (each flagged whether it carries human feedback) and show one decision
+// (the judge's judgment, the human diff once ruled, and the feedback snapshot). createDecider builds
+// on this and adds the bridge-coupled judging; the agent-agnostic `sflock decisions` CLI uses it directly.
+export interface ReviewerDeps {
 	config: AgentConfig;
 	renderEvidence: (input: Record<string, string>) => string;
-	projectInput: (
-		fields: Record<string, string | number | boolean>,
-		inputSchema: Record<string, unknown>
-	) => Record<string, string>;
-	// The agent-specific bridge (what decide.ts used to hardcode to LinkedIn): fetch the subject's
-	// evidence, and bind/advance its pipeline row. The two seams alongside renderEvidence/projectInput.
-	resolveSubject: (key: string) => Promise<Subject>;
-	linkEntity: (subject: Subject, spec: PromptSpec, opts: { dependsOn?: string[] }) => Promise<EntityLink>;
 	store?: Store; // defaults to the config's destination store
 }
 
-// createDecider(deps) — the decision tools bound to one agent's store + config + LinkedIn renderers.
-export const createDecider = ({ config, renderEvidence, projectInput, resolveSubject, linkEntity, store: given }: DeciderDeps) => {
+const SCOPE = {
+	pending: { property: "Final output", rich_text: { is_empty: true } },
+	reviewed: { property: "Final output", rich_text: { is_not_empty: true } }
+} as const;
+
+export const createReviewer = ({ config, renderEvidence, store: given }: ReviewerDeps) => {
 	const store = given ?? getStore(config.destination);
 
 	// The review app's base URL (the deployed Decisions surface), if configured. Turns a Decision
@@ -118,8 +118,8 @@ export const createDecider = ({ config, renderEvidence, projectInput, resolveSub
 
 	// showDecision(handle) — one Decision by the shared id, shaped for reading: the judge's judgment
 	// always (Output, Reasoning statements, and the Evidence RE-RENDERED from the frozen Input the way
-	// the judge and the app render it), plus the human review diff once ruled. The `show` tool and the
-	// few-shot example builder share this exact shaping.
+	// the judge and the app render it), the feedback snapshot (the human delta, in any state), and the
+	// full review diff once ruled. The `show` tool and the few-shot example builder share this shaping.
 	const showDecision = async (handle: string) => {
 		const { id, fields } = await store.get(idOf(handle));
 		const name = String(fields.Name ?? id);
@@ -133,8 +133,45 @@ export const createDecider = ({ config, renderEvidence, projectInput, resolveSub
 			open: appLink(id)
 		};
 		const review = fields["Final output"] ? reviewOf(fields) : undefined;
-		return { ...base, review };
+		return { ...base, feedback: feedbackOf(fields), review };
 	};
+
+	// list(scope) — decisions by review state, each flagged with the human delta it carries (free —
+	// `query` returns the fields, and one feedbackOf per row yields both flags): `hasFeedback` (any
+	// channel touched) and the stricter `overturned` (the human changed the committed Output — a
+	// disagreement, not just a note). "Final output" set = reviewed (the committed output IS the
+	// decision); pending is the queue, all is both (a union — every Decision has the property, so
+	// is_empty ∪ is_not_empty is exhaustive).
+	const list = async (scope: "pending" | "reviewed" | "all" = "pending") => {
+		const filter = scope === "all" ? { or: [SCOPE.pending, SCOPE.reviewed] } : SCOPE[scope];
+		const rows = await store.query(config.models.Decisions, filter);
+		return rows.map((r) => {
+			const fb = feedbackOf(r.fields);
+			const name = String(r.fields.Name ?? r.id);
+			return { id: r.id, name, kind: kindOf(name), hasFeedback: fb !== null, overturned: !!fb?.outputChange, open: appLink(r.id) };
+		});
+	};
+
+	return { store, appLink, kindOf, showDecision, list };
+};
+
+export interface DeciderDeps extends ReviewerDeps {
+	projectInput: (
+		fields: Record<string, string | number | boolean>,
+		inputSchema: Record<string, unknown>
+	) => Record<string, string>;
+	// The agent-specific bridge (what decide.ts used to hardcode to LinkedIn): fetch the subject's
+	// evidence, and bind/advance its pipeline row. The two seams alongside renderEvidence/projectInput.
+	resolveSubject: (key: string) => Promise<Subject>;
+	linkEntity: (subject: Subject, spec: PromptSpec, opts: { dependsOn?: string[] }) => Promise<EntityLink>;
+}
+
+// createDecider(deps) — the decision tools bound to one agent's store + config + LinkedIn renderers:
+// the read side (createReviewer) plus the bridge-coupled judging (decide/context/judgmentContext).
+export const createDecider = (deps: DeciderDeps) => {
+	const { config, renderEvidence, projectInput, resolveSubject, linkEntity } = deps;
+	const reviewer = createReviewer(deps);
+	const { store, appLink, kindOf, showDecision } = reviewer;
 
 	// examplesFor(key, excludeName) — the few-shot block: the Decisions a human flagged
 	// `Include as example` (and committed), of this prompt kind, minus the person being judged.
@@ -212,7 +249,6 @@ export const createDecider = ({ config, renderEvidence, projectInput, resolveSub
 
 		let output: Record<string, unknown> | undefined;
 		let statements: Statement[] | undefined;
-		let obs: Record<string, number> | undefined;
 		{
 			// The two-tool loop. `search_quotes` is the ONLY source of offsets: it canon-matches cited
 			// text and returns every occurrence as a {start,end} span with context; `submit_claims`
@@ -271,11 +307,8 @@ export const createDecider = ({ config, renderEvidence, projectInput, resolveSub
 			const prompt = [ctx.system, ctx.instruction, ctx.examples, `## Evidence\n\n${ctx.evidence}`]
 				.filter(Boolean)
 				.join("\n\n");
-			const t0 = Date.now();
-			const result = await llm.agent(prompt, { search_quotes, submit_claims }, () => submitted !== undefined);
+			await llm.agent(prompt, { search_quotes, submit_claims }, () => submitted !== undefined);
 			if (!submitted) throw new Error("judge did not submit a valid decision within the step budget");
-			const s = llm.runStats(result, Date.now() - t0);
-			obs = { ms: s.ms, steps: s.steps, tokens: s.tokens, searches: s.calls.search_quotes ?? 0, rejected: s.rejects.submit_claims ?? 0 };
 			({ output, statements } = submitted);
 		}
 
@@ -300,8 +333,7 @@ export const createDecider = ({ config, renderEvidence, projectInput, resolveSub
 			output,
 			claims: statements!.map((s) => s.claim),
 			where: d.url,
-			open: appLink(d.id),
-			...(obs ? { obs } : {})
+			open: appLink(d.id)
 		};
 	};
 
@@ -312,18 +344,5 @@ export const createDecider = ({ config, renderEvidence, projectInput, resolveSub
 		return { system, instruction, examples, evidence, responseSchema };
 	};
 
-	// list — the decisions awaiting review (the queue). The committed output IS the decision, so an
-	// unset "Final output" is the pending marker. One row each: the shared id, its Name, kind, link.
-	const list = async () => {
-		const rows = await store.query(config.models.Decisions, {
-			property: "Final output",
-			rich_text: { is_empty: true }
-		});
-		return rows.map((r) => {
-			const name = String(r.fields.Name ?? r.id);
-			return { id: r.id, name, kind: kindOf(name), open: appLink(r.id) };
-		});
-	};
-
-	return { store, decide, context, list, showDecision, judgmentContext, appLink, kindOf };
+	return { ...reviewer, decide, context, judgmentContext };
 };

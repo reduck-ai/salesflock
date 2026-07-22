@@ -175,6 +175,7 @@ export const tools = {
 	qualify: (profile: string) => decider.decide("qualify", publicIdOf(profile)),
 
 	// context — the read half of the judgment (contract + frozen evidence), for a manual judge.
+	// (Reviewing Decisions — list/show — is the agent-agnostic `sflock decisions` surface.)
 	context: (profile: string) => decider.context("qualify", publicIdOf(profile)),
 
 	// check-lead-stages — the follow-up worklist: everyone whose Lead sits at `status`, each with the
@@ -182,11 +183,5 @@ export const tools = {
 	checkLeadStages: async (status: string) => {
 		const rows = await store.query(config.models.Leads, { property: "Status", select: { equals: status } });
 		return rows.map((r) => ({ name: r.fields.Name, url: r.fields["LinkedIn URL"] }));
-	},
-
-	// list — the decisions awaiting a human verdict (the review queue).
-	list: () => decider.list(),
-
-	// show — one Decision by the shared id: the judge's judgment plus, once ruled, the review diff.
-	show: (handle: string) => decider.showDecision(handle)
+	}
 };

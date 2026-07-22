@@ -1,12 +1,17 @@
 #!/usr/bin/env node
-// sflock — the setup CLI. Compiles contracts (Ground Truth) into the TS types an agent uses.
-//   sflock pull --agent <id>     an agent's destination models → agents/<id>/schema/<Model>.ts
-//   sflock bind --client <name>  a reduck source's manifest     → src/clients/<name>/schema.ts
+// sflock — the operator CLI: setup (compile contracts → TS types) plus read-only review of an
+// agent's Decisions. Both are agent-agnostic — parameterized by --agent — and neither mutates the
+// pipeline (that is the per-agent funnel binary's job).
+//   sflock pull --agent <id>            an agent's destination models → agents/<id>/schema/<Model>.ts
+//   sflock bind --client <name>         a reduck source's manifest     → src/clients/<name>/schema.ts
+//   sflock decisions list --agent <id>  the review queue (or --reviewed/--all), each flagged hasFeedback/overturned
+//   sflock decisions show --agent <id> <decision> [--feedback]   one decision, or just its feedback
 //
 // pull reads the agent's config.ts (destination + model→table map) and, per model, asks the
 // store to `describe` it (a JSON Schema) then compiles that to a TS type — no intermediate
 // .json on disk, and the file is named by the model key. bind reads a source's script
-// manifest and compiles each script's output schema. sflock holds no per-store semantics.
+// manifest and compiles each script's output schema. decisions reads the shared CRM through
+// createReviewer (no entity bridge). sflock holds no per-store semantics.
 
 import "./env.js";
 import { Command } from "commander";
@@ -16,6 +21,9 @@ import { compile } from "json-schema-to-typescript";
 import { bind } from "./scripts.js";
 import { renderError } from "./errors.js";
 import { STORES, type AgentConfig } from "./stores/index.js";
+import { createReviewer } from "./decide.js";
+import { renderEvidence } from "./linkedin/evidence.js";
+import { renderFeedback } from "./review.js";
 
 // Writable-property count of a described model (a JSON Schema's `properties`) — for the
 // progress line. Every store now emits JSON Schema, so there is one shape to read.
@@ -24,19 +32,24 @@ const propCount = (described: unknown): number =>
 
 const program = new Command()
 	.name("sflock")
-	.description("Setup CLI — compile destination/source contracts into the TS types an agent uses.");
+	.description("Operator CLI — compile contracts into TS types, and inspect an agent's Decisions.");
+
+// An agent's config.ts by id — the one loader both `pull` and `decisions` use to resolve --agent.
+const loadConfig = async (agent: string): Promise<AgentConfig> => {
+	const agentDir = join("agents", agent);
+	const ok = await stat(agentDir).then((s) => s.isDirectory()).catch(() => false);
+	if (!ok) program.error(`no agent "${agent}" — ${agentDir}/ does not exist.`);
+	return ((await import(`../agents/${agent}/config.js`)) as { default: AgentConfig }).default;
+};
 
 program
 	.command("pull")
 	.description("Compile each of an agent's models → agents/<agent>/schema/<Model>.ts (TS type)")
 	.requiredOption("--agent <id>", "agent under agents/ whose config.ts names the destination + models")
 	.action(async ({ agent }: { agent: string }) => {
-		const agentDir = join("agents", agent);
-		const ok = await stat(agentDir).then((s) => s.isDirectory()).catch(() => false);
-		if (!ok) program.error(`no agent "${agent}" — ${agentDir}/ does not exist.`);
-		const { default: config } = (await import(`../agents/${agent}/config.js`)) as { default: AgentConfig };
+		const config = await loadConfig(agent);
 		const store = STORES[config.destination];
-		const dir = join(agentDir, "schema");
+		const dir = join("agents", agent, "schema");
 		await mkdir(dir, { recursive: true });
 		for (const [name, model] of Object.entries(config.models)) {
 			const described = await store.describe(model);
@@ -59,6 +72,35 @@ program
 		const path = join("src", "clients", client, "schema.ts");
 		await writeFile(path, await bind(scripts));
 		console.error(`${client}: ${Object.keys(scripts).length} scripts → ${path}`);
+	});
+
+// decisions — the agent-agnostic review surface, over createReviewer (read-only, no entity bridge).
+// JSON on stdout so an agent reads each result; --agent picks whose Decisions table to read.
+const decisions = program.command("decisions").description("Inspect an agent's Decisions (read-only).");
+
+decisions
+	.command("list")
+	.description("List decisions — the pending queue by default — each flagged hasFeedback (any human edit) and overturned (the human changed the committed output).")
+	.requiredOption("--agent <id>", "agent under agents/ whose config.ts names the Decisions table")
+	.option("--reviewed", "only reviewed decisions (Final output set)")
+	.option("--all", "both pending and reviewed")
+	.action(async ({ agent, reviewed, all }: { agent: string; reviewed?: boolean; all?: boolean }) => {
+		const reviewer = createReviewer({ config: await loadConfig(agent), renderEvidence });
+		const scope = all ? "all" : reviewed ? "reviewed" : "pending";
+		console.log(JSON.stringify(await reviewer.list(scope), null, 2));
+	});
+
+decisions
+	.command("show")
+	.argument("<decision>", "Decision id, Notion URL, or app URL")
+	.description("One decision (judge's judgment + human diff), or with --feedback just the human feedback snapshot.")
+	.requiredOption("--agent <id>", "agent under agents/ whose config.ts names the Decisions table")
+	.option("--feedback", "print only the human feedback snapshot (LLM-oriented markdown)")
+	.action(async (decision: string, { agent, feedback }: { agent: string; feedback?: boolean }) => {
+		const reviewer = createReviewer({ config: await loadConfig(agent), renderEvidence });
+		const shown = await reviewer.showDecision(decision);
+		if (feedback) return void console.log(shown.feedback ? renderFeedback(shown.feedback) : "(no human feedback)");
+		console.log(JSON.stringify(shown, null, 2));
 	});
 
 program.parseAsync().catch((e: unknown) => {

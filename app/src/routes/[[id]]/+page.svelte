@@ -1,63 +1,114 @@
 <script lang="ts">
-	import { replaceState } from "$app/navigation";
+	import { fly } from "svelte/transition";
+	import { goto, invalidate, preloadData } from "$app/navigation";
+	import { page, navigating } from "$app/state";
 	import { Button } from "$lib/components/ui/button/index.js";
-	import JudgmentStack from "$lib/cards/JudgmentStack.svelte";
-	import type { Judgment } from "$lib/cards/types";
+	import DecisionList from "$lib/cards/DecisionList.svelte";
+	import ReviewCard from "$lib/cards/ReviewCard.svelte";
+	import CardSkeleton from "$lib/cards/CardSkeleton.svelte";
+	import Toast from "$lib/cards/Toast.svelte";
+	import { session, pushReceipt, fireToast, clearToast, clearSession } from "$lib/cards/session.svelte";
+	import { dropCard } from "$lib/cards/cache";
+	import { filterQuery } from "$lib/filter";
+	import type { Statement } from "$lib/cards/types";
 
 	let { data } = $props();
 
-	let stack = $state<JudgmentStack>();
+	let card = $state<ReviewCard>();
 	let menuOpen = $state(false);
 	let userEl = $state<HTMLElement>();
 
-	// Persist a judgment to its source record; fire-and-forget so the deck keeps its snappy feel.
-	// A judgment with no `committedOutput` is a Save — the write skips the decision + pipeline
-	// move server-side. Otherwise the committed output IS the decision and travels as-is (its
-	// schema is the Prompt's). Edited statements travel as finalReasoning.
-	const judge = (j: Judgment) => {
-		// store the human's reasoning as-is: quotes are already [start,end) ranges into the
-		// evidence (a human quote carries no intended_text — the position IS the span).
-		const finalReasoning = j.reasoning ? JSON.stringify(j.reasoning) : undefined;
+	const dashless = (id: string) => id.replace(/-/g, "");
+
+	// the URL is the cursor: `page.params.id` is the current card, `data.rows` (from the layout, the
+	// per-filter rail) its neighbours. A card outside the filtered set → index -1 (no neighbours).
+	const currentId = $derived(page.params.id ?? null);
+	const index = $derived(currentId ? data.rows.findIndex((r) => dashless(r.id) === dashless(currentId)) : -1);
+	const href = (i: number) => (data.rows[i] ? `/${dashless(data.rows[i].id)}${filterQuery(data.filter)}` : undefined);
+	const prev = $derived(index > 0 ? href(index - 1) : undefined);
+	const next = $derived(index >= 0 ? href(index + 1) : undefined);
+
+	// the one slow op is loading a card — show a skeleton in the card slot while navigating TO a
+	// different card (the rail/header persist since layout data doesn't reload). Settled state:
+	// data.current is the card for this URL.
+	const loadingCard = $derived(!!navigating.to?.params?.id && navigating.to.params.id !== currentId);
+
+	// leaving the deck for the list ends the session scrollback — a fresh deck visit starts clean.
+	$effect(() => {
+		if (!currentId) clearSession();
+	});
+
+	const nav = (dir: -1 | 1) => {
+		const to = dir === -1 ? prev : next;
+		if (to) goto(to);
+	};
+
+	// ReviewCard is the whole nav surface (it shows pos/total + the ←/→ hint and owns the keys); the
+	// page just turns onnav into a goto. Warm the neighbours the moment a card settles — no links to
+	// hover, so preload proactively — making a step instant without any duplicated nav chrome.
+	$effect(() => {
+		if (navigating.to) return;
+		if (next) preloadData(next);
+		if (prev) preloadData(prev);
+	});
+
+	// Persist a judgment (fire-and-forget, so the deck stays snappy) then advance. No committedOutput
+	// is a Save — the row stays put. Otherwise the committed output IS the decision: stamp a receipt,
+	// invalidate the rail (so the decided row leaves the review set), and move to the next card — or
+	// back to the list when this was the last one.
+	const judge = (
+		committedOutput: Record<string, unknown> | undefined,
+		feedback: string,
+		reasoning?: Statement[]
+	) => {
+		if (!data.current) return;
+		const j = data.current;
+		const finalReasoning = reasoning ? JSON.stringify(reasoning) : undefined;
 		fetch("/api/decide", {
 			method: "POST",
 			headers: { "content-type": "application/json" },
-			body: JSON.stringify({
-				id: j.id,
-				committedOutput: j.committedOutput,
-				feedback: j.feedback,
-				finalReasoning
-			})
+			body: JSON.stringify({ id: j.id, committedOutput, feedback, finalReasoning })
 		}).catch((e) => console.error("decide failed", e));
+		dropCard(j.id); // the card was written to — a re-view must refetch the persisted state
+
+		if (!committedOutput) {
+			fireToast("Saved");
+			return;
+		}
+		pushReceipt({
+			edited: JSON.stringify(committedOutput) !== JSON.stringify(j.output),
+			title: j.title,
+			href: j.href
+		});
+		fireToast("Confirmed");
+		goto(next ?? `/${filterQuery(data.filter)}`);
+		invalidate("app:rail"); // the decided row must drop from the review set
 	};
 
-	// Save the current card's draft — the deck fires the "Saved" toast, so no header flash here.
-	const save = () => stack?.save();
+	const save = () => card?.save();
 
-	// The page-level chords: ⌘S saves, ⌘E toggles the note field, ⌘⏎ confirms the front card. All
-	// live here (not in the card) so they fire even while typing a note, and no bare key commits —
-	// a stray ⏎ is inert. The card's own handler owns only navigation (←/→, Tab, ⌫), ignored inside inputs.
+	// The page-level chords: ⌘S saves, ⌘E toggles the note, ⌘⏎ confirms — all here (not in the card)
+	// so they fire even while typing a note, and no bare key commits.
 	$effect(() => {
-		if (!data.user) return;
+		if (!data.user || !currentId) return;
 		const onkey = (e: KeyboardEvent) => {
 			if (!(e.metaKey || e.ctrlKey)) return;
-			if (e.key === "s") {
-				e.preventDefault();
-				save();
-			} else if (e.key === "e") {
-				e.preventDefault();
-				stack?.note();
-			} else if (e.key === "Enter") {
-				e.preventDefault();
-				stack?.confirm();
-			}
+			if (e.key === "s") (e.preventDefault(), save());
+			else if (e.key === "e") (e.preventDefault(), card?.note());
+			else if (e.key === "Enter") (e.preventDefault(), card?.confirm());
 		};
 		window.addEventListener("keydown", onkey);
 		return () => window.removeEventListener("keydown", onkey);
 	});
 </script>
 
-<!-- click anywhere outside the account menu closes it (the pattern ReviewCard uses) -->
 <svelte:window onclick={(e) => menuOpen && !userEl?.contains(e.target as Node) && (menuOpen = false)} />
+
+{#if session.toast}
+	{#key session.toast.id}
+		<Toast message={session.toast.message} ondone={clearToast} />
+	{/key}
+{/if}
 
 {#if !data.user}
 	<main class="grid min-h-svh place-items-center">
@@ -81,42 +132,22 @@
 {:else}
 	<main class="mx-auto max-w-3xl px-6 pb-6">
 		<header class="appbar flex items-center justify-between">
-			<h1 class="text-2xl font-semibold">Decisions</h1>
+			{#if currentId}
+				<a class="back" href={`/${filterQuery(data.filter)}`}>← Decisions</a>
+			{:else}
+				<h1 class="text-2xl font-semibold">Decisions</h1>
+			{/if}
 			<div class="toolbar">
-				<button class="tbtn" onclick={save} title="Save (⌘S)" aria-label="Save">
-					<svg
-						width="16"
-						height="16"
-						viewBox="0 0 24 24"
-						fill="none"
-						stroke="currentColor"
-						stroke-width="2"
-						stroke-linecap="round"
-						stroke-linejoin="round"
-						><path
-							d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"
-						/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7" /><path d="M7 3v4a1 1 0 0 0 1 1h7" /></svg
-					>
-				</button>
-
+				{#if currentId}
+					<button class="tbtn" onclick={save} title="Save (⌘S)" aria-label="Save">
+						<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+							><path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" /><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7" /><path d="M7 3v4a1 1 0 0 0 1 1h7" /></svg
+						>
+					</button>
+				{/if}
 				<div class="user" bind:this={userEl}>
-					<button
-						class="tbtn"
-						class:on={menuOpen}
-						onclick={() => (menuOpen = !menuOpen)}
-						title="Account"
-						aria-label="Account"
-						aria-expanded={menuOpen}
-					>
-						<svg
-							width="16"
-							height="16"
-							viewBox="0 0 24 24"
-							fill="none"
-							stroke="currentColor"
-							stroke-width="2"
-							stroke-linecap="round"
-							stroke-linejoin="round"
+					<button class="tbtn" class:on={menuOpen} onclick={() => (menuOpen = !menuOpen)} title="Account" aria-label="Account" aria-expanded={menuOpen}>
+						<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
 							><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg
 						>
 					</button>
@@ -132,21 +163,41 @@
 			</div>
 		</header>
 
-		<!-- the deck starts at the URL's decision and rewrites the URL to whichever it advances to,
-		     so the address bar always names the on-screen decision (copy → paste → jump back here) -->
-		<JudgmentStack
-			bind:this={stack}
-			judgments={data.judgments}
-			start={data.currentId}
-			oncurrent={(id) => replaceState(`/${id}`, {})}
-			onjudge={judge}
-		/>
+		{#if !currentId}
+			<DecisionList rows={data.rows} prompts={data.prompts} filter={data.filter} />
+		{:else}
+			{#if session.receipts.length}
+				<div class="mb-4 space-y-1">
+					{#each session.receipts as r, i (i)}
+						<a class="text-muted-foreground hover:text-foreground flex items-baseline gap-2 font-mono text-xs" href={r.href} target="_blank" rel="noopener" in:fly={{ y: -6, duration: 200 }}>
+							<span class={r.edited ? "text-amber-600" : "text-green-600"}>{r.edited ? "✎ Edited" : "✓ Confirmed"}</span>
+							<span class="truncate">{r.title}</span>
+						</a>
+					{/each}
+				</div>
+			{/if}
+
+			{#if loadingCard || !data.current}
+				<CardSkeleton />
+			{:else}
+				{#key data.current.id}
+					<div in:fly={{ y: 12, duration: 200 }}>
+						<ReviewCard
+							bind:this={card}
+							judgment={data.current}
+							pos={index >= 0 ? index + 1 : 1}
+							total={data.rows.length || 1}
+							onjudge={judge}
+							onnav={nav}
+						/>
+					</div>
+				{/key}
+			{/if}
+		{/if}
 	</main>
 {/if}
 
 <style>
-	/* the app header — the top of the always-visible bar: sticks to the viewport, the card's
-	   progress/hints stick flush beneath it (top: var(--topbar)). Opaque, so evidence scrolls under. */
 	.appbar {
 		position: sticky;
 		top: 0;
@@ -154,7 +205,14 @@
 		height: var(--topbar);
 		background: var(--background);
 	}
-	/* the toolbar — Save + account, right-aligned in the header, level with the title */
+	.back {
+		color: var(--muted-foreground);
+		text-decoration: none;
+		font-size: 1rem;
+	}
+	.back:hover {
+		color: var(--foreground);
+	}
 	.toolbar {
 		display: flex;
 		gap: 2px;
@@ -173,10 +231,7 @@
 			color 0.15s ease,
 			background 0.15s ease;
 	}
-	.tbtn:hover {
-		color: var(--foreground);
-		background: var(--accent);
-	}
+	.tbtn:hover,
 	.tbtn.on {
 		color: var(--foreground);
 		background: var(--accent);

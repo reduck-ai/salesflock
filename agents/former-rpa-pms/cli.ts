@@ -62,16 +62,7 @@ program
 	.description("Follow-up worklist: everyone whose Lead is at <status> — name + LinkedIn URL to pipe into the next stage.")
 	.action(async (status) => out(await tools.checkLeadStages(status)));
 
-program
-	.command("list")
-	.description("Decisions awaiting a human verdict (the review queue): id, name, kind, app link.")
-	.action(async () => out(await tools.list()));
-
-program
-	.command("show")
-	.argument("<decision>", "Decision id, Notion URL, or app URL")
-	.description("One decision by id: the judge's judgment (output, statements, evidence), plus the human diff once reviewed.")
-	.action(async (decision) => out(await tools.show(decision)));
+// Reviewing Decisions (list/show) is agent-agnostic — `sflock decisions --agent former-rpa-pms`.
 
 program.parseAsync().catch((e: unknown) => {
 	console.error(renderError(e));

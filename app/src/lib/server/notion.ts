@@ -8,7 +8,9 @@ import { error } from "@sveltejs/kit";
 import { env } from "$env/dynamic/private";
 import { chunks, plain, relation, type NotionValue } from "$core/stores/notion.codec";
 import { schemaError } from "$core/output";
+import { hasFeedback } from "$core/review";
 import config from "$agent/config";
+import type { Filter } from "$lib/filter";
 
 const API = "https://api.notion.com/v1";
 const headers = {
@@ -20,10 +22,12 @@ const headers = {
 export interface Decision {
 	id: string;
 	url: string;
+	created: string; // the page's created_time (ISO) — the list's Date sort + row timestamp
 	title: string;
 	fields: Record<string, string>;
 	deps: string[]; // upstream Decision ids ("Depends on") — the DAG edges
 	prompt?: string; // the Prompt page id — its Output schema governs the editable output
+	promptName?: string; // the Prompt's Name (the row's kind) — the per-Prompt filter + sort key
 	outputSchema?: Record<string, unknown>; // the Prompt's Output JSON Schema (the edit contract)
 	proposal?: string; // the Prompt's framing text — what the output proposes (the card's header)
 }
@@ -31,9 +35,15 @@ export interface Decision {
 // A Prompt page → its Name, Output JSON Schema (the contract the human's output obeys), and
 // its framing text ("Proposal") — proposal-oriented copy the card heads the output with. All
 // optional: a fork's Prompt need not carry them, so each stays fail-soft.
-const promptInfo = async (
-	id: string
-): Promise<{ name: string; outputSchema?: Record<string, unknown>; proposal?: string }> => {
+//
+// Memoized by page id: a Prompt page's content is immutable by id (a new version is a new row), and
+// many Decisions share one prompt — so without this, decision()/decisions() re-fetch the SAME Prompt
+// page once per card. Safe to share process-wide (not user-specific).
+type PromptInfo = { name: string; outputSchema?: Record<string, unknown>; proposal?: string };
+const promptInfoCache = new Map<string, PromptInfo>();
+const promptInfo = async (id: string): Promise<PromptInfo> => {
+	const cached = promptInfoCache.get(id);
+	if (cached) return cached;
 	const { properties } = await page(id);
 	const name = String(
 		Object.values(properties)
@@ -42,11 +52,13 @@ const promptInfo = async (
 	);
 	const schema = plain(properties["Output schema"]);
 	const proposal = plain(properties["Proposal"]);
-	return {
+	const info: PromptInfo = {
 		name,
 		outputSchema: schema ? (JSON.parse(String(schema)) as Record<string, unknown>) : undefined,
 		proposal: proposal ? String(proposal) : undefined
 	};
+	promptInfoCache.set(id, info);
+	return info;
 };
 
 // The prompt's pipeline semantics, by its Name — the same `resolve` the runtime declares.
@@ -54,7 +66,7 @@ const specByName = (name: string) => Object.values(config.prompts ?? {}).find((s
 
 const page = async (
 	id: string
-): Promise<{ id: string; url: string; properties: Record<string, NotionValue> }> => {
+): Promise<{ id: string; url: string; created_time: string; properties: Record<string, NotionValue> }> => {
 	const res = await fetch(`${API}/pages/${id}`, { headers });
 	if (!res.ok) throw new Error(`Notion ${res.status}: ${await res.text()}`);
 	return res.json();
@@ -65,10 +77,12 @@ const page = async (
 const toDecision = ({
 	id,
 	url,
+	created_time,
 	properties
 }: {
 	id: string;
 	url: string;
+	created_time: string;
 	properties: Record<string, NotionValue>;
 }): Decision => {
 	let title = "";
@@ -82,6 +96,7 @@ const toDecision = ({
 	return {
 		id,
 		url,
+		created: created_time,
 		title,
 		fields,
 		deps: relation(properties["Depends on"]),
@@ -97,29 +112,46 @@ export const decision = async (id: string): Promise<Decision> => {
 		const info = await promptInfo(d.prompt);
 		d.outputSchema = info.outputSchema;
 		d.proposal = info.proposal;
+		d.promptName = info.name;
 	}
 	return d;
 };
 
-export const decisions = async (): Promise<Decision[]> => {
-	const res = await fetch(`${API}/data_sources/${env.NOTION_DECISIONS_DS}/query`, {
-		method: "POST",
-		headers,
-		// Only rows still awaiting review: the committed output IS the decision, so an unset
-		// "Final output" is the pending marker — a decided card drops from the queue and doesn't
-		// reappear on refresh. This is the review queue, not a log.
-		body: JSON.stringify({
-			filter: { property: "Final output", rich_text: { is_empty: true } },
-			sorts: [{ timestamp: "last_edited_time", direction: "descending" }]
-		})
-	});
-	if (!res.ok) throw new Error(`Notion ${res.status}: ${await res.text()}`);
-	const { results } = (await res.json()) as {
-		results: { id: string; url: string; properties: Record<string, NotionValue> }[];
+// The review working set for a Filter, ordered — the ONE query both the list and the deck consume
+// (the list maps it to summary rows, the deck uses it as the prev/next rail). Only `tab` is the
+// server-side Notion cut (pending vs decided); prompt / feedback / sort are applied in code below,
+// over fields already fetched (so `feedback` can mean hasFeedback's exhaustive 3-column sense, which
+// no native filter expresses). Paginated — a growing Past tab must not be silently capped at 100.
+export const decisions = async (filter: Filter): Promise<Decision[]> => {
+	// pending: unset "Final output" (the committed output IS the decision). past: the decided log.
+	const tabFilter = {
+		property: "Final output",
+		rich_text: filter.tab === "past" ? { is_not_empty: true } : { is_empty: true }
 	};
+	const results: { id: string; url: string; created_time: string; properties: Record<string, NotionValue> }[] = [];
+	let cursor: string | undefined;
+	do {
+		const res = await fetch(`${API}/data_sources/${env.NOTION_DECISIONS_DS}/query`, {
+			method: "POST",
+			headers,
+			body: JSON.stringify({
+				filter: tabFilter,
+				sorts: [{ timestamp: "created_time", direction: "descending" }],
+				...(cursor ? { start_cursor: cursor } : {})
+			})
+		});
+		if (!res.ok) throw new Error(`Notion ${res.status}: ${await res.text()}`);
+		const page = (await res.json()) as {
+			results: typeof results;
+			has_more: boolean;
+			next_cursor: string | null;
+		};
+		results.push(...page.results);
+		cursor = page.has_more ? (page.next_cursor ?? undefined) : undefined;
+	} while (cursor);
 	const rows = results.map(toDecision);
 
-	// The editable output's contract + framing text: each row's Prompt info (prompts deduped).
+	// The editable output's contract + framing text + Name (the kind): each row's Prompt info (deduped).
 	const infos = new Map(
 		await Promise.all(
 			[...new Set(rows.map((r) => r.prompt).filter((p): p is string => !!p))].map(
@@ -132,31 +164,50 @@ export const decisions = async (): Promise<Decision[]> => {
 		if (info) {
 			r.outputSchema = info.outputSchema;
 			r.proposal = info.proposal;
+			r.promptName = info.name;
 		}
 	}
 
-	// The DAG gate, derived at read time — never stored: a Decision is reviewable only once
-	// every upstream it depends on has *advanced* the pipeline. Polarity is derived from the
-	// upstream's committed output via the same `resolve` the pipeline uses — a non-advancing
-	// outcome (e.g. "Not qualified") permanently hides its speculative dependents. The graph is
-	// the state, so there is no moot flag to keep in sync.
-	const depIds = [...new Set(rows.flatMap((r) => r.deps))];
-	const advances = new Map(
-		await Promise.all(
-			depIds.map(async (id) => {
-				const { properties } = await page(id);
-				const fo = plain(properties["Final output"]);
-				const pid = relation(properties.Prompt)[0];
-				const spec = fo && pid ? specByName((await promptInfo(pid)).name) : undefined;
-				try {
-					return [id, !!spec && spec.resolve(JSON.parse(String(fo))).advances] as const;
-				} catch {
-					return [id, false] as const;
-				}
-			})
-		)
-	);
-	return rows.filter((r) => r.deps.every((d) => advances.get(d)));
+	// The DAG gate, derived at read time — never stored: a Decision is reviewable only once every
+	// upstream it depends on has *advanced* the pipeline. Only the review tab gates: past rows are a
+	// log of decisions already made (they were gated when reviewed), so the gate would be moot there.
+	let gated = rows;
+	if (filter.tab === "review") {
+		const depIds = [...new Set(rows.flatMap((r) => r.deps))];
+		const advances = new Map(
+			await Promise.all(
+				depIds.map(async (id) => {
+					const { properties } = await page(id);
+					const fo = plain(properties["Final output"]);
+					const pid = relation(properties.Prompt)[0];
+					const spec = fo && pid ? specByName((await promptInfo(pid)).name) : undefined;
+					try {
+						return [id, !!spec && spec.resolve(JSON.parse(String(fo))).advances] as const;
+					} catch {
+						return [id, false] as const;
+					}
+				})
+			)
+		);
+		gated = rows.filter((r) => r.deps.every((d) => advances.get(d)));
+	}
+
+	// prompt / feedback in code (over fields already fetched), then sort. Date is created desc;
+	// Prompt groups by Name, created desc within a group. Both stable — a re-query reads the same.
+	let out = gated;
+	if (filter.prompt !== "all") out = out.filter((r) => r.promptName === filter.prompt);
+	if (filter.feedback !== "any") {
+		const want = filter.feedback === "has";
+		out = out.filter((r) => hasFeedback(r.fields) === want);
+	}
+	return out
+		.slice()
+		.sort(
+			filter.sort === "prompt"
+				? (a, b) =>
+						(a.promptName ?? "").localeCompare(b.promptName ?? "") || b.created.localeCompare(a.created)
+				: (a, b) => b.created.localeCompare(a.created)
+		);
 };
 
 const patch = async (pageId: string, properties: Record<string, unknown>) => {

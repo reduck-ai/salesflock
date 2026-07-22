@@ -58,18 +58,7 @@ program
 		out(await tools.engage(profile, { dependsOn }));
 	});
 
-program
-	.command("list")
-	.description("Decisions awaiting a human verdict (the review queue): id, name, kind, app link.")
-	.action(async () => out(await tools.list()));
-
-program
-	.command("show")
-	.argument("<decision>", "Decision id, Notion URL, or app URL")
-	.description(
-		"One decision by id: the judge's judgment (output, statements, evidence), plus the human diff once reviewed."
-	)
-	.action(async (decision) => out(await tools.show(decision)));
+// Reviewing Decisions (list/show) is agent-agnostic — `sflock decisions --agent linkedin-leads`.
 
 program
 	.command("get-company")

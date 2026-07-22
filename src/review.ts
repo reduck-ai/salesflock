@@ -38,6 +38,16 @@ export interface Review {
 	} & ReasoningDelta;
 }
 
+// The Necessary-and-Sufficient snapshot of what the human added OVER the judge — the three
+// orthogonal channels a review can touch, Occam-style: only a non-trivial channel is present.
+// `reasoning` always rides (it is cheap to carry empty and lets a consumer destructure it), but a
+// Feedback is produced only when at least one channel is non-empty (see feedbackOf → null).
+export interface Feedback {
+	outputChange?: { from: unknown; to: unknown }; // the human overturned the Output (committed only)
+	note?: string; // the Feedback prose — the correction rationale
+	reasoning: ReasoningDelta; // comments on judge claims, added claims, attached proofs
+}
+
 // diffStatements — the human layer, matched by claim text (a review never edits or reorders a
 // judge claim): a claim absent from the original is added; a shared claim's quotes beyond the
 // original set are attached; a non-empty `comment` is a comment. Quotes compare by span identity.
@@ -54,6 +64,50 @@ export const diffStatements = (original: Statement[], final: Commented[]): Reaso
 		if (s.comment?.trim()) delta.comments.push({ claim: s.claim, comment: s.comment.trim() });
 	}
 	return delta;
+};
+
+const emptyDelta = (): ReasoningDelta => ({ comments: [], added: [], attached: [] });
+const deltaEmpty = (d: ReasoningDelta): boolean =>
+	!d.comments.length && !d.added.length && !d.attached.length;
+
+// feedbackOf(fields) — the human delta over the judge, or null when the human added nothing (pure
+// agreement, or a not-yet-touched row). The ONE extractor of the three channels, working in BOTH
+// states (a saved draft has Feedback/Final reasoning but no Final output; a commit has all three).
+// Never throws: the columns it reads are optional, and it is called across a whole listing.
+export const feedbackOf = (fields: Fields): Feedback | null => {
+	const note = text(fields.Feedback).trim() || undefined;
+	const reasoning = fields["Final reasoning"]
+		? diffStatements(json<Statement[]>(fields, "Reasoning"), json<Commented[]>(fields, "Final reasoning"))
+		: emptyDelta();
+	// An overturn is committed-only: comparing PARSED outputs (not text) so formatting never fakes one.
+	const fo = fields["Final output"];
+	const from = fo ? json<unknown>(fields, "Output") : undefined;
+	const to = fo ? json<unknown>(fields, "Final output") : undefined;
+	const outputChange =
+		fo && JSON.stringify(from) !== JSON.stringify(to) ? { from, to } : undefined;
+	if (!outputChange && !note && deltaEmpty(reasoning)) return null;
+	return { ...(outputChange && { outputChange }), ...(note && { note }), reasoning };
+};
+
+// hasFeedback(fields) — exhaustive across all channels and both states.
+export const hasFeedback = (fields: Fields): boolean => feedbackOf(fields) !== null;
+
+// renderFeedback(fb) — the delta as compact Markdown, ORDERED by information gain (the correction
+// first, then the rationale, then the reasoning edits) and carrying ONLY the delta — never the
+// judge's own output/reasoning or the evidence, which a consumer already has and can re-derive.
+export const renderFeedback = (fb: Feedback): string => {
+	const lines: string[] = [];
+	if (fb.outputChange)
+		lines.push(`**Correction:** ${JSON.stringify(fb.outputChange.from)} → ${JSON.stringify(fb.outputChange.to)}`);
+	if (fb.note) lines.push(`**Note:** ${fb.note}`);
+	const { comments, added, attached } = fb.reasoning;
+	if (!deltaEmpty(fb.reasoning)) {
+		lines.push("**Reasoning edits:**");
+		for (const c of comments) lines.push(`- commented "${c.claim}": ${c.comment}`);
+		for (const a of added) lines.push(`- added (${a.supporting ? "for" : "against"}): "${a.claim}"`);
+		for (const a of attached) lines.push(`- +${a.quotes.length} proof(s) on "${a.claim}"`);
+	}
+	return lines.join("\n");
 };
 
 // parse a JSON column, loud on malformed — a broken record is not a guess.
@@ -74,20 +128,17 @@ const json = <T>(fields: Fields, col: string): T => {
 export const reviewOf = (fields: Fields): Review => {
 	if (!fields["Final output"]) throw new Error("Decision has no Final output — not reviewed yet");
 	const output = json<unknown>(fields, "Output");
-	const corrected = json<unknown>(fields, "Final output");
-	const verdict = JSON.stringify(output) === JSON.stringify(corrected) ? "Accepted" : "Rejected";
 	const reasoning = json<Statement[]>(fields, "Reasoning");
-	const delta = fields["Final reasoning"]
-		? diffStatements(reasoning, json<Commented[]>(fields, "Final reasoning"))
-		: { comments: [], added: [], attached: [] };
+	// The human layer is exactly the feedback delta; agreement is the ABSENCE of an overturn.
+	const fb = feedbackOf(fields);
 	return {
 		input: text(fields.Input),
 		judge: { verdict: output, reasoning },
 		human: {
-			verdict,
-			...(fields.Feedback ? { feedback: text(fields.Feedback) } : {}),
-			...(verdict === "Rejected" ? { output: corrected } : {}),
-			...delta
+			verdict: fb?.outputChange ? "Rejected" : "Accepted",
+			...(fb?.note && { feedback: fb.note }),
+			...(fb?.outputChange && { output: fb.outputChange.to }),
+			...(fb?.reasoning ?? emptyDelta())
 		}
 	};
 };

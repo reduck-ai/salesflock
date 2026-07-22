@@ -10,9 +10,11 @@ says what it does. If a fact can drift, it belongs in code, not here.
 1. **Code is the source of truth.** Docs carry principles, not behavior. A contract the
    server already enforces is never re-typed by hand — it's compiled (`sflock`).
 
-2. **Two binaries, one seam each.** `sflock` is *setup* (compile a destination's or a
-   source's contract → a TS type). The per-agent runtime binary is *action* (compose
-   scripts, persist). Setup describes; runtime does.
+2. **The operator CLI vs the funnel binary.** `sflock` is agent-agnostic and never mutates
+   the pipeline: it *sets up* (compile a destination's or source's contract → a TS type) and
+   *reviews* (`sflock decisions` — inspect an agent's Decisions read-only, over `createReviewer`,
+   no entity bridge). The per-agent runtime binary is *action* (compose scripts, persist, advance
+   the funnel). Setup describes, review inspects, runtime does.
 
 3. **`reduck` is a runner, not a schema source.** One base-script call → run it with
    `reduck run` directly. Wrap it in a tool **only** for what `reduck` can't do: compose
