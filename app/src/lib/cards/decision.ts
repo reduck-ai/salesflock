@@ -7,7 +7,7 @@
 // place, held to that contract; this adapter no longer knows the contracts.
 
 import type { Decision } from "$lib/server/notion";
-import { renderEvidence } from "$core/linkedin/evidence";
+import { renderEvidence, fieldSpan } from "$core/linkedin/evidence";
 import { hasFeedback, reviewOf } from "$core/review";
 import type { EvidencedJudgment, Quote, Statement } from "./types";
 
@@ -40,7 +40,8 @@ const byStart = (quotes: Quote[]): Quote[] => [...quotes].sort((a, b) => a.start
 
 export const decisionToJudgment = (d: Decision): EvidencedJudgment => {
 	const output = JSON.parse(d.fields.Output) as Record<string, unknown>;
-	const evidence = renderEvidence(JSON.parse(d.fields.Input) as Record<string, string>);
+	const input = JSON.parse(d.fields.Input) as Record<string, string>;
+	const evidence = renderEvidence(input);
 	const order = (ss: Statement[]): Statement[] => ss.map((s) => ({ ...s, quotes: byStart(s.quotes) }));
 	// a saved-but-undecided draft, when the human has already checkpointed work on this row:
 	// their edited statements ("Final reasoning") and note ("Feedback"). Only present until a
@@ -63,6 +64,10 @@ export const decisionToJudgment = (d: Decision): EvidencedJudgment => {
 		output,
 		outputSchema: d.outputSchema,
 		proposal: d.proposal,
+		// placement is code-computed, never the LLM's: the prompt names the Input field the output
+		// answers (`anchorField`), and its rendered span attaches the composer below it. Unset ⇒ the
+		// dock floats. Derived here from the frozen Input, exactly like `evidence` — never stored.
+		anchor: d.anchorField ? (fieldSpan(input, d.anchorField) ?? undefined) : undefined,
 		hasFeedback: hasFeedback(d.fields),
 		draft
 	};

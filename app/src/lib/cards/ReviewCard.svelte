@@ -89,6 +89,30 @@
 	const miOf = (si: number) => statements.slice(0, si).reduce((n, s) => n + s.quotes.length, 0);
 	const activeSi = $derived(activeMi === null ? null : marks[activeMi].si);
 
+	// PLACEMENT — the one branch: a judgment with an `anchor` (code-computed — the span of the Input
+	// field the output answers) attaches the composer BELOW that span; without one it floats in the
+	// dock (a verdict about the whole subject). The anchor only SPLITS the evidence — it is never
+	// itself highlighted (the field's `### header` already labels what's answered), so nothing new
+	// enters the mark pipeline; `mi` is stamped explicitly so a split keeps global mark indices.
+	const attached = $derived(!!judgment.anchor);
+	const hls = $derived(marks.map((m, mi) => ({ ...m, mi })));
+	// split the evidence at the first block boundary at/after the anchored span, so the composer sits
+	// right beneath the post it answers. Block-aligned, so no quote straddles the cut; each half gets
+	// the marks that fall in it (the lower half rebased), keeping global `mi` via the explicit field.
+	const splitAt = $derived.by(() => {
+		if (!attached) return 0;
+		const nl = judgment.evidence.indexOf("\n\n", judgment.anchor!.end);
+		return nl < 0 ? judgment.evidence.length : nl;
+	});
+	const before = $derived(attached ? judgment.evidence.slice(0, splitAt) : "");
+	const after = $derived(attached ? judgment.evidence.slice(splitAt) : "");
+	const marksBefore = $derived(hls.filter((m) => m.q.end <= splitAt));
+	const marksAfter = $derived(
+		hls
+			.filter((m) => m.q.start >= splitAt)
+			.map((m) => ({ ...m, q: { start: m.q.start - splitAt, end: m.q.end - splitAt } }))
+	);
+
 	// provenance, derived from the canonical prop — never stored. A claim or quote is the
 	// human's iff it isn't in the judge's frozen judgment; the judge's stay immutable
 	// labelling data, only the human's are editable. Same identity `diffStatements` uses.
@@ -347,7 +371,7 @@
 	}}
 />
 
-<div class="page">
+<div class="page" class:attached>
 	<div class="topmeta">
 		<div class="rail" title={`${pos} / ${total}`}>
 			<div class="fill" style={`width:${(pos / total) * 100}%`}></div>
@@ -366,7 +390,15 @@
 	</div>
 
 	<div class="doc" bind:this={evEl}>
-		<Markdown source={judgment.evidence} highlights={marks} class="evidence" />
+		{#if attached}
+			<Markdown source={before} highlights={marksBefore} class="evidence" />
+			<div class="dock attached" bind:this={dockEl}>{@render dockBody()}</div>
+			{#if after.trim()}
+				<Markdown source={after} highlights={marksAfter} class="evidence" />
+			{/if}
+		{:else}
+			<Markdown source={judgment.evidence} highlights={hls} class="evidence" />
+		{/if}
 		<div class="gutter">
 			{#each notes as n (n.si)}
 				<div
@@ -436,7 +468,9 @@
 	</div>
 </div>
 
-<div class="veil"></div>
+{#if !attached}
+	<div class="veil"></div>
+{/if}
 
 {#if menu && place}
 	<div
@@ -491,7 +525,13 @@
 	</div>
 {/if}
 
-<div class="dock" bind:this={dockEl}>
+<!-- the floating dock — the composer for a verdict (no anchor); the attached case renders the
+     same body in-flow below the answered span (see .doc above). One body, two placements. -->
+{#if !attached}
+	<div class="dock" bind:this={dockEl}>{@render dockBody()}</div>
+{/if}
+
+{#snippet dockBody()}
 	<!-- PROPOSAL — the agent's proposal, headed by the Prompt's framing, editable within its
 	     schema; committing it IS the decision. First, so you decide, then read the reasoning. -->
 	<div class="proposal">
@@ -582,13 +622,17 @@
 			/>
 		{/if}
 	</div>
-</div>
+{/snippet}
 
 <style>
 	.page {
 		max-width: 720px;
 		margin: 0 auto;
 		padding: 0 4px 340px; /* deep bottom pad: last evidence clears the dock */
+	}
+	/* attached mode: the composer is in flow, so no floating dock to clear — trim the deep pad */
+	.page.attached {
+		padding-bottom: 40px;
 	}
 	/* the card's half of the top bar — progress + key hints — sticks flush beneath the app
 	   header, so the whole band stays put while the evidence scrolls under it */
@@ -954,6 +998,16 @@
 			0 2px 6px rgb(0 0 0 / 0.08),
 			0 24px 60px -18px rgb(0 0 0 / 0.28);
 		overflow: hidden;
+	}
+	/* attached — the same composer body, but in the document flow directly below the span it
+	   answers: static (nothing overlaid), solid card (no blur, nothing behind it), full column. */
+	.dock.attached {
+		position: static;
+		inset: auto;
+		max-width: none;
+		margin: 18px 0;
+		background: var(--card);
+		backdrop-filter: none;
 	}
 
 	/* PROPOSAL — the dock's top zone: the Prompt's framing over the editable output */

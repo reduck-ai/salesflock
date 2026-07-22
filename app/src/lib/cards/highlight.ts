@@ -51,10 +51,15 @@ const markup = (html: string): string => {
 // <mark class="hl" data-si=si data-mi=mi>. `si` is the statement index, so the UI lights up
 // every quote of a hovered claim together; `mi` is the mark's index in `marks`, so a cursor can
 // address one quote (a quote spanning tags becomes several <mark>s sharing its si/mi). Overlapping
-// spans: the earlier one wins; an out-of-bounds range is dropped (never mis-highlighted).
-export const highlightEvidence = (evidence: string, marks: { si: number; q: Quote }[]): string => {
+// spans: the earlier one wins; an out-of-bounds range is dropped (never mis-highlighted). A caller
+// may pin `mi` explicitly (so `data-mi` stays global when the evidence is rendered in slices);
+// absent, it falls back to the array index (the whole-document case).
+export const highlightEvidence = (
+	evidence: string,
+	marks: { si: number; q: Quote; mi?: number }[]
+): string => {
 	const spans = marks
-		.map(({ si, q }, mi) => ({ si, mi, start: q.start, end: q.end }))
+		.map(({ si, q, mi }, i) => ({ si, mi: mi ?? i, start: q.start, end: q.end }))
 		.filter((s) => s.start >= 0 && s.end <= evidence.length && s.start < s.end)
 		.sort((a, b) => a.start - b.start);
 	let out = "";

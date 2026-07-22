@@ -30,6 +30,7 @@ export interface Decision {
 	promptName?: string; // the Prompt's Name (the row's kind) — the per-Prompt filter + sort key
 	outputSchema?: Record<string, unknown>; // the Prompt's Output JSON Schema (the edit contract)
 	proposal?: string; // the Prompt's framing text — what the output proposes (the card's header)
+	anchorField?: string; // the Input field the composer attaches below (set ⇒ attached; unset ⇒ floating)
 }
 
 // A Prompt page → its Name, Output JSON Schema (the contract the human's output obeys), and
@@ -39,7 +40,7 @@ export interface Decision {
 // Memoized by page id: a Prompt page's content is immutable by id (a new version is a new row), and
 // many Decisions share one prompt — so without this, decision()/decisions() re-fetch the SAME Prompt
 // page once per card. Safe to share process-wide (not user-specific).
-type PromptInfo = { name: string; outputSchema?: Record<string, unknown>; proposal?: string };
+type PromptInfo = { name: string; outputSchema?: Record<string, unknown>; proposal?: string; anchorField?: string };
 const promptInfoCache = new Map<string, PromptInfo>();
 const promptInfo = async (id: string): Promise<PromptInfo> => {
 	const cached = promptInfoCache.get(id);
@@ -52,10 +53,12 @@ const promptInfo = async (id: string): Promise<PromptInfo> => {
 	);
 	const schema = plain(properties["Output schema"]);
 	const proposal = plain(properties["Proposal"]);
+	const anchorField = plain(properties["Anchor field"]);
 	const info: PromptInfo = {
 		name,
 		outputSchema: schema ? (JSON.parse(String(schema)) as Record<string, unknown>) : undefined,
-		proposal: proposal ? String(proposal) : undefined
+		proposal: proposal ? String(proposal) : undefined,
+		anchorField: anchorField ? String(anchorField) : undefined
 	};
 	promptInfoCache.set(id, info);
 	return info;
@@ -112,6 +115,7 @@ export const decision = async (id: string): Promise<Decision> => {
 		const info = await promptInfo(d.prompt);
 		d.outputSchema = info.outputSchema;
 		d.proposal = info.proposal;
+		d.anchorField = info.anchorField;
 		d.promptName = info.name;
 	}
 	return d;
@@ -164,6 +168,7 @@ export const decisions = async (filter: Filter): Promise<Decision[]> => {
 		if (info) {
 			r.outputSchema = info.outputSchema;
 			r.proposal = info.proposal;
+			r.anchorField = info.anchorField;
 			r.promptName = info.name;
 		}
 	}

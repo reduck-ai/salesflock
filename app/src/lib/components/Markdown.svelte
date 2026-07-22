@@ -13,7 +13,8 @@
 		source,
 		class: klass = "",
 		highlights
-	}: { source: string; class?: string; highlights?: { si: number; q: Quote }[] } = $props();
+	}: { source: string; class?: string; highlights?: { si: number; q: Quote; mi?: number }[] } =
+		$props();
 
 	// marked's autolinking is off (see $lib/md), and our sources carry bare URLs (evidence is
 	// raw field values). Linkify them in the rendered HTML's text segments — never inside a

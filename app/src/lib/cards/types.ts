@@ -44,6 +44,8 @@ export interface EvidencedJudgment {
 	output: Record<string, unknown>; // the judge's Output — the editable seed
 	outputSchema?: Record<string, unknown>; // the Prompt's Output JSON Schema — the edit contract
 	proposal?: string; // the Prompt's framing text — the header above the output (optional)
+	anchor?: Quote; // the evidence span the composer attaches BELOW (a writing prompt supplies it);
+	// absent ⇒ the composer floats in the dock (a verdict about the whole subject, not one span)
 	hasFeedback: boolean; // does this decision already carry a human delta (any channel, any state)
 
 	// a saved-but-undecided draft, when one exists: the human's note and edited statements
