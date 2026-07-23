@@ -6,7 +6,7 @@
 
 import { run } from "../reduck.js";
 import { scripts } from "./scripts.js";
-import type { Search, Feed, Tweet, UserInfo, UserFeed, Reply } from "./schema.js";
+import type { Search, Feed, Tweet, UserInfo, UserPosts, UserReplies, Reply } from "./schema.js";
 
 // A bare handle from an @handle, a profile URL, or a status URL — X handles are ≤15 chars of
 // [A-Za-z0-9_]. This is the person's identity; every author row keys on the profile URL below.
@@ -48,13 +48,19 @@ export const getTweet = (tweetUrl: string, count?: number): Promise<Tweet> =>
 export const getUserInfo = (handle: string): Promise<UserInfo> =>
 	run<UserInfo>(scripts.userInfo, { handle: handleOf(handle) });
 
-// get_user_feed — a person's recent posts (self-threads + pinned included, v3 fix). The MVP
-// samples the owner's own posts through this to ground the drafter in their voice.
-export const getUserFeed = (handle: string, count?: number): Promise<UserFeed> =>
-	run<UserFeed>(scripts.userFeed, { handle: handleOf(handle), ...(count ? { count } : {}) });
+// get_user_posts — a person's own Posts tab (self-threads + reposts, newest first; excludes replies
+// to others). The owner-voice corpus: how they write their own posts.
+export const getUserPosts = (handle: string, count?: number): Promise<UserPosts> =>
+	run<UserPosts>(scripts.userPosts, { handle: handleOf(handle), ...(count ? { count } : {}) });
+
+// get_user_replies — a person's own Replies tab (/<handle>/with_replies): their replies to others,
+// each carrying in_reply_to_handle/in_reply_to_id (null on a plain post). The owner's real reply
+// voice — the calibration corpus update-replies scrapes.
+export const getUserReplies = (handle: string, count?: number): Promise<UserReplies> =>
+	run<UserReplies>(scripts.userReplies, { handle: handleOf(handle), ...(count ? { count } : {}) });
 
 // reply_to_tweet — the one engagement action: reply under a post to borrow its reach.
 export const reply = (tweetUrl: string, text: string): Promise<Reply> =>
 	run<Reply>(scripts.reply, { tweet_url: tweetUrl, text });
 
-export type { Search, Feed, Tweet, UserInfo, UserFeed, Reply };
+export type { Search, Feed, Tweet, UserInfo, UserPosts, UserReplies, Reply };

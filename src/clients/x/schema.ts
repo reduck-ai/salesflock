@@ -58,6 +58,13 @@ export interface Feed {
      * null when views are not exposed for this tweet.
      */
     view_count: number | null;
+    /**
+     * The tweet this one replies to, from X's native in_reply_to_status_id_str / in_reply_to_screen_name. null unless this tweet is a reply — so `in_reply_to != null` is the reply test.
+     */
+    in_reply_to?: {
+      id: string;
+      author_handle: string | null;
+    } | null;
     quote_count: number;
     reply_count: number;
     quoted_tweet?: {
@@ -117,43 +124,43 @@ export interface UserInfo {
   bio?: string | null;
   name: string;
   /**
-   * Canonical handle as displayed (may differ in casing from the input).
+   * Canonical handle as returned by X (may differ in casing from the input).
    */
   handle: string;
   /**
-   * As displayed, e.g. 'Joined March 2018'.
+   * Account creation date in X's format, e.g. 'Tue Jun 02 20:12:29 +0000 2009'.
    */
   joined?: string | null;
   /**
-   * True when the authenticated session owns this profile.
+   * True when the authenticated viewer owns this profile.
    */
   is_self: boolean;
   /**
-   * Numeric rest_id, read from the follow button's testid. null on your own profile (no follow button).
+   * Numeric rest_id. Always present, including your own profile.
    */
-  user_id: string | null;
+  user_id: string;
   /**
-   * Display text of the profile link, e.g. 'anthropic.com'.
+   * Expanded profile URL (full https link, not the display text).
    */
   website?: string | null;
   location?: string | null;
+  /**
+   * Whether they follow you.
+   */
   follows_you: boolean;
+  /**
+   * Blue/verified badge (is_blue_verified).
+   */
   is_verified: boolean;
   /**
-   * null on your own profile.
+   * Whether you follow them; null on your own profile.
    */
   is_following: boolean | null;
-  /**
-   * Display string as shown ('1,382', '1.3M').
-   */
-  followers_count?: string | null;
-  /**
-   * Display string as shown ('458', '1.3M').
-   */
-  following_count?: string | null;
+  followers_count?: number | null;
+  following_count?: number | null;
 }
 
-export type UserFeed = {
+export type UserPosts = {
   id: string;
   url: string;
   lang?: string | null;
@@ -167,6 +174,30 @@ export type UserFeed = {
   bookmarks?: number | null;
   created_at: string;
   is_retweet?: boolean | null;
+}[];
+
+export type UserReplies = {
+  id: string;
+  url: string;
+  lang?: string | null;
+  text: string;
+  likes?: number | null;
+  views?: string | null;
+  quotes?: number | null;
+  replies?: number | null;
+  is_quote?: boolean | null;
+  retweets?: number | null;
+  bookmarks?: number | null;
+  created_at: string;
+  is_retweet?: boolean | null;
+  /**
+   * Tweet id this row replies to; null on a plain post. Feed to get_tweet for the parent.
+   */
+  in_reply_to_id?: string | null;
+  /**
+   * Handle this row replies to; null on a plain post.
+   */
+  in_reply_to_handle?: string | null;
 }[];
 
 export interface Reply {

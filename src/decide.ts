@@ -164,6 +164,9 @@ export interface DeciderDeps extends ReviewerDeps {
 	// evidence, and bind/advance its pipeline row. The two seams alongside renderEvidence/projectInput.
 	resolveSubject: (key: string) => Promise<Subject>;
 	linkEntity: (subject: Subject, spec: PromptSpec, opts: { dependsOn?: string[] }) => Promise<EntityLink>;
+	// The few-shot block the judge sees, overridable per agent. Default: prior committed Decisions
+	// (examplesFor). x-engage supplies the owner's own Posts+Replies — its authentic voice — instead.
+	renderExamples?: (key: string, subject: Subject) => Promise<string>;
 }
 
 // createDecider(deps) — the decision tools bound to one agent's store + config + LinkedIn renderers:
@@ -236,7 +239,9 @@ export const createDecider = (deps: DeciderDeps) => {
 			required: ["output", "statements"],
 			properties: { output: outputSchema, statements: STATEMENTS }
 		};
-		const examples = await examplesFor(key, String(f.Name ?? subject.name));
+		const examples = deps.renderExamples
+			? await deps.renderExamples(key, subject)
+			: await examplesFor(key, String(f.Name ?? subject.name));
 		return { spec, subject, prompt, system, instruction, examples, outputSchema, input, evidence, responseSchema };
 	};
 
