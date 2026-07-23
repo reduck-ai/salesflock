@@ -44,7 +44,7 @@
 	// review resumes where it was left. The judge's statements stay canonical on the prop
 	// (provenance is read off `judgment.statements`, never this editable copy).
 	let feedback = $state(judgment.draft?.feedback ?? "");
-	let noting = $state(!!judgment.draft?.feedback); // the note field, open when a draft has one
+	let noting = $state(false); // the note field — closed on arrival; ⌘E toggles, the value seeds from the draft
 	// the committed output — seeded from the judge's, edited in place; committing it IS the
 	// decision (the card remounts per id, so it re-seeds from the judge's proposal)
 	let output = $state<Record<string, unknown>>(structuredClone(judgment.output));
