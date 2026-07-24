@@ -8,14 +8,17 @@
 	// reactive in the parent, exactly like the old hand-rolled form did.
 	import { createForm, Content, setFormContext } from "@sjsf/form";
 	import { FORM_PRESET, deriveUiSchema } from "./form-preset";
+	import { autocomplete } from "./autocomplete";
 
 	let {
 		schema,
-		value = $bindable()
+		value = $bindable(),
+		id
 	}: {
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		schema?: Record<string, any>;
 		value: Record<string, unknown>;
+		id?: string; // the Decision id — present ⇒ inline autocomplete is wired over the fields
 	} = $props();
 
 	// the card remounts per decision (#key), so schema/value are stable for this form's life
@@ -29,7 +32,7 @@
 	setFormContext(form);
 </script>
 
-<div class="form">
+<div class="form" {@attach (node) => (id ? autocomplete({ id })(node) : undefined)}>
 	<Content />
 </div>
 

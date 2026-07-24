@@ -538,7 +538,7 @@
 		{#if judgment.proposal}
 			<h2 class="proposal-head">{judgment.proposal}</h2>
 		{/if}
-		<OutputForm schema={judgment.outputSchema} bind:value={output} />
+		<OutputForm schema={judgment.outputSchema} bind:value={output} id={judgment.id} />
 		{#if outputError}
 			<p class="err">{outputError}</p>
 		{/if}

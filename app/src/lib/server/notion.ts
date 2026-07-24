@@ -31,6 +31,8 @@ export interface Decision {
 	outputSchema?: Record<string, unknown>; // the Prompt's Output JSON Schema (the edit contract)
 	proposal?: string; // the Prompt's framing text — what the output proposes (the card's header)
 	anchorField?: string; // the Input field the composer attaches below (set ⇒ attached; unset ⇒ floating)
+	system?: string; // the Prompt's System prompt — grounds the autocomplete the same way it grounds the judge
+	instruction?: string; // the Prompt's Instruction (criteria) — the other half of the grounding
 }
 
 // A Prompt page → its Name, Output JSON Schema (the contract the human's output obeys), and
@@ -40,7 +42,14 @@ export interface Decision {
 // Memoized by page id: a Prompt page's content is immutable by id (a new version is a new row), and
 // many Decisions share one prompt — so without this, decision()/decisions() re-fetch the SAME Prompt
 // page once per card. Safe to share process-wide (not user-specific).
-type PromptInfo = { name: string; outputSchema?: Record<string, unknown>; proposal?: string; anchorField?: string };
+type PromptInfo = {
+	name: string;
+	outputSchema?: Record<string, unknown>;
+	proposal?: string;
+	anchorField?: string;
+	system?: string;
+	instruction?: string;
+};
 const promptInfoCache = new Map<string, PromptInfo>();
 const promptInfo = async (id: string): Promise<PromptInfo> => {
 	const cached = promptInfoCache.get(id);
@@ -54,11 +63,17 @@ const promptInfo = async (id: string): Promise<PromptInfo> => {
 	const schema = plain(properties["Output schema"]);
 	const proposal = plain(properties["Proposal"]);
 	const anchorField = plain(properties["Anchor field"]);
+	// System prompt + Instruction ride this same (memoized) fetch — the grounding the autocomplete
+	// shares with the judge, at no extra round-trip.
+	const system = plain(properties["System prompt"]);
+	const instruction = plain(properties["Instruction"]);
 	const info: PromptInfo = {
 		name,
 		outputSchema: schema ? (JSON.parse(String(schema)) as Record<string, unknown>) : undefined,
 		proposal: proposal ? String(proposal) : undefined,
-		anchorField: anchorField ? String(anchorField) : undefined
+		anchorField: anchorField ? String(anchorField) : undefined,
+		system: system ? String(system) : undefined,
+		instruction: instruction ? String(instruction) : undefined
 	};
 	promptInfoCache.set(id, info);
 	return info;
@@ -117,6 +132,8 @@ export const decision = async (id: string): Promise<Decision> => {
 		d.proposal = info.proposal;
 		d.anchorField = info.anchorField;
 		d.promptName = info.name;
+		d.system = info.system;
+		d.instruction = info.instruction;
 	}
 	return d;
 };
