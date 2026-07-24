@@ -15,6 +15,7 @@ export default {
 		Decisions: "eddcfaaf-e6f1-4cea-a112-2b9d98426eb4",
 		Prompts: "942c4138-c9db-404c-9ae0-472f8edb0712"
 	},
+	entity: "Lead",
 	prompts: {
 		// The committed output IS the decision: `resolve` reads it for both the Lead move and
 		// whether it advances the pipeline. Qualification carries its own negative outcome

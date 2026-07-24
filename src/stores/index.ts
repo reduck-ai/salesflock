@@ -52,5 +52,10 @@ export interface PromptSpec {
 export interface AgentConfig {
 	destination: keyof typeof STORES;
 	models: Record<string, string>; // logical model name → store table/object id
+	// The Decision relation that binds a Decision to the pipeline entity this agent advances
+	// ("Lead" for the LinkedIn agents, "X Engagement" for x-engage). Declared ONCE here and read by
+	// both consumers: the runtime binds the Decision to it (decide.ts), and the review app moves that
+	// entity's Status on confirm (app/…/notion.ts). An agent has one pipeline entity, so it's one string.
+	entity: string;
 	prompts?: Record<string, PromptSpec>; // decision kind (e.g. qualify) → its contract row + transitions
 }

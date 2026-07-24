@@ -80,14 +80,6 @@ export interface Subject {
 	ref?: string; // the subject's own store row id, when the entity link needs it (e.g. a Lead's Person)
 }
 
-// The Decision's binding to its pipeline entity (a Lead, an X Engagement): which Decision property
-// relates to it, and the row id. linkEntity also moves that row to the prompt's `pending` Status
-// (unless the decision is a held DAG dependent) — the one place the domain funnel advances.
-export interface EntityLink {
-	relation: string;
-	id: string;
-}
-
 // createReviewer(deps) — the READ side of the review surface, needing NO agent entity bridge: list
 // decisions by review state (each flagged whether it carries human feedback) and show one decision
 // (the judge's judgment, the human diff once ruled, and the feedback snapshot). createDecider builds
@@ -163,7 +155,10 @@ export interface DeciderDeps extends ReviewerDeps {
 	// The agent-specific bridge (what decide.ts used to hardcode to LinkedIn): fetch the subject's
 	// evidence, and bind/advance its pipeline row. The two seams alongside renderEvidence/projectInput.
 	resolveSubject: (key: string) => Promise<Subject>;
-	linkEntity: (subject: Subject, spec: PromptSpec, opts: { dependsOn?: string[] }) => Promise<EntityLink>;
+	// Advance the subject's pipeline entity row (to the prompt's `pending` Status, unless it's a held
+	// DAG dependent — the one place the domain funnel advances) and return that row's id. The relation
+	// it binds to is `config.entity`, so linkEntity no longer reports it — it just hands back the id.
+	linkEntity: (subject: Subject, spec: PromptSpec, opts: { dependsOn?: string[] }) => Promise<string>;
 	// The few-shot block the judge sees, overridable per agent. Default: prior committed Decisions
 	// (examplesFor). x-engage supplies the owner's own Posts+Replies — its authentic voice — instead.
 	renderExamples?: (key: string, subject: Subject) => Promise<string>;
@@ -318,7 +313,7 @@ export const createDecider = (deps: DeciderDeps) => {
 		}
 
 		const ranAt = new Date().toISOString();
-		const link = await linkEntity(ctx.subject, ctx.spec, { dependsOn });
+		const entityId = await linkEntity(ctx.subject, ctx.spec, { dependsOn });
 		const d = await store.upsert(
 			config.models.Decisions,
 			{
@@ -328,7 +323,7 @@ export const createDecider = (deps: DeciderDeps) => {
 				Input: JSON.stringify(ctx.input),
 				Model: llm.MODEL,
 				Prompt: [ctx.prompt.id],
-				[link.relation]: [link.id],
+				[config.entity]: [entityId],
 				...(dependsOn?.length ? { "Depends on": dependsOn } : {})
 			},
 			"Name"

@@ -14,7 +14,7 @@ import { getStore } from "../../src/stores/index.js";
 import { createDecider } from "../../src/decide.js";
 import { renderEvidence } from "./evidence.js";
 import { projectInput } from "../../src/project.js";
-import type { Subject, EntityLink } from "../../src/decide.js";
+import type { Subject } from "../../src/decide.js";
 import type { PromptSpec } from "../../src/stores/index.js";
 import { stringify } from "yaml";
 import config from "./config.js";
@@ -33,7 +33,7 @@ const resolveSubject = async (publicId: string): Promise<Subject> => {
 	const person = await store.read(config.models.People, "LinkedIn URL", profileUrl(publicId));
 	return { key: publicId, name: String(person.fields.Name ?? publicId), fields: person.fields, ref: person.id };
 };
-const linkEntity = async (subject: Subject, spec: PromptSpec, { dependsOn }: { dependsOn?: string[] }): Promise<EntityLink> => {
+const linkEntity = async (subject: Subject, spec: PromptSpec, { dependsOn }: { dependsOn?: string[] }): Promise<string> => {
 	const lead = {
 		Name: subject.name,
 		...(subject.ref ? { Person: [subject.ref] } : {}),
@@ -41,7 +41,7 @@ const linkEntity = async (subject: Subject, spec: PromptSpec, { dependsOn }: { d
 		...(dependsOn?.length ? {} : { Status: spec.pending })
 	};
 	const l = await store.upsert(config.models.Leads, lead, "LinkedIn URL");
-	return { relation: "Lead", id: l.id };
+	return l.id;
 };
 
 const decider = createDecider({ config, store, renderEvidence, projectInput, resolveSubject, linkEntity });

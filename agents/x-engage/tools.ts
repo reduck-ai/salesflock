@@ -30,7 +30,7 @@ import { classify, disposition } from "./signal.js";
 import { stringify } from "yaml";
 import { voiceExamples } from "./voice.js";
 import config, { OWNER } from "./config.js";
-import type { Subject, EntityLink } from "../../src/decide.js";
+import type { Subject } from "../../src/decide.js";
 import type { PromptSpec } from "../../src/stores/index.js";
 import type { Feed, UserPosts, UserReplies } from "../../src/clients/x/schema.js";
 import type { XEngagements } from "./schema/XEngagements.js";
@@ -122,14 +122,14 @@ const linkEntity = async (
 	subject: Subject,
 	spec: PromptSpec,
 	{ dependsOn }: { dependsOn?: string[] }
-): Promise<EntityLink> => {
+): Promise<string> => {
 	if (!dependsOn?.length)
 		await store.upsert(
 			config.models.XEngagements,
 			{ Name: subject.name, "Post URL": subject.key, Status: spec.pending },
 			"Post URL"
 		);
-	return { relation: "X Engagement", id: subject.ref as string };
+	return subject.ref as string;
 };
 
 // The judge grounded in the owner's own voice (X Posts + X Replies) rather than prior Decisions.

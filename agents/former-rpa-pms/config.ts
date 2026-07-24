@@ -16,6 +16,7 @@ export default {
 		Decisions: "eddcfaaf-e6f1-4cea-a112-2b9d98426eb4",
 		Prompts: "942c4138-c9db-404c-9ae0-472f8edb0712"
 	},
+	entity: "Lead",
 	prompts: {
 		// The deterministic pre-qualify already proved they were a former senior PM at a vendor; this
 		// judges only the SOFT ICP (customer exposure, US/India, entrepreneurial + active). Same

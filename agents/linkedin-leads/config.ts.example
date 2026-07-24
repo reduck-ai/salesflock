@@ -15,5 +15,8 @@ export default {
 		Decisions: "<Decisions data source id>",
 		Prompts: "<Prompts data source id>"
 	},
+	// the Decision relation naming this agent's pipeline entity — the runtime binds a Decision to it
+	// and the review app moves that entity's Status on confirm (e.g. "Lead", "X Engagement")
+	entity: "<the Decision→entity relation name>",
 	prompts: { qualify: "<the Name of the qualification prompt row in the Prompts table>" }
 } satisfies AgentConfig;

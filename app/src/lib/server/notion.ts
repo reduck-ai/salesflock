@@ -273,10 +273,16 @@ export const record = async (
 		"Final output": { rich_text: chunks(JSON.stringify(committedOutput)) }
 	});
 	if (status === undefined) {
-		console.error(`record: no prompt spec for ${promptId} — Final output written, Lead not moved`);
+		console.error(`record: no prompt spec for ${promptId} — Final output written, entity not moved`);
 		return;
 	}
-	await Promise.all(
-		relation(properties.Lead).map((id) => patch(id, { Status: { select: { name: status } } }))
-	);
+	// Move whichever pipeline entity this agent binds a Decision to — the relation `$agent` names
+	// (config.entity: "Lead" | "X Engagement"), not a hardcoded one. A committed decision with no
+	// such relation is an anomaly, so it's surfaced loud (the row still advanced no entity).
+	const entityIds = relation(properties[config.entity]);
+	if (!entityIds.length) {
+		console.error(`record: decision ${pageId} has no "${config.entity}" relation — Final output written, entity not moved`);
+		return;
+	}
+	await Promise.all(entityIds.map((id) => patch(id, { Status: { select: { name: status } } })));
 };

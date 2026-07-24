@@ -29,6 +29,7 @@ export default {
 		Decisions: "eddcfaaf-e6f1-4cea-a112-2b9d98426eb4",
 		Prompts: "942c4138-c9db-404c-9ae0-472f8edb0712"
 	},
+	entity: "X Engagement",
 	prompts: {
 		// The draft of a reply, grounded in the owner's own Posts+Replies voice. The committed output
 		// IS the decision: `resolve` advances the Backlog to "Approved" (the terminal gate, since post
