@@ -11,6 +11,8 @@
 
 import { spawn } from "node:child_process";
 import { chunks, plain, type NotionValue } from "./notion.codec.js";
+import { gate, NOTION_CONCURRENCY } from "../concurrency.js";
+import { log } from "../log.js";
 import type { Ref, Row, Store } from "./index.js";
 
 // Strip the integration token so `ntn` falls back to the personal keychain login.
@@ -19,9 +21,9 @@ const ntnEnv = (() => {
 	return env;
 })();
 
-// Run `ntn` and capture stdout. stdin is closed ("ignore"): `ntn api` reads a request
+// Spawn `ntn` and capture stdout. stdin is closed ("ignore"): `ntn api` reads a request
 // body from stdin, so an open empty pipe would hang it forever.
-const ntn = (args: string[]): Promise<string> =>
+const spawnNtn = (args: string[]): Promise<string> =>
 	new Promise((resolve, reject) => {
 		const child = spawn("ntn", args, { env: ntnEnv, stdio: ["ignore", "pipe", "pipe"] });
 		let out = "";
@@ -34,6 +36,26 @@ const ntn = (args: string[]): Promise<string> =>
 				? resolve(out)
 				: reject(new Error(`ntn ${args.join(" ")} → exit ${code}: ${err.trim()}`))
 		);
+	});
+
+// One gate for the whole Notion backend (its own ceiling, so a tool can fan out wider than it), with
+// retry-on-429: the API is rate-limited, so a concurrent burst draws 429s — back off and retry rather
+// than fail the run. The retry is the sole diagnostic here (a slow, exceptional event → the one log
+// seam); normal calls stay quiet, so stdout stays the answer and stderr only speaks when it matters.
+const slot = gate(NOTION_CONCURRENCY);
+const RATE = /rate.?limit|\b429\b|too many requests/i;
+const ntn = (args: string[]): Promise<string> =>
+	slot(async () => {
+		for (let attempt = 0; ; attempt++) {
+			try {
+				return await spawnNtn(args);
+			} catch (e) {
+				if (attempt >= 4 || !RATE.test((e as Error).message)) throw e;
+				const wait = 500 * 2 ** attempt;
+				log("notion", `rate-limited, retry ${attempt + 1}/4 in ${wait}ms`);
+				await new Promise((r) => setTimeout(r, wait));
+			}
+		}
 	});
 
 // A Notion data source, as the API returns it — only the fields we read.
@@ -58,7 +80,12 @@ export const idOf = (s: string): string => s.match(/[0-9a-f]{32}/i)?.[0] ?? s;
 // Resolve a model handle (database id / data-source id / URL) to a data source id.
 // `datasources resolve` maps a DATABASE id → its data source(s); given a value that is
 // already a data source id it errors, so a failed resolve means "use it directly".
+// Memoized: a model→dsId mapping is stable for the life of a (short-lived) CLI process, so this
+// spawns `ntn` once per model instead of on every store op.
+const dsIdCache = new Map<string, string>();
 const resolveDsId = async (model: string): Promise<string> => {
+	const cached = dsIdCache.get(model);
+	if (cached) return cached;
 	const id = idOf(model);
 	const out = await ntn(["datasources", "resolve", id]).catch(() => "");
 	const ids = out
@@ -70,7 +97,20 @@ const resolveDsId = async (model: string): Promise<string> => {
 		throw new Error(
 			`"${model}" is a database with ${ids.length} data sources — pass one of: ${ids.join(", ")}`
 		);
-	return ids[0] ?? id;
+	const dsId = ids[0] ?? id;
+	dsIdCache.set(model, dsId);
+	return dsId;
+};
+
+// A data source's schema (its property map) — also stable per process, so fetch it once per id.
+// With resolveDsId's cache this removes the repeated `ntn` schema fetch every locate/describe made.
+const dsCache = new Map<string, DataSource>();
+const loadDs = async (dsId: string): Promise<DataSource> => {
+	const hit = dsCache.get(dsId);
+	if (hit) return hit;
+	const ds: DataSource = JSON.parse(await ntn(["api", `/v1/data_sources/${dsId}`]));
+	dsCache.set(dsId, ds);
+	return ds;
 };
 
 const optionNames = (o?: { options: { name: string }[] }): string[] =>
@@ -161,7 +201,7 @@ const locate = async (
 	page?: { id: string; properties: Record<string, NotionValue> };
 }> => {
 	const dsId = await resolveDsId(model);
-	const ds: DataSource = JSON.parse(await ntn(["api", `/v1/data_sources/${dsId}`]));
+	const ds = await loadDs(dsId);
 	const key = ds.properties[keyProp];
 	if (!key) throw new Error(`notion: no key property "${keyProp}" on "${model}"`);
 	// A relation is keyed by "contains this one id" (Notion has no relation `equals`); every other
@@ -267,9 +307,7 @@ export const comment = async (id: string, text: string): Promise<void> => {
 // id rides in `$id` so a writer can recover it; `title` names the dump file. Properties
 // are sorted by name so the file is stable and `git diff` reads as a changelog.
 export const describe = async (model: string): Promise<Record<string, unknown>> => {
-	const ds: DataSource = JSON.parse(
-		await ntn(["api", `/v1/data_sources/${await resolveDsId(model)}`])
-	);
+	const ds = await loadDs(await resolveDsId(model));
 	const title = ds.title.map((t) => t.plain_text).join("") || ds.id;
 	const properties: Record<string, unknown> = {};
 	const required: string[] = [];

@@ -9,14 +9,14 @@ import { promisify } from "node:util";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { parse } from "yaml";
-import { gate } from "../concurrency.js";
+import { gate, REDUCK_CONCURRENCY } from "../concurrency.js";
 import { log } from "../log.js";
 
 const exec = promisify(execFile);
 
 // The single global ceiling on concurrent reduck runs (one browser device). Every `run` acquires a
 // slot, so any fan-out — a profile's parallel scripts, a batched tool — is throttled to the limit.
-const slot = gate();
+const slot = gate(REDUCK_CONCURRENCY);
 const require = createRequire(import.meta.url);
 
 // The bundled CLI's entry, run under this same node. Falls back to a `reduck` on

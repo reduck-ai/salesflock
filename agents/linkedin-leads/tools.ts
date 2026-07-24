@@ -12,7 +12,7 @@ import {
 } from "../../src/clients/lk/index.js";
 import { getStore } from "../../src/stores/index.js";
 import { createDecider } from "../../src/decide.js";
-import { renderEvidence } from "../../src/linkedin/evidence.js";
+import { renderEvidence } from "./evidence.js";
 import { projectInput } from "../../src/project.js";
 import type { Subject, EntityLink } from "../../src/decide.js";
 import type { PromptSpec } from "../../src/stores/index.js";

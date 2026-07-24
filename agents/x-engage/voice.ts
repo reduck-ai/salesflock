@@ -8,19 +8,20 @@
 // exhaustive (unlike an elimination, which may never rest on a truncated read).
 
 import { getStore } from "../../src/stores/index.js";
-import config from "./config.js";
+import config, { OWNER } from "./config.js";
 
 const store = getStore(config.destination);
 const SAMPLE = 15;
 
-// Always-true filters (every row has these) — the store's `query` always sends a filter, so this is
-// how we ask for "all rows" and let the first page stand in as the sample.
-const anyText = (property: string) => ({ property, rich_text: { is_not_empty: true } });
+// The archive now records everyone we see, so voice must keep to the owner's OWN rows — otherwise a
+// draft would learn the target author's voice instead of ours. Author == OWNER is that filter; a
+// capped first page still stands in as the representative sample.
+const mine = { property: "Author", rich_text: { equals: OWNER } };
 
 export const voiceExamples = async (): Promise<string> => {
 	const [posts, replies] = await Promise.all([
-		store.query(config.models.XPosts, anyText("Text")),
-		store.query(config.models.XReplies, anyText("Reply"))
+		store.query(config.models.XPosts, mine),
+		store.query(config.models.XReplies, mine)
 	]);
 	const postBlock = posts
 		.slice(0, SAMPLE)

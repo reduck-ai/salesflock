@@ -54,8 +54,8 @@ export const getUserPosts = (handle: string, count?: number): Promise<UserPosts>
 	run<UserPosts>(scripts.userPosts, { handle: handleOf(handle), ...(count ? { count } : {}) });
 
 // get_user_replies — a person's own Replies tab (/<handle>/with_replies): their replies to others,
-// each carrying in_reply_to_handle/in_reply_to_id (null on a plain post). The owner's real reply
-// voice — the calibration corpus update-replies scrapes.
+// each carrying in_reply_to {id, author_handle} (null on a plain post). The owner's real reply
+// voice — the calibration corpus `hydrate` scrapes.
 export const getUserReplies = (handle: string, count?: number): Promise<UserReplies> =>
 	run<UserReplies>(scripts.userReplies, { handle: handleOf(handle), ...(count ? { count } : {}) });
 

@@ -5,23 +5,10 @@
 import "../../src/env.js";
 import { Command } from "commander";
 import { renderError } from "../../src/errors.js";
-import { mapLimit } from "../../src/concurrency.js";
+import { batch } from "../../src/concurrency.js";
 import { tools } from "./tools.js";
 
 const out = (v: unknown) => console.log(JSON.stringify(v, null, 2));
-
-// Batch a per-profile tool over many, ≤4 in flight (the shared reduck cap throttles scrapes under
-// it). Resilient by construction: one profile's failure becomes an {profile, error} entry rather
-// than aborting the whole run — a batch never loses its good results to one bad scrape. The error
-// still flows to the shell: if any item failed, the process exits non-zero (a run is never silently
-// "successful" while an item errored).
-const batch = async <R>(profiles: string[], fn: (p: string) => Promise<R>) => {
-	const results = await mapLimit(profiles, (p) =>
-		fn(p).catch((e: unknown) => ({ profile: p, error: renderError(e) }))
-	);
-	if (results.some((r) => r && typeof r === "object" && "error" in r)) process.exitCode = 1;
-	return results;
-};
 
 const program = new Command()
 	.name("rpa")

@@ -13,6 +13,12 @@
 
 import type { AgentConfig } from "../../src/stores/index.js";
 
+// The owner's X handle (bare, no @). The one thing that separates "us" from "everyone else" in the
+// now-shared archive: voice.ts filters X Posts/X Replies to Author == OWNER (drafts sound like the
+// owner, not the people we record), and the ingest core never queues the owner's own tweets as
+// engagement candidates (you don't reply to yourself).
+export const OWNER = "dhuynh95";
+
 export default {
 	destination: "notion",
 	models: {
@@ -30,7 +36,7 @@ export default {
 		reply: {
 			name: "X Reply",
 			pending: "Draft pending review",
-			resolve: () => ({ status: "Approved", advances: true })
+			resolve: (_output) => ({ status: "Approved", advances: true })
 		}
 	}
 } as const satisfies AgentConfig;

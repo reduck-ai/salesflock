@@ -7,72 +7,83 @@ export interface Search {
   count: number;
   query: string;
   tweets: {
+    id: string;
     url: string;
+    lang?: string | null;
     /**
-     * Tweet creation date as returned by X, e.g. 'Tue Jun 09 13:47:27 +0000 2026'.
-     */
-    date: string;
-    name?: string;
-    /**
-     * Full tweet text (long-form note tweets included).
+     * Full tweet text; long-form (>280) sourced from note_tweet when present.
      */
     text: string;
-    likes: number;
+    likes?: number | null;
     /**
-     * 0 when X does not expose views for this tweet.
+     * null when X does not expose views for this tweet.
      */
-    views?: number;
-    handle: string;
-    quotes?: number;
-    replies: number;
-    retweets: number;
+    views?: number | null;
+    author: {
+      id: string | null;
+      name: string | null;
+      handle: string | null;
+    } | null;
+    quotes?: number | null;
+    replies?: number | null;
+    is_quote?: boolean;
+    retweets?: number | null;
+    bookmarks?: number | null;
+    /**
+     * Author's follower count (search enrichment; not part of the canonical tweet shape).
+     */
     followers?: number | null;
+    /**
+     * X's native format, e.g. 'Tue Jun 09 13:47:27 +0000 2026'.
+     */
+    created_at: string;
+    is_retweet?: boolean;
   }[];
 }
 
 export interface Feed {
   tweets: {
     /**
-     * Tweet rest_id. Note: for retweets this is the retweet wrapper id, not the original — join via retweeted_tweet.id.
+     * Tweet rest_id. For retweets this is the wrapper id, not the original — join via retweeted_tweet.id.
      */
     id: string;
     url: string;
     lang?: string | null;
     /**
-     * Full tweet text. Long-form (>280) is sourced from note_tweet when present.
+     * Full tweet text; long-form (>280) sourced from note_tweet when present.
      */
     text: string;
+    likes: number | null;
+    /**
+     * null when X does not expose views for this tweet.
+     */
+    views?: number | null;
     author: {
       id: string;
       name: string;
       handle: string;
     };
+    quotes: number | null;
+    replies: number | null;
     is_quote: boolean;
+    retweets: number | null;
+    bookmarks?: number | null;
     /**
-     * X's native format e.g. 'Fri May 29 02:06:57 +0000 2026'.
+     * X's native format, e.g. 'Fri May 29 02:06:57 +0000 2026'.
      */
     created_at: string;
     is_retweet: boolean;
-    like_count: number;
     /**
-     * null when views are not exposed for this tweet.
-     */
-    view_count: number | null;
-    /**
-     * The tweet this one replies to, from X's native in_reply_to_status_id_str / in_reply_to_screen_name. null unless this tweet is a reply — so `in_reply_to != null` is the reply test.
+     * The tweet this replies to; null unless a reply (so in_reply_to != null is the reply test).
      */
     in_reply_to?: {
       id: string;
       author_handle: string | null;
     } | null;
-    quote_count: number;
-    reply_count: number;
     quoted_tweet?: {
       id: string;
       author_handle: string | null;
     } | null;
-    retweet_count: number;
-    bookmark_count?: number;
     retweeted_tweet?: {
       id: string;
       author_handle: string | null;
@@ -86,37 +97,75 @@ export interface Tweet {
    */
   count: number;
   /**
-   * The tweet at tweet_url itself (the conversation focal/root); null if it can't be found (deleted / tombstoned).
+   * The tweet at tweet_url (the conversation focal/root); null if it can't be found (deleted / tombstoned).
    */
   tweet: {
-    id?: string;
-    url?: string;
-    text?: string;
-    likes?: number;
-    author?: string;
-    quotes?: number;
-    replies?: number;
-    retweets?: number;
-    created_at?: string;
-    author_name?: string;
+    id: string;
+    url: string;
+    lang?: string | null;
     /**
-     * Parent tweet id when the focal tweet is itself a reply; null when it is a root.
+     * Full tweet text; long-form (>280) sourced from note_tweet when present.
      */
-    in_reply_to?: string | null;
+    text: string;
+    likes?: number | null;
+    /**
+     * null when X does not expose views for this tweet.
+     */
+    views?: number | null;
+    author?: {
+      id: string | null;
+      name: string | null;
+      handle: string | null;
+    } | null;
+    quotes?: number | null;
+    replies?: number | null;
+    is_quote?: boolean;
+    retweets?: number | null;
+    bookmarks?: number | null;
+    created_at: string;
+    is_retweet?: boolean;
+    /**
+     * Parent tweet {id, author_handle} when the focal tweet is itself a reply; null when it is a root.
+     */
+    in_reply_to?: {
+      id: string;
+      author_handle: string | null;
+    } | null;
   } | null;
   replies: {
     id: string;
     url: string;
+    lang?: string | null;
+    /**
+     * Full tweet text; long-form (>280) sourced from note_tweet when present.
+     */
     text: string;
-    likes?: number;
-    author: string;
-    quotes?: number;
-    replies?: number;
-    retweets?: number;
-    created_at?: string;
-    author_name?: string;
-    in_reply_to?: string | null;
+    likes?: number | null;
+    views?: number | null;
+    author?: {
+      id: string | null;
+      name: string | null;
+      handle: string | null;
+    } | null;
+    quotes?: number | null;
+    replies?: number | null;
+    is_quote?: boolean;
+    retweets?: number | null;
+    bookmarks?: number | null;
+    created_at: string;
+    is_retweet?: boolean;
+    /**
+     * The tweet this reply replies to, {id, author_handle}.
+     */
+    in_reply_to?: {
+      id: string;
+      author_handle: string | null;
+    } | null;
   }[];
+  /**
+   * True iff the reply pull drained the conversation (no further page loaded, or a page added nothing) rather than stopping at count. False means it hit the cap and more replies may exist, so absence of a given reply is not proof. Nested Show-more-replies are not expanded, so true is a floor, not a guarantee every nested reply was seen.
+   */
+  complete: boolean;
   tweet_id: string;
 }
 
@@ -164,40 +213,51 @@ export type UserPosts = {
   id: string;
   url: string;
   lang?: string | null;
+  /**
+   * Full tweet text; long-form (>280) sourced from note_tweet when present.
+   */
   text: string;
   likes?: number | null;
-  views?: string | null;
+  /**
+   * null when X does not expose views for this tweet.
+   */
+  views?: number | null;
   quotes?: number | null;
   replies?: number | null;
-  is_quote?: boolean | null;
+  is_quote?: boolean;
   retweets?: number | null;
   bookmarks?: number | null;
   created_at: string;
-  is_retweet?: boolean | null;
+  is_retweet?: boolean;
 }[];
 
 export type UserReplies = {
   id: string;
   url: string;
   lang?: string | null;
+  /**
+   * Full tweet text; long-form (>280) sourced from note_tweet when present.
+   */
   text: string;
   likes?: number | null;
-  views?: string | null;
+  /**
+   * null when X does not expose views for this tweet.
+   */
+  views?: number | null;
   quotes?: number | null;
   replies?: number | null;
-  is_quote?: boolean | null;
+  is_quote?: boolean;
   retweets?: number | null;
   bookmarks?: number | null;
   created_at: string;
-  is_retweet?: boolean | null;
+  is_retweet?: boolean;
   /**
-   * Tweet id this row replies to; null on a plain post. Feed to get_tweet for the parent.
+   * The tweet this row replies to, {id, author_handle}; null on a plain post. Feed id to get_tweet for the parent.
    */
-  in_reply_to_id?: string | null;
-  /**
-   * Handle this row replies to; null on a plain post.
-   */
-  in_reply_to_handle?: string | null;
+  in_reply_to?: {
+    id: string;
+    author_handle: string | null;
+  } | null;
 }[];
 
 export interface Reply {

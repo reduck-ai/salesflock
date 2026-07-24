@@ -7,7 +7,7 @@
 // place, held to that contract; this adapter no longer knows the contracts.
 
 import type { Decision } from "$lib/server/notion";
-import { renderEvidence, fieldSpan } from "$core/linkedin/evidence";
+import { renderEvidence, fieldSpan } from "$agent/evidence";
 import { hasFeedback, reviewOf } from "$core/review";
 import type { EvidencedJudgment, Quote, Statement } from "./types";
 
