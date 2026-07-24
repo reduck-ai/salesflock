@@ -54,17 +54,25 @@ const renderTweet = (yaml: string): string => {
 		return markdown(yaml);
 	}
 	if (!t || typeof t !== "object" || typeof t.text !== "string") return markdown(yaml);
-	const parts = [
-		t.parent?.text && embed(t.parent, "tw-parent"), // the answered tweet, above (x.com order)
+	// The FOCAL tweet — the one our reply answers — is the anchored "document": its own parts
+	// (header, the "Replying to" line, body, any quoted embed, metrics) are wrapped in `tw-focal`
+	// so the app can accent it as the reply's attachment point. The parent (the tweet it answers)
+	// stays ABOVE the wrapper — the ancestor context, not the focal tweet (x.com order).
+	const parent = t.parent?.text ? embed(t.parent, "tw-parent") : "";
+	const focal = [
 		head(t),
 		t.parent?.handle && `<span class="tw-ctx">Replying to @${t.parent.handle}</span>`,
 		`<span class="tw-body">${t.text}</span>`,
 		(t.quoted?.text || t.quoted?.handle) && embed(t.quoted!, "tw-quote"),
 		metrics(t)
-	].filter(Boolean);
+	]
+		.filter(Boolean)
+		.join("\n");
 	// A <pre> wrapper: it is the one HTML block kind `marked` passes through verbatim across blank
 	// lines (tweet bodies have them) — an <article>/<div> block would be cut at the first blank line.
-	// The tweet CSS resets <pre>'s monospace/whitespace; the body re-enables line wrapping.
+	// The tweet CSS resets <pre>'s monospace/whitespace; the body re-enables line wrapping. Single-`\n`
+	// joins only (no blank line), so the app's block-split for the composer dock is unaffected.
+	const parts = [parent, `<span class="tw-focal">\n${focal}\n</span>`].filter(Boolean);
 	return `<pre class="tw">\n${parts.join("\n")}\n</pre>`;
 };
 

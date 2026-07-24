@@ -743,6 +743,16 @@
 		color: var(--muted-foreground);
 		font-size: 12px;
 	}
+	/* the focal tweet — the one our reply answers, and where the composer docks. Accented as the
+	   anchored "document" (a green left bar + faint tint, the dock's confirm-green) so it reads as
+	   the reply's target; the parent/quoted .tw-embed boxes stay the muted context they already are. */
+	.doc :global(pre.tw .tw-focal) {
+		display: block;
+		padding: 2px 0 2px 12px;
+		border-left: 2.5px solid #16a34a;
+		background: color-mix(in oklch, #16a34a 5%, transparent);
+		border-radius: 0 6px 6px 0;
+	}
 	/* an embedded tweet — the answered parent (above) or the quoted post (below) */
 	.doc :global(.tw-embed) {
 		display: block;
