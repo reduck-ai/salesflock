@@ -1,0 +1,78 @@
+/* x-engage evidence styling — OWNED BY THE AGENT, the skin twin of evidence.ts (which emits these
+   classes). The app loads it generically through the $agent alias (import "$agent/evidence.css"),
+   so core stays agent-agnostic: the x.com look lives HERE, not in the shared ReviewCard. It uses
+   only the app's global theme tokens (--foreground, --muted-foreground, --border), so it inherits
+   whatever theme core sets — the agent skins the card, it does not dictate the app palette. Scoped
+   under .evidence (the class on the evidence container) so it can't leak past the rendered doc. */
+
+/* the tweet card — reset the <pre> the renderer wraps it in (marked passes <pre> through verbatim
+   across a tweet's blank lines), then give it x.com's rhythm and type scale */
+.evidence pre.tw {
+	white-space: normal;
+	font-family: inherit;
+	font-size: 15px;
+	line-height: 1.4;
+	margin: 4px 0;
+	overflow: visible;
+}
+.evidence .tw-head {
+	display: block;
+	color: var(--muted-foreground);
+	font-size: 15px;
+}
+.evidence .tw-head b {
+	color: var(--foreground);
+	font-weight: 700;
+}
+/* "Replying to @handle" — x.com's reply-context blue */
+.evidence .tw-ctx {
+	display: block;
+	margin-top: 1px;
+	color: #1d9bf0;
+	font-size: 15px;
+}
+.evidence .tw-body {
+	display: block;
+	margin: 2px 0;
+	white-space: pre-wrap; /* preserve the tweet's own line breaks */
+	overflow-wrap: anywhere;
+	font-size: 15px;
+	line-height: 1.4;
+}
+.evidence .tw-meta {
+	display: block;
+	margin-top: 8px;
+	color: var(--muted-foreground);
+	font-size: 13px;
+}
+
+/* the focal tweet — the one our reply answers, and where the composer docks. Primary (its body
+   stays 15px while embeds drop to 14px, x.com's ancestor-smaller order), with a thin green cue so
+   the reviewer sees exactly where the reply attaches. */
+.evidence pre.tw .tw-focal {
+	display: block;
+	padding: 2px 0 2px 12px;
+	border-left: 2px solid #16a34a;
+	background: color-mix(in oklch, #16a34a 4%, transparent);
+	border-radius: 0 8px 8px 0;
+}
+
+/* an embedded tweet — the answered parent (above) or the quoted post (below): x.com's rounded
+   hairline card, one notch smaller than the focal so the hierarchy reads at a glance */
+.evidence .tw-embed {
+	display: block;
+	margin: 10px 0;
+	padding: 10px 14px;
+	border: 1px solid var(--border);
+	border-radius: 16px;
+}
+.evidence .tw-embed .tw-head,
+.evidence .tw-embed .tw-body {
+	font-size: 14px;
+}
+.evidence .tw-embed .tw-body {
+	margin: 3px 0 0;
+}
+.evidence .tw-embed .tw-meta {
+	margin-top: 6px;
+}

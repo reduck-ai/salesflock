@@ -17,6 +17,10 @@
 	// output; meaning is the caller's.
 	import Markdown from "$lib/components/Markdown.svelte";
 	import OutputForm from "./OutputForm.svelte";
+	// The agent owns its evidence's skin (the x.com tweet card), loaded generically through the
+	// $agent alias — the same seam that gives us $agent/evidence and $agent/config, so core stays
+	// agent-agnostic. The runtime CLI imports only evidence.ts, never this.
+	import "$agent/evidence.css";
 	import { Badge } from "$lib/components/ui/badge";
 	import { quoteAt, canonNormalize, quoteKey } from "$core/anchor";
 	import { schemaError } from "$core/output";
@@ -699,74 +703,11 @@
 	.doc :global(.evidence h3:first-child) {
 		margin-top: 6px;
 	}
-	.doc :global(pre) {
-		white-space: pre-wrap; /* YAML evidence blocks wrap instead of bleeding off the column */
+	/* generic YAML/code blocks wrap instead of bleeding off the column; the agent's tweet card
+	   (pre.tw) owns its own whitespace in $agent/evidence.css, so exclude it here (no cascade tie) */
+	.doc :global(pre:not(.tw)) {
+		white-space: pre-wrap;
 		overflow-wrap: anywhere;
-	}
-
-	/* the x.com tweet card — the agent's evidence renderer emits it as HTML (wrapped in <pre> so
-	   marked passes it through verbatim across a tweet's blank lines); these rules reset <pre>'s
-	   monospace/whitespace and give the card its shape. The focal post is borderless (it's the
-	   document); the answered/quoted tweets are bordered embeds, exactly as x.com shows them. */
-	.doc :global(pre.tw) {
-		white-space: normal;
-		font-family: inherit;
-		font-size: inherit;
-		margin: 4px 0;
-		overflow: visible;
-	}
-	.doc :global(.tw-head) {
-		display: block;
-		color: var(--muted-foreground);
-		font-size: 13px;
-	}
-	.doc :global(.tw-head b) {
-		color: var(--foreground);
-		font-weight: 600;
-	}
-	.doc :global(.tw-ctx) {
-		display: block;
-		margin-top: 2px;
-		color: var(--muted-foreground);
-		font-size: 12px;
-	}
-	.doc :global(.tw-body) {
-		display: block;
-		margin: 4px 0;
-		white-space: pre-wrap; /* preserve the tweet's own line breaks */
-		overflow-wrap: anywhere;
-		line-height: 1.5;
-	}
-	.doc :global(.tw-meta) {
-		display: block;
-		margin-top: 4px;
-		color: var(--muted-foreground);
-		font-size: 12px;
-	}
-	/* the focal tweet — the one our reply answers, and where the composer docks. Accented as the
-	   anchored "document" (a green left bar + faint tint, the dock's confirm-green) so it reads as
-	   the reply's target; the parent/quoted .tw-embed boxes stay the muted context they already are. */
-	.doc :global(pre.tw .tw-focal) {
-		display: block;
-		padding: 2px 0 2px 12px;
-		border-left: 2.5px solid #16a34a;
-		background: color-mix(in oklch, #16a34a 5%, transparent);
-		border-radius: 0 6px 6px 0;
-	}
-	/* an embedded tweet — the answered parent (above) or the quoted post (below) */
-	.doc :global(.tw-embed) {
-		display: block;
-		margin: 10px 0;
-		padding: 9px 12px;
-		border: 1px solid var(--border);
-		border-radius: 14px;
-	}
-	.doc :global(.tw-embed .tw-body) {
-		margin: 3px 0 0;
-		font-size: 13.5px;
-	}
-	.doc :global(.tw-embed .tw-meta) {
-		margin-top: 6px;
 	}
 
 	/* the margin notes — each claim pinned beside its first proof, doc-comment style */

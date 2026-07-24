@@ -45,9 +45,23 @@ says what it does. If a fact can drift, it belongs in code, not here.
 9. **Stage, and stop early.** Work proceeds in stages; stop at the first stage that
    answers the question — don't enrich what you won't use.
 
+10. **The agent is a folder; the core is a seam.** Everything agent-specific lives under
+   `agents/<id>/`; everything shared lives under `src/` (the engine) and `app/` (the review
+   surface). They meet at two aliases the app declares — `$core` (shared primitives, never
+   re-implemented) and `$agent` (the one bound agent). An agent *is* a fixed contract resolved
+   by convention — `config.ts` (pipeline semantics), an `evidence.ts` (+ optional
+   `evidence.css` skin) that renders what it judges, and the funnel wiring (`tools.ts` /
+   `cli.ts`) — nothing more. So the agent owns its evidence's *identity* (what it is, how it
+   looks) and its funnel; core owns the *engine* (judge, stores, clients) and the *review
+   machinery* (dock, highlighting, theme). The agent renders in theme *tokens*, never a
+   hardcoded palette — the proof the line is right: swap `$agent`, or flip the theme, and
+   neither side breaks the other.
+
 ## Applied
 
 `agents/linkedin-leads/` is the worked example: a canonical `Company` and `Person`
 (LinkedIn), source lenses and pipeline rows kept off them, one composite tool per thing
 `reduck run` can't express. Its method — the stage sequence — lives in the
 `linkedin-leads` skill; its identity lives in `agents/linkedin-leads/knowledge/`.
+`former-rpa-pms` and `x-engage` (on X) realize the same contract (#10); the review app
+binds exactly one via `$agent`, currently `x-engage`.
