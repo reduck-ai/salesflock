@@ -14,10 +14,13 @@ import type { Quote } from "../../src/anchor.js";
 
 const dot = (...parts: (string | false | null | undefined)[]): string => parts.filter(Boolean).join(" · ");
 
-// The focal post — an x.com card: the author header, the body PLAIN (so a judge's quote anchors on
-// it), then a muted metrics line. Falls back to generic Markdown when the field isn't the YAML shape
-// `scan` freezes (e.g. an older Decision that froze the bare body) — a malformed field never crashes.
-interface Tweet {
+// The focal post — an x.com card in HTML (the app owns a real tweet component, not styled markdown):
+// the author header, the body PLAIN (so a judge's quote anchors on it — canonicalize strips the tags,
+// keeping the text), a muted metrics line, and the two context slots x.com itself shows — the answered
+// tweet ABOVE (a reply) and the quoted tweet embedded BELOW. Each is 1:1 with reality: `draft` fetches
+// the counterpart's real body (get_tweet) before judging. Falls back to generic Markdown when the field
+// isn't the YAML shape `scan` freezes (e.g. an older Decision that froze the bare body).
+interface Ref {
 	name?: string | null;
 	handle?: string | null;
 	time?: string | null;
@@ -25,6 +28,24 @@ interface Tweet {
 	reach?: number | null;
 	replies?: number | null;
 }
+interface Tweet extends Ref {
+	parent?: Ref | null; // the tweet this one replies to (shown above, as x.com does)
+	quoted?: Ref | null; // the tweet this one quotes (embedded below the body)
+}
+
+const head = (t: Ref): string => {
+	const who = [t.name && `<b>${t.name}</b>`, t.handle && `@${t.handle}`].filter(Boolean).join(" ");
+	return `<span class="tw-head">${dot(who, t.time)}</span>`;
+};
+const metrics = (t: Ref): string => {
+	const m = dot(t.reach != null && `${t.reach} views`, t.replies != null && `${t.replies} replies`);
+	return m ? `<span class="tw-meta">${m}</span>` : "";
+};
+// An embedded tweet — the answered parent or the quoted post: a bordered card, its body verbatim so a
+// quote still anchors inside it. Rendered only once its real body is known (draft's get_tweet fetch).
+const embed = (t: Ref, cls: string): string =>
+	`<span class="tw-embed ${cls}">\n${[head(t), `<span class="tw-body">${t.text ?? ""}</span>`, metrics(t)].filter(Boolean).join("\n")}\n</span>`;
+
 const renderTweet = (yaml: string): string => {
 	let t: Tweet | null;
 	try {
@@ -33,9 +54,18 @@ const renderTweet = (yaml: string): string => {
 		return markdown(yaml);
 	}
 	if (!t || typeof t !== "object" || typeof t.text !== "string") return markdown(yaml);
-	const who = [t.name && `**${t.name}**`, t.handle && `@${t.handle}`].filter(Boolean).join(" ");
-	const meta = dot(t.reach != null && `${t.reach} views`, t.replies != null && `${t.replies} replies`);
-	return [dot(who, t.time), t.text, meta && `_${meta}_`].filter(Boolean).join("\n\n");
+	const parts = [
+		t.parent?.text && embed(t.parent, "tw-parent"), // the answered tweet, above (x.com order)
+		head(t),
+		t.parent?.handle && `<span class="tw-ctx">Replying to @${t.parent.handle}</span>`,
+		`<span class="tw-body">${t.text}</span>`,
+		(t.quoted?.text || t.quoted?.handle) && embed(t.quoted!, "tw-quote"),
+		metrics(t)
+	].filter(Boolean);
+	// A <pre> wrapper: it is the one HTML block kind `marked` passes through verbatim across blank
+	// lines (tweet bodies have them) — an <article>/<div> block would be cut at the first blank line.
+	// The tweet CSS resets <pre>'s monospace/whitespace; the body re-enables line wrapping.
+	return `<pre class="tw">\n${parts.join("\n")}\n</pre>`;
 };
 
 // The author's answered exchanges — the qualify signal, as x.com reply cards (the sibling of

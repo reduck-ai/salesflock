@@ -86,7 +86,17 @@ export const canonicalize = (evidence: string): { canon: string; at: number[] } 
 			i++;
 			continue;
 		}
-		const m = lineStart && /^(?:#{1,6}|[-*+]|>)[ \t]+/.exec(evidence.slice(i));
+		// An HTML tag is invisible chrome — the renderer may emit them (the X evidence is a tweet
+			// card, not plain markdown), so skip the whole tag like a markdown marker: its text content
+			// stays in canon, only the tag characters drop, keeping canon ≈ the visible DOM.
+			if (c === "<") {
+				const tag = /^<\/?[a-zA-Z!][^>]*>/.exec(evidence.slice(i));
+				if (tag) {
+					i += tag[0].length;
+					continue;
+				}
+			}
+			const m = lineStart && /^(?:#{1,6}|[-*+]|>)[ \t]+/.exec(evidence.slice(i));
 		if (m) {
 			i += m[0].length;
 			continue;
@@ -104,7 +114,8 @@ export const canonicalize = (evidence: string): { canon: string; at: number[] } 
 
 // Collapse a browser-visible string the way `canonicalize` collapses whitespace, so its length
 // is an offset into `canon` and it matches `canon` substrings.
-export const canonNormalize = (s: string): string => s.replace(/\s+/g, " ").trim();
+export const canonNormalize = (s: string): string =>
+	s.replace(/<\/?[a-zA-Z!][^>]*>/g, "").replace(/\s+/g, " ").trim();
 
 // quoteAt(E, selection, approx) — the HUMAN seam. A DOM selection is the rendered view of E;
 // canon-match its text and, when it repeats, pick the occurrence nearest `approx` (the canon-

@@ -27,7 +27,7 @@ import { renderEvidence } from "./evidence.js";
 import { projectInput } from "../../src/project.js";
 import { mapLimit } from "../../src/concurrency.js";
 import { classify, disposition } from "./signal.js";
-import { stringify } from "yaml";
+import { parse, stringify } from "yaml";
 import { voiceExamples } from "./voice.js";
 import config, { OWNER } from "./config.js";
 import type { Subject } from "../../src/decide.js";
@@ -59,8 +59,9 @@ const isFresh = (createdAt?: string | null, hours = 48): boolean => {
 };
 
 // The one shape every source (feed, a person's posts, a person's replies) normalizes to, so archive +
-// queue are written once and shared. `isReply` routes the archive (X Replies vs X Posts); `parentAuthor`
-// is who a reply answered (X Replies' "Parent author"), distinct from `author` (who wrote it).
+// queue are written once and shared. `isReply` routes the archive (X Replies vs X Posts); `replyTo`
+// is the answered tweet {id, handle} (X Replies' "Parent author" + the reply-context ref), and
+// `quoted` the quoted tweet {id, handle} — both distinct from `author` (who wrote this tweet).
 interface NormTweet {
 	url: string;
 	id: string;
@@ -71,7 +72,8 @@ interface NormTweet {
 	views?: number;
 	replyCount?: number;
 	isReply: boolean;
-	parentAuthor?: string;
+	replyTo?: { id: string; handle?: string }; // the tweet this one answers (a reply)
+	quoted?: { id: string; handle?: string }; // the tweet this one quotes (a quote-tweet; feed only)
 }
 
 const fromFeed = (t: Feed["tweets"][number]): NormTweet => ({
@@ -84,7 +86,8 @@ const fromFeed = (t: Feed["tweets"][number]): NormTweet => ({
 	views: t.views ?? undefined,
 	replyCount: t.replies ?? undefined,
 	isReply: !!t.in_reply_to,
-	parentAuthor: t.in_reply_to?.author_handle ?? undefined
+	replyTo: t.in_reply_to ? { id: t.in_reply_to.id, handle: t.in_reply_to.author_handle ?? undefined } : undefined,
+	quoted: t.quoted_tweet ? { id: t.quoted_tweet.id, handle: t.quoted_tweet.author_handle ?? undefined } : undefined
 });
 
 const fromUserPost = (p: UserPosts[number], author: string, authorName?: string): NormTweet => ({
@@ -109,7 +112,7 @@ const fromUserReply = (r: UserReplies[number], author: string, authorName?: stri
 	views: r.views ?? undefined,
 	replyCount: r.replies ?? undefined,
 	isReply: true,
-	parentAuthor: r.in_reply_to?.author_handle ?? undefined
+	replyTo: r.in_reply_to ? { id: r.in_reply_to.id, handle: r.in_reply_to.author_handle ?? undefined } : undefined
 });
 
 // The X entity bridge (this agent's own wiring): the X Engagement row IS the subject — it carries
@@ -164,7 +167,7 @@ const archive = async (t: NormTweet): Promise<void> => {
 			Name: label(t.text) || t.id,
 			"Reply URL": t.url,
 			Reply: t.text || undefined,
-			"Parent author": t.parentAuthor ?? undefined,
+			"Parent author": t.replyTo?.handle ?? undefined,
 			"Posted at": iso(t.createdAt),
 			Source: "Scraped",
 			Author: t.author
@@ -221,7 +224,18 @@ const queue = async (
 		// evidence.ts:renderTweet can present it as an x.com card. The flat Author/Reach columns
 		// stay for the Notion table view; this YAML is what the judge and the review app render.
 		Post: stringify(
-			{ name: t.authorName, handle: t.author, time: iso(t.createdAt)?.slice(0, 10), text: t.text, reach: t.views, replies: t.replyCount },
+			{
+				name: t.authorName,
+				handle: t.author,
+				time: iso(t.createdAt)?.slice(0, 10),
+				text: t.text,
+				reach: t.views,
+				replies: t.replyCount,
+				// The reply/quote context, as a {id, handle} ref only — captured free here at scan; `draft`
+				// fills the real body via one get_tweet before judging (1:1 with x.com, only for survivors).
+				...(t.replyTo ? { parent: { id: t.replyTo.id, handle: t.replyTo.handle } } : {}),
+				...(t.quoted ? { quoted: { id: t.quoted.id, handle: t.quoted.handle } } : {})
+			},
 			{ lineWidth: 0 }
 		),
 		Reach: t.views,
@@ -236,6 +250,50 @@ const queue = async (
 const ingest = async (t: NormTweet, known: Set<string>, ranAt: string) => {
 	await archive(t);
 	return queue(t, known, ranAt);
+};
+
+// A tweet URL from a {id, handle} ref — the counterpart of a reply/quote (x.com/<handle>/status/<id>).
+const counterpartUrl = (ref: { id: string; handle?: string }): string =>
+	`https://x.com/${ref.handle ?? "i"}/status/${ref.id}`;
+
+type Ctx = { id?: string; handle?: string; text?: string; [k: string]: unknown };
+
+// ensureContext(postUrl) — 1:1 fidelity for the draft: any reply/quote context still holding only a
+// {id, handle} ref (captured free at scan) is filled with the counterpart's REAL body via one get_tweet,
+// then persisted back into the frozen Post so the judge and the review app render the actual x.com card.
+// Lazy — only leads that reach the draft stage pay the fetch (don't enrich what you won't use).
+// Idempotent: a ref that already carries text is left untouched.
+const ensureContext = async (postUrl: string): Promise<void> => {
+	const row = await store.read(config.models.XEngagements, "Post URL", postUrl);
+	let post: Record<string, unknown>;
+	try {
+		post = parse(String(row.fields.Post ?? ""));
+	} catch {
+		return;
+	}
+	if (!post || typeof post !== "object") return;
+	let changed = false;
+	for (const slot of ["parent", "quoted"] as const) {
+		const ref = post[slot] as Ctx | undefined;
+		if (!ref?.id || ref.text) continue;
+		const { tweet } = await getTweet(counterpartUrl({ id: ref.id, handle: ref.handle }), 1);
+		if (!tweet) continue;
+		post[slot] = {
+			name: tweet.author?.name ?? undefined,
+			handle: tweet.author?.handle ?? ref.handle,
+			time: iso(tweet.created_at)?.slice(0, 10),
+			text: tweet.text,
+			reach: tweet.views ?? undefined,
+			replies: tweet.replies ?? undefined
+		};
+		changed = true;
+	}
+	if (changed)
+		await store.upsert(
+			config.models.XEngagements,
+			{ Name: String(row.fields.Name), "Post URL": postUrl, Post: stringify(post, { lineWidth: 0 }) },
+			"Post URL"
+		);
 };
 
 export const tools = {
@@ -326,13 +384,16 @@ export const tools = {
 	// draft — judge one engagement against the "X Reply" contract, grounded in the owner's voice;
 	// writes one Decision and moves the engagement to the pending review gate. `context` prints the
 	// frozen judgment context (contract + evidence + the voice block), writes nothing.
-	draft: (postUrl: string) => decider.decide("reply", postUrl),
+	draft: async (postUrl: string) => {
+		await ensureContext(postUrl);
+		return decider.decide("reply", postUrl);
+	},
 	context: (postUrl: string) => decider.context("reply", postUrl),
 
-	// draftPending — draft every engagement at "To engage".
+	// draftPending — draft every engagement at "To engage" (each enriches its context first).
 	draftPending: async () => {
 		const rows = await store.query(config.models.XEngagements, { property: "Status", select: { equals: "To engage" } });
-		return mapLimit(rows, (r) => decider.decide("reply", String(r.fields["Post URL"])));
+		return mapLimit(rows, (r) => tools.draft(String(r.fields["Post URL"])));
 	},
 
 	// list / show — the review queue and one Decision, straight off the shared engine.

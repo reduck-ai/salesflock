@@ -704,6 +704,61 @@
 		overflow-wrap: anywhere;
 	}
 
+	/* the x.com tweet card — the agent's evidence renderer emits it as HTML (wrapped in <pre> so
+	   marked passes it through verbatim across a tweet's blank lines); these rules reset <pre>'s
+	   monospace/whitespace and give the card its shape. The focal post is borderless (it's the
+	   document); the answered/quoted tweets are bordered embeds, exactly as x.com shows them. */
+	.doc :global(pre.tw) {
+		white-space: normal;
+		font-family: inherit;
+		font-size: inherit;
+		margin: 4px 0;
+		overflow: visible;
+	}
+	.doc :global(.tw-head) {
+		display: block;
+		color: var(--muted-foreground);
+		font-size: 13px;
+	}
+	.doc :global(.tw-head b) {
+		color: var(--foreground);
+		font-weight: 600;
+	}
+	.doc :global(.tw-ctx) {
+		display: block;
+		margin-top: 2px;
+		color: var(--muted-foreground);
+		font-size: 12px;
+	}
+	.doc :global(.tw-body) {
+		display: block;
+		margin: 4px 0;
+		white-space: pre-wrap; /* preserve the tweet's own line breaks */
+		overflow-wrap: anywhere;
+		line-height: 1.5;
+	}
+	.doc :global(.tw-meta) {
+		display: block;
+		margin-top: 4px;
+		color: var(--muted-foreground);
+		font-size: 12px;
+	}
+	/* an embedded tweet — the answered parent (above) or the quoted post (below) */
+	.doc :global(.tw-embed) {
+		display: block;
+		margin: 10px 0;
+		padding: 9px 12px;
+		border: 1px solid var(--border);
+		border-radius: 14px;
+	}
+	.doc :global(.tw-embed .tw-body) {
+		margin: 3px 0 0;
+		font-size: 13.5px;
+	}
+	.doc :global(.tw-embed .tw-meta) {
+		margin-top: 6px;
+	}
+
 	/* the margin notes — each claim pinned beside its first proof, doc-comment style */
 	.gutter {
 		position: absolute;
