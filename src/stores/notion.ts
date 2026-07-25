@@ -10,7 +10,7 @@
 // `ntn` use the logged-in person.
 
 import { spawn } from "node:child_process";
-import { chunks, plain, type NotionValue } from "./notion.codec.js";
+import { bodyOf, chunks, plain, type BlockPage, type NotionValue } from "./notion.codec.js";
 import { gate, NOTION_CONCURRENCY } from "../concurrency.js";
 import { log } from "../log.js";
 import type { Ref, Row, Store } from "./index.js";
@@ -303,6 +303,16 @@ export const comment = async (id: string, text: string): Promise<void> => {
 	await ntn(["api", "-X", "POST", "/v1/comments", "-d", JSON.stringify(body)]);
 };
 
+// body(id) — a page's CONTENT as markdown: the read counterpart of `comment` (text in, text out;
+// a page id already implies its model). Prose is authored, not compiled, so it lives in the body,
+// never a column — a Prompt's instructions are the body of its page (and `chunks`' 100-item cap is
+// why a column could never hold them anyway). Paging and rendering are the codec's; this is transport.
+export const body = (id: string): Promise<string> =>
+	bodyOf(idOf(id), async (blockId, cursor) => {
+		const query = `page_size=100${cursor ? `&start_cursor=${cursor}` : ""}`;
+		return JSON.parse(await ntn(["api", `/v1/blocks/${blockId}/children?${query}`])) as BlockPage;
+	});
+
 // describe(model) — a JSON Schema of the model's writable properties. The data source
 // id rides in `$id` so a writer can recover it; `title` names the dump file. Properties
 // are sorted by name so the file is stable and `git diff` reads as a changelog.
@@ -331,4 +341,4 @@ export const describe = async (model: string): Promise<Record<string, unknown>> 
 };
 
 // The Store this module implements (Notion is the full System of Record).
-export const notion: Store = { describe, upsert, read, query, get, title, comment };
+export const notion: Store = { describe, upsert, read, query, get, title, body, comment };

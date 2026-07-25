@@ -3,10 +3,8 @@
 export interface Prompts {
   "Anchor field"?: string;
   "Input schema"?: string;
-  Instruction?: string;
   Name: string;
   "Output schema"?: string;
   Proposal?: string;
-  "System prompt"?: string;
   Version?: number;
 }

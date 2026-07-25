@@ -6,7 +6,7 @@
 
 import { error } from "@sveltejs/kit";
 import { env } from "$env/dynamic/private";
-import { chunks, plain, relation, type NotionValue } from "$core/stores/notion.codec";
+import { bodyOf, chunks, plain, relation, type BlockPage, type NotionValue } from "$core/stores/notion.codec";
 import { schemaError } from "$core/output";
 import { hasFeedback } from "$core/review";
 import config from "$agent/config";
@@ -31,8 +31,7 @@ export interface Decision {
 	outputSchema?: Record<string, unknown>; // the Prompt's Output JSON Schema (the edit contract)
 	proposal?: string; // the Prompt's framing text — what the output proposes (the card's header)
 	anchorField?: string; // the Input field the composer attaches below (set ⇒ attached; unset ⇒ floating)
-	system?: string; // the Prompt's System prompt — grounds the autocomplete the same way it grounds the judge
-	instruction?: string; // the Prompt's Instruction (criteria) — the other half of the grounding
+	system?: string; // the Prompt page's BODY — the instructions, grounding the autocomplete as they ground the judge
 }
 
 // A Prompt page → its Name, Output JSON Schema (the contract the human's output obeys), and
@@ -47,8 +46,6 @@ type PromptInfo = {
 	outputSchema?: Record<string, unknown>;
 	proposal?: string;
 	anchorField?: string;
-	system?: string;
-	instruction?: string;
 };
 const promptInfoCache = new Map<string, PromptInfo>();
 const promptInfo = async (id: string): Promise<PromptInfo> => {
@@ -63,20 +60,41 @@ const promptInfo = async (id: string): Promise<PromptInfo> => {
 	const schema = plain(properties["Output schema"]);
 	const proposal = plain(properties["Proposal"]);
 	const anchorField = plain(properties["Anchor field"]);
-	// System prompt + Instruction ride this same (memoized) fetch — the grounding the autocomplete
-	// shares with the judge, at no extra round-trip.
-	const system = plain(properties["System prompt"]);
-	const instruction = plain(properties["Instruction"]);
 	const info: PromptInfo = {
 		name,
 		outputSchema: schema ? (JSON.parse(String(schema)) as Record<string, unknown>) : undefined,
 		proposal: proposal ? String(proposal) : undefined,
-		anchorField: anchorField ? String(anchorField) : undefined,
-		system: system ? String(system) : undefined,
-		instruction: instruction ? String(instruction) : undefined
+		anchorField: anchorField ? String(anchorField) : undefined
 	};
 	promptInfoCache.set(id, info);
 	return info;
+};
+
+// A Prompt page's BODY — its instructions, the grounding the autocomplete shares with the judge.
+// Its own (memoized) fetch, deliberately apart from promptInfo: only the card path needs it, so the
+// list never pays for a body it won't ground anything with. Paging + rendering are $core's codec.
+//
+// Fail-SOFT, unlike the judge's read of the same body (decide.ts throws on an empty one). The split
+// is the stake: a judgment without instructions is invalid, but here the body only sharpens a ghost-
+// text suggestion — so an unreadable one must never cost the reviewer their card. Surfaced on stderr,
+// never swallowed silently, and the miss is not cached (a transient 5xx retries on the next open).
+const promptBodyCache = new Map<string, string>();
+const promptBody = async (id: string): Promise<string | undefined> => {
+	const cached = promptBodyCache.get(id);
+	if (cached !== undefined) return cached;
+	try {
+		const md = await bodyOf(id, async (blockId, cursor) => {
+			const query = `page_size=100${cursor ? `&start_cursor=${cursor}` : ""}`;
+			const res = await fetch(`${API}/blocks/${blockId}/children?${query}`, { headers });
+			if (!res.ok) throw new Error(`Notion ${res.status}: ${await res.text()}`);
+			return res.json() as Promise<BlockPage>;
+		});
+		promptBodyCache.set(id, md);
+		return md;
+	} catch (e) {
+		console.error(`promptBody: prompt ${id} body unreadable — autocomplete ungrounded: ${(e as Error).message}`);
+		return undefined;
+	}
 };
 
 // The prompt's pipeline semantics, by its Name — the same `resolve` the runtime declares.
@@ -132,8 +150,7 @@ export const decision = async (id: string): Promise<Decision> => {
 		d.proposal = info.proposal;
 		d.anchorField = info.anchorField;
 		d.promptName = info.name;
-		d.system = info.system;
-		d.instruction = info.instruction;
+		d.system = await promptBody(d.prompt);
 	}
 	return d;
 };

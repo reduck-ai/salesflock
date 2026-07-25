@@ -1,7 +1,7 @@
 // The autocomplete sink: the editor POSTs the caret context here and gets back an inline
 // continuation. Gated like /api/decide — only a signed-in visitor may spend a model call. The
-// suggestion is grounded in exactly what the drafter saw: the Prompt's System + Instruction and
-// the card's rendered Evidence (from the frozen Input) — reused, not rebuilt. Agent-agnostic: the
+// suggestion is grounded in exactly what the drafter saw: the Prompt's instructions (its page body)
+// and the card's rendered Evidence (from the frozen Input) — reused, not rebuilt. Agent-agnostic: the
 // evidence renderer is the $agent seam, so this serves whichever agent the app is bound to.
 
 import { error, json } from "@sveltejs/kit";
@@ -27,7 +27,6 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 	const prompt = [
 		d.system,
-		d.instruction,
 		`## Evidence\n\n${evidence}`,
 		`## Task\n\nYou are an inline autocomplete for a human editing the ${
 			field ? `"${field}" field of the ` : ""

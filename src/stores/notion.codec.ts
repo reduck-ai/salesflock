@@ -55,6 +55,106 @@ export const plain = (v: NotionValue): string | number | boolean | null => {
 	}
 };
 
+// A block, as the API returns it: `type` names the payload key that carries its rich text
+// (block.paragraph.rich_text, block.heading_2.rich_text, …), so the reader is one lookup.
+export interface NotionBlock {
+	id: string;
+	type: string;
+	has_children?: boolean;
+	[payload: string]: unknown;
+}
+export interface BlockPage {
+	results: NotionBlock[];
+	has_more: boolean;
+	next_cursor: string | null;
+}
+
+// A rich-text run, with the annotations a property read doesn't carry (plain() drops them —
+// a property is a scalar; a body is a document).
+interface RichText {
+	plain_text: string;
+	href?: string | null;
+	annotations?: { bold?: boolean; italic?: boolean; code?: boolean };
+}
+
+// Runs → markdown: the inverse of what a reader's markdown renderer will do to it, so text
+// authored in Notion's editor reaches an LLM as the markdown it looks like.
+const inline = (runs: RichText[]): string =>
+	runs
+		.map((r) => {
+			const a = r.annotations ?? {};
+			let s = r.plain_text;
+			if (a.code) s = `\`${s}\``;
+			if (a.bold) s = `**${s}**`;
+			if (a.italic) s = `_${s}_`;
+			return r.href ? `[${s}](${r.href})` : s;
+		})
+		.join("");
+
+// Block type → its line prefix. A type absent here renders its rich text bare (a paragraph),
+// so an unknown block loses its shape but never its text.
+const MARKER: Record<string, string> = {
+	heading_1: "# ",
+	heading_2: "## ",
+	heading_3: "### ",
+	bulleted_list_item: "- ",
+	numbered_list_item: "1. ",
+	quote: "> ",
+	callout: "> "
+};
+// The types that read as one list, so consecutive items join by a single newline.
+const LIST = new Set(["bulleted_list_item", "numbered_list_item", "to_do"]);
+
+const runsOf = (b: NotionBlock): RichText[] =>
+	((b[b.type] as { rich_text?: RichText[] } | undefined)?.rich_text ?? []) as RichText[];
+
+const renderBlock = (b: NotionBlock): string => {
+	if (b.type === "divider") return "---";
+	if (b.type === "code") {
+		const { language } = (b.code ?? {}) as { language?: string };
+		return `\`\`\`${language && language !== "plain text" ? language : ""}\n${inline(runsOf(b))}\n\`\`\``;
+	}
+	if (b.type === "to_do") {
+		const { checked } = (b.to_do ?? {}) as { checked?: boolean };
+		return `- [${checked ? "x" : " "}] ${inline(runsOf(b))}`;
+	}
+	return `${MARKER[b.type] ?? ""}${inline(runsOf(b))}`;
+};
+
+const indent = (s: string): string =>
+	s
+		.split("\n")
+		.map((l) => `  ${l}`)
+		.join("\n");
+
+// bodyOf(id, page) — a page's CONTENT as one markdown document. The transport is the caller's
+// (this file stays import-free, and the two clients authenticate differently), but paging,
+// nesting and rendering are decided HERE so a store read and an app read can never differ.
+// Pages to exhaustion and recurses into children: a body cut at a page boundary is a silently
+// truncated prompt, so "read it all" is not the caller's discretion.
+export const bodyOf = async (
+	id: string,
+	page: (blockId: string, cursor?: string) => Promise<BlockPage>
+): Promise<string> => {
+	const blocks: NotionBlock[] = [];
+	for (let cursor: string | undefined; ; ) {
+		const p = await page(id, cursor);
+		blocks.push(...p.results);
+		if (!p.has_more || !p.next_cursor) break;
+		cursor = p.next_cursor;
+	}
+	const parts: { type: string; text: string }[] = [];
+	for (const b of blocks) {
+		const kids = b.has_children ? indent(await bodyOf(b.id, page)) : "";
+		const text = [renderBlock(b), kids].filter((s) => s.trim()).join("\n");
+		if (text) parts.push({ type: b.type, text }); // an empty paragraph IS the blank line below
+	}
+	return parts.reduce(
+		(md, p, i) => (i ? md + (LIST.has(p.type) && LIST.has(parts[i - 1].type) ? "\n" : "\n\n") + p.text : p.text),
+		""
+	);
+};
+
 // Notion caps one rich text item at 2000 chars and a property write at 100 items, so a
 // string writes as a run of items up to ~200k chars — fail loud past that rather than
 // truncate. Slices never split a surrogate pair: a lone half is invalid JSON on write.

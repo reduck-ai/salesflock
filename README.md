@@ -28,6 +28,10 @@ says what it does. If a fact can drift, it belongs in code, not here.
 5. **Contracts are ground truth; types are generated.** Destinations compile via
    `describe → TS` (`sflock pull`); sources compile their reduck output schema → TS
    (`sflock bind`). The server validates args and output against the contract on every run.
+   The converse holds too: **prose is authored, not compiled.** A judgment's instructions are
+   a document, so they live in the Prompt page's *body* — never a column, which would compile
+   into a type nothing can validate. Columns carry what a machine reads; the body carries what
+   a person writes, and the CRM's own editor is the authoring surface.
 
 6. **Idempotency by construction.** One generic `upsert`; every persist-tool declares the
    single unique key that makes a re-run converge instead of duplicate. No key, no tool.

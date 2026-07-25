@@ -210,10 +210,12 @@ export const createDecider = (deps: DeciderDeps) => {
 		const prompt = versions.reduce((a, b) =>
 			Number(b.fields.Version ?? 0) > Number(a.fields.Version ?? 0) ? b : a
 		);
-		const [system, instruction] = (["System prompt", "Instruction"] as const).map((k) => {
-			if (!prompt.fields[k]) throw new Error(`prompt "${spec.name}" has no ${k}`);
-			return String(prompt.fields[k]);
-		});
+		// The instructions are the Prompt PAGE's BODY — persona and criteria as one authored markdown
+		// document, not a column (prose is written, not compiled). The columns hold only what a machine
+		// reads: the Input/Output schemas below, the Version above.
+		const system = await store.body(prompt.id);
+		if (!system.trim())
+			throw new Error(`prompt "${spec.name}" has an empty body — the instructions live in the page body`);
 		// The contract's shape. Parse loud — a malformed schema is a broken contract, not a guess.
 		const [inputSchema, outputSchema] = (["Input schema", "Output schema"] as const).map((k) => {
 			if (!prompt.fields[k]) throw new Error(`prompt "${spec.name}" has no ${k}`);
@@ -237,7 +239,7 @@ export const createDecider = (deps: DeciderDeps) => {
 		const examples = deps.renderExamples
 			? await deps.renderExamples(key, subject)
 			: await examplesFor(key, String(f.Name ?? subject.name));
-		return { spec, subject, prompt, system, instruction, examples, outputSchema, input, evidence, responseSchema };
+		return { spec, subject, prompt, system, examples, outputSchema, input, evidence, responseSchema };
 	};
 
 	// decide — judge the person against a Prompt row (the LLM two-tool loop) and persist one
@@ -304,7 +306,7 @@ export const createDecider = (deps: DeciderDeps) => {
 					return { ok: true };
 				}
 			});
-			const prompt = [ctx.system, ctx.instruction, ctx.examples, `## Evidence\n\n${ctx.evidence}`]
+			const prompt = [ctx.system, ctx.examples, `## Evidence\n\n${ctx.evidence}`]
 				.filter(Boolean)
 				.join("\n\n");
 			await llm.agent(prompt, { search_quotes, submit_claims }, () => submitted !== undefined);
@@ -340,8 +342,8 @@ export const createDecider = (deps: DeciderDeps) => {
 	// context — the read half of a decision: the contract plus the frozen evidence, with the
 	// response's expected shape. `--show` prints this; nothing is written.
 	const context = async (key: string, publicId: string) => {
-		const { system, instruction, examples, evidence, responseSchema } = await judgmentContext(key, publicId);
-		return { system, instruction, examples, evidence, responseSchema };
+		const { system, examples, evidence, responseSchema } = await judgmentContext(key, publicId);
+		return { system, examples, evidence, responseSchema };
 	};
 
 	return { ...reviewer, decide, context, judgmentContext };
