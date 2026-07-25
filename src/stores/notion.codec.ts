@@ -105,6 +105,12 @@ const MARKER: Record<string, string> = {
 // The types that read as one list, so consecutive items join by a single newline.
 const LIST = new Set(["bulleted_list_item", "numbered_list_item", "to_do"]);
 
+// Containers that carry NO text of their own — a synced block is a transclusion (the one authored
+// copy of a generic section, reused by every Prompt that syncs it) and a column is layout. Their
+// children belong at the container's own level: indenting them would nest content the author never
+// nested, and at four spaces markdown reads their heading as a code block instead.
+const TRANSPARENT = new Set(["synced_block", "column_list", "column"]);
+
 const runsOf = (b: NotionBlock): RichText[] =>
 	((b[b.type] as { rich_text?: RichText[] } | undefined)?.rich_text ?? []) as RichText[];
 
@@ -121,17 +127,22 @@ const renderBlock = (b: NotionBlock): string => {
 	return `${MARKER[b.type] ?? ""}${inline(runsOf(b))}`;
 };
 
+// Nest a rendered subtree one level. Blank lines stay blank — indenting them would only add
+// trailing whitespace to the document the judge reads.
 const indent = (s: string): string =>
 	s
 		.split("\n")
-		.map((l) => `  ${l}`)
+		.map((l) => (l ? `  ${l}` : l))
 		.join("\n");
 
 // bodyOf(id, page) — a page's CONTENT as one markdown document. The transport is the caller's
 // (this file stays import-free, and the two clients authenticate differently), but paging,
 // nesting and rendering are decided HERE so a store read and an app read can never differ.
 // Pages to exhaustion and recurses into children: a body cut at a page boundary is a silently
-// truncated prompt, so "read it all" is not the caller's discretion.
+// truncated prompt, so "read it all" is not the caller's discretion. A synced block needs no
+// resolving — Notion returns the original's blocks from the REFERENCE's own children endpoint — so
+// the recursion already reaches transcluded content; it is only spliced rather than nested (above).
+// The transport is a parameter, which is also the test seam: feed it fake pages, assert the markdown.
 export const bodyOf = async (
 	id: string,
 	page: (blockId: string, cursor?: string) => Promise<BlockPage>
@@ -145,9 +156,11 @@ export const bodyOf = async (
 	}
 	const parts: { type: string; text: string }[] = [];
 	for (const b of blocks) {
-		const kids = b.has_children ? indent(await bodyOf(b.id, page)) : "";
-		const text = [renderBlock(b), kids].filter((s) => s.trim()).join("\n");
-		if (text) parts.push({ type: b.type, text }); // an empty paragraph IS the blank line below
+		const kids = b.has_children ? await bodyOf(b.id, page) : "";
+		const text = TRANSPARENT.has(b.type)
+			? kids
+			: [renderBlock(b), kids && indent(kids)].filter((s) => s.trim()).join("\n");
+		if (text.trim()) parts.push({ type: b.type, text }); // an empty paragraph IS the blank line below
 	}
 	return parts.reduce(
 		(md, p, i) => (i ? md + (LIST.has(p.type) && LIST.has(parts[i - 1].type) ? "\n" : "\n\n") + p.text : p.text),

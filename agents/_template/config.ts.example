@@ -1,7 +1,7 @@
 // Copy to config.ts and fill in. The one place this agent binds to a store: which destination,
 // which store table each logical model maps to, and its Prompt specs. `sflock pull --agent <id>`
 // reads it to regenerate schema/*.ts; the runtime reads it to pick the store and address each table.
-// Committed (ids are already public in the schema banners), like knowledge/.
+// Committed — the ids are already public in the schema banners.
 
 import type { AgentConfig } from "../../src/stores/index.js";
 

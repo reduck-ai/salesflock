@@ -31,7 +31,10 @@ says what it does. If a fact can drift, it belongs in code, not here.
    The converse holds too: **prose is authored, not compiled.** A judgment's instructions are
    a document, so they live in the Prompt page's *body* — never a column, which would compile
    into a type nothing can validate. Columns carry what a machine reads; the body carries what
-   a person writes, and the CRM's own editor is the authoring surface.
+   a person writes, and the CRM's own editor is the authoring surface. Prose shared by several
+   Prompts (who we are) is written ONCE on its own page and pulled into each body as a Notion
+   *synced block* — the same "declare it once, both consumers read it" rule the code obeys.
+   Exactly two layers, Pages then Prompts: a section serving a single Prompt has earned no page.
 
 6. **Idempotency by construction.** One generic `upsert`; every persist-tool declares the
    single unique key that makes a re-run converge instead of duplicate. No key, no tool.
@@ -66,6 +69,7 @@ says what it does. If a fact can drift, it belongs in code, not here.
 `agents/linkedin-leads/` is the worked example: a canonical `Company` and `Person`
 (LinkedIn), source lenses and pipeline rows kept off them, one composite tool per thing
 `reduck run` can't express. Its method — the stage sequence — lives in the
-`linkedin-leads` skill; its identity lives in `agents/linkedin-leads/knowledge/`.
+`linkedin-leads` skill; its identity lives in the CRM, as its Prompt bodies (with the generic
+part — who we are — a synced block from one shared page, per #5).
 `former-rpa-pms` and `x-engage` (on X) realize the same contract (#10); the review app
 binds exactly one via `$agent`, currently `x-engage`.

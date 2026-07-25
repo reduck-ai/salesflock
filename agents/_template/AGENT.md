@@ -8,8 +8,9 @@ fill them in, register the binary.
 An agent is thin. The shared engine (`src/`) does the heavy lifting — the store seam
 (`src/stores/`), the judgment loop (`src/decide.ts`), the reduck runner
 (`src/clients/reduck.ts`). This folder is just the wiring: which store + tables
-(`config.ts`), which source scripts compose into records (`tools.ts`), the CLI surface
-(`cli.ts`), and the identity you judge against (`knowledge/`).
+(`config.ts`), which source scripts compose into records (`tools.ts`), and the CLI surface
+(`cli.ts`). The identity you judge against is not code at all — it lives in the CRM, as the
+Prompt page's body (see step 5).
 
 ## The canonical funnel
 
@@ -24,7 +25,11 @@ schema, and moves the entity to the human review gate.
 2. `mv` each `*.example` → drop the suffix; fill in the TODOs.
 3. Register the binary in `package.json` `bin`: `"<binary>": "./dist/agents/<id>/cli.js"`.
 4. Fill `config.ts` model ids, then `sflock pull --agent <id>` to generate `schema/*.ts`.
-5. Write `knowledge/company.md` + `knowledge/icp.md` (the identity the judge grounds on).
+5. Author the judge's instructions in the CRM, not the repo: each Prompt row's **page body** is
+   its persona + criteria (`store.body` reads it). Anything GENERIC gets its own page and is
+   pulled in with a Notion **synced block** — one authored copy, reused by every Prompt that
+   syncs it (today: "Company — Reduck"). Anything serving a single Prompt (its ICP) just lives
+   in that body. Two layers, Pages then Prompts — never deeper.
 6. `pnpm build` && run `<binary> --help`.
 
 ## Source seam — the one thing not yet shared
