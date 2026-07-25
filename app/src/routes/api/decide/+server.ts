@@ -16,6 +16,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		finalReasoning?: string; // the statements as the human left them — opaque, card-type-agnostic
 	};
 	if (!id) throw error(400, "bad judgment");
-	await record(id, { committedOutput, feedback: feedback ?? "", finalReasoning });
-	return json({ ok: true });
+	// `advances` rides back so the deck knows whether the decision this one unlocks is live: a
+	// rejecting outcome invalidates its dependent, and only the agent's `resolve` (server-side) says
+	// which is which — the client must not re-derive pipeline semantics.
+	return json({ ok: true, ...(await record(id, { committedOutput, feedback: feedback ?? "", finalReasoning })) });
 };

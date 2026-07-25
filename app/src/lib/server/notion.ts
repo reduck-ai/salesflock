@@ -26,6 +26,11 @@ export interface Decision {
 	title: string;
 	fields: Record<string, string>;
 	deps: string[]; // upstream Decision ids ("Depends on") — the DAG edges
+	// The Decision held behind this one — Notion's SYNCED inverse of "Depends on" (the property pair
+	// is one relation, so downstream is a read direction, not a second stored fact). This is how a
+	// confirmed gate knows which decision it just unlocked, and it rides on the page itself, so a
+	// deep-linked card knows it too. Chains are linear in every agent today, hence one id, not a list.
+	unlocks?: string;
 	prompt?: string; // the Prompt page id — its Output schema governs the editable output
 	promptName?: string; // the Prompt's Name (the row's kind) — the per-Prompt filter + sort key
 	outputSchema?: Record<string, unknown>; // the Prompt's Output JSON Schema (the edit contract)
@@ -168,6 +173,7 @@ const toDecision = ({
 		title,
 		fields,
 		deps: relation(properties["Depends on"]),
+		unlocks: relation(properties["Unlocks"])[0],
 		prompt: relation(properties.Prompt)[0]
 	};
 };
@@ -244,7 +250,13 @@ export const decisions = async (filter: Filter): Promise<Decision[]> => {
 	// log of decisions already made (they were gated when reviewed), so the gate would be moot there.
 	let gated = rows;
 	if (filter.tab === "review") {
-		const depIds = [...new Set(rows.flatMap((r) => r.deps))];
+		// A dep that is ITSELF in this pending set has no "Final output" — that is what made it
+		// pending — and `advanced` is false for exactly that reason. So its answer is already in hand:
+		// fetching the page to learn it is provably wasted work. Which is the common case (a fresh
+		// chain has both stages pending), so this leaves a fetch only for a dep already committed —
+		// mid-chain and orphaned rows. Same semantics, minus the round trips.
+		const pending = new Set(rows.map((r) => r.id));
+		const depIds = [...new Set(rows.flatMap((r) => r.deps))].filter((id) => !pending.has(id));
 		const advances = new Map(
 			await Promise.all(depIds.map(async (id) => [id, await advanced(id)] as const))
 		);
@@ -289,6 +301,11 @@ const patch = async (pageId: string, properties: Record<string, unknown>) => {
 // ours — its `resolve(committed)` names the Lead's next Status; an unknown prompt writes the
 // output but moves nothing (loud, so a config gap can't silently strand a Lead). Idempotent:
 // re-deciding overwrites. Needs "Update content" on BOTH the Decisions and Leads databases.
+//
+// Returns whether the committed outcome ADVANCED the pipeline — the one thing the caller can't
+// derive: `advances` is the agent's semantics (config.prompts[k].resolve), and the deck needs it to
+// decide whether to open the decision this one unlocks. A rejecting outcome invalidates its
+// dependent, so the answer must come from here rather than be re-guessed client-side.
 export const record = async (
 	pageId: string,
 	{
@@ -296,7 +313,7 @@ export const record = async (
 		feedback,
 		finalReasoning
 	}: { committedOutput?: unknown; feedback: string; finalReasoning?: string }
-) => {
+): Promise<{ advances: boolean }> => {
 	// The learning channel is a full snapshot of the human's live draft, not a sparse patch:
 	// both columns always land as exactly what the human has — empty included, which CLEARS the
 	// column (a rich_text stays stale unless you write it). So reverting a note to nothing
@@ -307,7 +324,7 @@ export const record = async (
 	};
 	if (committedOutput === undefined) {
 		await patch(pageId, learning); // a Save — decision withheld, draft snapshotted
-		return;
+		return { advances: false }; // nothing was decided, so nothing was unlocked
 	}
 
 	const { properties } = await page(pageId);
@@ -335,7 +352,7 @@ export const record = async (
 	});
 	if (move === undefined) {
 		console.error(`record: no prompt spec for ${promptId} — Final output written, entity not moved`);
-		return;
+		return { advances: false };
 	}
 	// Move whichever pipeline entity this agent binds a Decision to — the relation `$agent` names
 	// (config.entity: "Lead" | "X Engagement"), not a hardcoded one. A committed decision with no
@@ -343,7 +360,7 @@ export const record = async (
 	const entityIds = relation(properties[config.entity]);
 	if (!entityIds.length) {
 		console.error(`record: decision ${pageId} has no "${config.entity}" relation — Final output written, entity not moved`);
-		return;
+		return { advances: move.advances };
 	}
 	// Two decisions can be tied to ONE entity (a qualification and the draft held behind it), so an
 	// unconditional write is "last confirm wins" — enough to drag the entity BACKWARD (confirm the
@@ -357,4 +374,5 @@ export const record = async (
 			await patch(id, { Status: { select: { name: move.status } } });
 		})
 	);
+	return { advances: move.advances };
 };
