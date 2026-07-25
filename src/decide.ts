@@ -9,12 +9,22 @@
 // submit passes both gates (the Output schema, and every quote in-range) BEFORE the single write.
 
 import { getStore } from "./stores/index.js";
-import type { AgentConfig, PromptSpec, Store } from "./stores/index.js";
+import type { AgentConfig, PromptSpec, Row, Store } from "./stores/index.js";
 import { idOf } from "./stores/notion.js";
 import { reviewOf, feedbackOf } from "./review.js";
 import * as llm from "./ai/llm.js";
 import { collectQuotes, findQuotes, inRange, quoteKey, type Statement } from "./anchor.js";
 import { schemaError } from "./output.js";
+import { createHash } from "node:crypto";
+
+// fingerprint(instructions) — what the Decision pins alongside its Model: WHICH instruction text the
+// judge actually read. The Prompt relation can't answer that — a page body is mutable in place, and it
+// now transcludes a shared page, so the prose can change from a page the prompt doesn't even own. The
+// hash makes "a new version is a new row, never an edit" checkable instead of merely agreed: two
+// Decisions citing one prompt with different hashes were NOT judged alike. Short — this identifies a
+// version, it does not defend against tampering.
+const fingerprint = (instructions: string): string =>
+	createHash("sha256").update(instructions).digest("hex").slice(0, 12);
 
 // The judge's response envelope: the domain `output` — its shape declared by the Prompt's Output
 // schema — plus `statements`, the fixed claim→evidence anchoring layer every evidenced judgment
@@ -108,6 +118,23 @@ export const createReviewer = ({ config, renderEvidence, store: given }: Reviewe
 	const kindOf = (name: string): string | undefined =>
 		Object.values(config.prompts ?? {}).find((s) => name.includes(s.name))?.name;
 
+	// livePrompt(name) — the Prompt row that governs a kind TODAY. Prompts are append-only versions
+	// sharing a Name, so the live contract is the highest Version. The one resolver: the judge reads it
+	// to build a judgment, and the staleness check below reads it to ask whether a past judgment's
+	// instructions still say what they said.
+	const livePrompt = async (name: string): Promise<Row> => {
+		const versions = await store.query(config.models.Prompts, { property: "Name", title: { equals: name } });
+		if (!versions.length) throw new Error(`no prompt "${name}"`);
+		return versions.reduce((a, b) => (Number(b.fields.Version ?? 0) > Number(a.fields.Version ?? 0) ? b : a));
+	};
+
+	// instructionsHash(kind) — the fingerprint the live instructions WOULD get now, so a caller can
+	// compare it to what a Decision pinned. Equal ⇒ that judgment's instructions still read the same;
+	// different ⇒ someone edited a body in place (or the shared page it syncs) instead of adding a
+	// version. Its own call, not part of showDecision, so the judge's few-shot builder never pays for it.
+	const instructionsHash = async (kind: string): Promise<string> =>
+		fingerprint(await store.body((await livePrompt(kind)).id));
+
 	// showDecision(handle) — one Decision by the shared id, shaped for reading: the judge's judgment
 	// always (Output, Reasoning statements, and the Evidence RE-RENDERED from the frozen Input the way
 	// the judge and the app render it), the feedback snapshot (the human delta, in any state), and the
@@ -122,6 +149,9 @@ export const createReviewer = ({ config, renderEvidence, store: given }: Reviewe
 			output: JSON.parse(String(fields.Output)) as Record<string, unknown>,
 			statements: JSON.parse(String(fields.Reasoning)) as Statement[],
 			evidence: renderEvidence(JSON.parse(String(fields.Input)) as Record<string, string>),
+			model: fields.Model ? String(fields.Model) : undefined,
+			// the instructions this judgment was made under — compare with instructionsHash(kind)
+			instructions: fields["Instructions hash"] ? String(fields["Instructions hash"]) : undefined,
 			open: appLink(id)
 		};
 		const review = fields["Final output"] ? reviewOf(fields) : undefined;
@@ -144,7 +174,7 @@ export const createReviewer = ({ config, renderEvidence, store: given }: Reviewe
 		});
 	};
 
-	return { store, appLink, kindOf, showDecision, list };
+	return { store, appLink, kindOf, livePrompt, instructionsHash, showDecision, list };
 };
 
 export interface DeciderDeps extends ReviewerDeps {
@@ -201,15 +231,7 @@ export const createDecider = (deps: DeciderDeps) => {
 		const subject = await resolveSubject(handle);
 		const f = subject.fields;
 
-		// Prompts are append-only versions sharing a Name; the live contract is the highest Version.
-		const versions = await store.query(config.models.Prompts, {
-			property: "Name",
-			title: { equals: spec.name }
-		});
-		if (!versions.length) throw new Error(`no prompt "${spec.name}"`);
-		const prompt = versions.reduce((a, b) =>
-			Number(b.fields.Version ?? 0) > Number(a.fields.Version ?? 0) ? b : a
-		);
+		const prompt = await reviewer.livePrompt(spec.name);
 		// The instructions are the Prompt PAGE's BODY — persona and criteria as one authored markdown
 		// document, not a column (prose is written, not compiled). The columns hold only what a machine
 		// reads: the Input/Output schemas below, the Version above.
@@ -324,6 +346,7 @@ export const createDecider = (deps: DeciderDeps) => {
 				Reasoning: JSON.stringify(statements),
 				Input: JSON.stringify(ctx.input),
 				Model: llm.MODEL,
+				"Instructions hash": fingerprint(ctx.system),
 				Prompt: [ctx.prompt.id],
 				[config.entity]: [entityId],
 				...(dependsOn?.length ? { "Depends on": dependsOn } : {})

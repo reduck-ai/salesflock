@@ -10,6 +10,7 @@ export interface Decisions {
   "Final reasoning"?: string;
   "Include as example"?: boolean;
   Input?: string;
+  "Instructions hash"?: string;
   /**
    * relation → e976116e-fcf0-42d4-bc16-99fa9c801e1c
    */
@@ -22,6 +23,10 @@ export interface Decisions {
    */
   Prompt?: string[];
   Reasoning?: string;
+  /**
+   * relation → eddcfaaf-e6f1-4cea-a112-2b9d98426eb4
+   */
+  Unlocks?: string[];
   /**
    * relation → f33193c0-a57d-43cc-900c-c399e1c1beda
    */

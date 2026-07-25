@@ -100,7 +100,16 @@ decisions
 		const reviewer = createReviewer({ config: await loadConfig(agent), renderEvidence });
 		const shown = await reviewer.showDecision(decision);
 		if (feedback) return void console.log(shown.feedback ? renderFeedback(shown.feedback) : "(no human feedback)");
-		console.log(JSON.stringify(shown, null, 2));
+		// Was this judged under the instructions that are live now? The Decision pinned their
+		// fingerprint; re-fingerprint the current body and say so. `stale` means someone edited a prompt
+		// body in place (or the shared page it syncs) rather than adding a version — so this judgment
+		// no longer stands on the criteria the prompt claims today. Unknown kind / pre-pin row ⇒ omitted.
+		const live = shown.kind ? await reviewer.instructionsHash(shown.kind).catch(() => undefined) : undefined;
+		const instructions =
+			shown.instructions && live
+				? { pinned: shown.instructions, live, stale: shown.instructions !== live }
+				: { pinned: shown.instructions ?? null, live: live ?? null };
+		console.log(JSON.stringify({ ...shown, instructions }, null, 2));
 	});
 
 program.parseAsync().catch((e: unknown) => {

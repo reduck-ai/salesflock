@@ -35,6 +35,10 @@ says what it does. If a fact can drift, it belongs in code, not here.
    Prompts (who we are) is written ONCE on its own page and pulled into each body as a Notion
    *synced block* — the same "declare it once, both consumers read it" rule the code obeys.
    Exactly two layers, Pages then Prompts: a section serving a single Prompt has earned no page.
+   The cost of authored-not-compiled is that the text can change under a past judgment — so every
+   Decision **pins the fingerprint of the instructions it read**, beside the model that read them.
+   A relation names which prompt; only the fingerprint says which *wording*, and it catches an edit
+   that arrived through a synced page the prompt doesn't even own.
 
 6. **Idempotency by construction.** One generic `upsert`; every persist-tool declares the
    single unique key that makes a re-run converge instead of duplicate. No key, no tool.
