@@ -22,4 +22,8 @@ export interface Decisions {
    */
   Prompt?: string[];
   Reasoning?: string;
+  /**
+   * relation → f33193c0-a57d-43cc-900c-c399e1c1beda
+   */
+  "X Engagement"?: string[];
 }

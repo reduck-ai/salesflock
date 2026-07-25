@@ -100,6 +100,38 @@ const promptBody = async (id: string): Promise<string | undefined> => {
 // The prompt's pipeline semantics, by its Name — the same `resolve` the runtime declares.
 const specByName = (name: string) => Object.values(config.prompts ?? {}).find((s) => s.name === name);
 
+// advanced(id) — has this Decision advanced the pipeline? The ONE reading of a DAG edge: its
+// committed output run through its Prompt's `resolve`. Read by BOTH consumers, so the invariant does
+// not depend on which path a reviewer took — the queue hides a blocked dependent (decisions), and
+// the write refuses to commit one (record). Unreviewed, unknown-prompt or malformed ⇒ not advanced.
+const advanced = async (id: string): Promise<boolean> => {
+	const { properties } = await page(id);
+	const fo = plain(properties["Final output"]);
+	const promptId = relation(properties.Prompt)[0];
+	if (!fo || !promptId) return false;
+	const spec = specByName((await promptInfo(promptId)).name);
+	try {
+		return !!spec && spec.resolve(JSON.parse(String(fo)) as Record<string, unknown>).advances;
+	} catch {
+		return false;
+	}
+};
+
+// ahead(to, from) — is `to` further along the agent's declared forward ladder than where the entity
+// stands? An unknown ladder or an unreadable current status has nothing to compare, so it defers to
+// the write. This is what keeps two decisions tied to ONE entity from fighting over its Status.
+// (widened once here: the agent declares its ladder `as const`, so its indexOf would only accept its
+// own literals — while a Status read back off a page is just a string.)
+const ahead = (to: string, from: string | null): boolean => {
+	const ladder: readonly string[] | undefined = config.ladder;
+	return !ladder || from === null || ladder.indexOf(to) > ladder.indexOf(from);
+};
+
+const statusOf = async (id: string): Promise<string | null> => {
+	const v = (await page(id)).properties.Status;
+	return v ? (plain(v) as string | null) : null;
+};
+
 const page = async (
 	id: string
 ): Promise<{ id: string; url: string; created_time: string; properties: Record<string, NotionValue> }> => {
@@ -214,19 +246,7 @@ export const decisions = async (filter: Filter): Promise<Decision[]> => {
 	if (filter.tab === "review") {
 		const depIds = [...new Set(rows.flatMap((r) => r.deps))];
 		const advances = new Map(
-			await Promise.all(
-				depIds.map(async (id) => {
-					const { properties } = await page(id);
-					const fo = plain(properties["Final output"]);
-					const pid = relation(properties.Prompt)[0];
-					const spec = fo && pid ? specByName((await promptInfo(pid)).name) : undefined;
-					try {
-						return [id, !!spec && spec.resolve(JSON.parse(String(fo))).advances] as const;
-					} catch {
-						return [id, false] as const;
-					}
-				})
-			)
+			await Promise.all(depIds.map(async (id) => [id, await advanced(id)] as const))
 		);
 		gated = rows.filter((r) => r.deps.every((d) => advances.get(d)));
 	}
@@ -299,14 +319,21 @@ export const record = async (
 	// (defense behind the client's own check) — nothing is persisted.
 	const invalid = outputSchema && schemaError(outputSchema, committedOutput);
 	if (invalid) throw error(400, `output violates Output schema: ${invalid}`);
+	// The DAG gate, enforced where the MUTATION happens — not only in the query that builds the queue.
+	// A deep link, a bookmark, a preloaded neighbour and a stale rail step all reach this endpoint, so
+	// a dependent must be refused HERE or it can be committed (and move the entity) before the
+	// decision it hangs off has been approved. Same `advanced` reading the queue's gate uses.
+	const blocked = (await Promise.all(relation(properties["Depends on"]).map(advanced))).some((ok) => !ok);
+	if (blocked)
+		throw error(409, "blocked: the decision this one depends on has not been approved yet");
 	const spec = specByName(name);
 	// Resolve BEFORE the write so a malformed output fails loud, persisting nothing.
-	const status = spec?.resolve(committedOutput as Record<string, unknown>).status;
+	const move = spec?.resolve(committedOutput as Record<string, unknown>);
 	await patch(pageId, {
 		...learning,
 		"Final output": { rich_text: chunks(JSON.stringify(committedOutput)) }
 	});
-	if (status === undefined) {
+	if (move === undefined) {
 		console.error(`record: no prompt spec for ${promptId} — Final output written, entity not moved`);
 		return;
 	}
@@ -318,5 +345,16 @@ export const record = async (
 		console.error(`record: decision ${pageId} has no "${config.entity}" relation — Final output written, entity not moved`);
 		return;
 	}
-	await Promise.all(entityIds.map((id) => patch(id, { Status: { select: { name: status } } })));
+	// Two decisions can be tied to ONE entity (a qualification and the draft held behind it), so an
+	// unconditional write is "last confirm wins" — enough to drag the entity BACKWARD (confirm the
+	// draft, then its qualification, and Approved becomes To engage). An ADVANCING outcome may only
+	// move the entity forward along the ladder the agent declares — the same ladder its runtime stages
+	// obey. A non-advancing one is the human's terminal reject and always lands: that is the one move
+	// which is legitimately not forward.
+	await Promise.all(
+		entityIds.map(async (id) => {
+			if (move.advances && !ahead(move.status, await statusOf(id))) return;
+			await patch(id, { Status: { select: { name: move.status } } });
+		})
+	);
 };

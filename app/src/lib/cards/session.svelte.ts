@@ -16,8 +16,15 @@ export const session = $state<{
 
 let seq = 0;
 export const pushReceipt = (r: Receipt) => session.receipts.push(r);
-export const fireToast = (message: string) => (session.toast = { id: ++seq, message });
-export const clearToast = () => (session.toast = null);
+// Statement bodies, not expression bodies: returning an assignment to a $state property hands back
+// the raw right-hand side rather than the proxied value (svelte's assignment_value_stale) — and no
+// caller wants the value anyway.
+export const fireToast = (message: string) => {
+	session.toast = { id: ++seq, message };
+};
+export const clearToast = () => {
+	session.toast = null;
+};
 export const clearSession = () => {
 	session.receipts = [];
 	session.toast = null;

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // x-engage as CLI subcommands — JSON on stdout. The clean, READ-ONLY flow (no posting to X):
-//   scan → qualify (deterministic) → draft → [human gate], plus list/show for the shared review
-//   queue and `hydrate <handle>` to record a person's posts+replies (and `hydrate <owner>` to
-//   maintain the owner's voice corpus).
+//   scan → engage [ signal → qualification Decision → (if good) reply draft ] → [human gate], plus
+//   list/show for the shared review queue and `hydrate <handle>` to record a person's posts+replies
+//   (and `hydrate <owner>` to maintain the owner's voice corpus).
 // Each stage is idempotent and monotonic on Post URL.
 
 import "../../src/env.js";
@@ -24,23 +24,17 @@ program
 	.action(async ({ count }) => out(await tools.scan(count)));
 
 program
-	.command("qualify")
-	.argument("[posts...]", "post URLs to qualify; omit to qualify every engagement at 'To qualify'")
-	.option("--replies <n>", "replies to pull per post (signal depth)", parseInt)
-	.description("Deterministic gate: pull replies → did the author answer a commenter? Engagement → To engage | Not qualified | (defer). Batched (≤4 parallel).")
-	.action(async (posts: string[], { replies }) =>
-		out(posts.length ? await batch(posts, (p) => tools.qualify(p, replies)) : await tools.qualifyPending(replies))
-	);
+	.command("engage")
+	.argument("[posts...]", "post URLs to engage; omit to run over every engagement at 'To qualify'")
+	.description("Merged funnel: signal pre-filter → qualification Decision → (if it scores well) a reply draft held behind it. Approved authors skip straight to a draft. Batched (≤4 parallel).")
+	.action(async (posts: string[]) => out(posts.length ? await batch(posts, tools.engage) : await tools.engagePending()));
 
 program
 	.command("draft")
-	.argument("[posts...]", "post URLs to draft; omit to draft every engagement at 'To engage'")
+	.argument("[posts...]", "post URLs to (re)draft as a standalone reply Decision")
 	.option("--show", "print the judgment context (contract + evidence + your voice block); writes nothing")
-	.description("Judge each post against the 'X Reply' contract (LLM), grounded in your voice → one Decision; engagement → Draft pending review.")
-	.action(async (posts: string[], { show }) => {
-		if (show) return out(await batch(posts, tools.context));
-		out(posts.length ? await batch(posts, tools.draft) : await tools.draftPending());
-	});
+	.description("Manually (re)draft a reply for a post — standalone, no qualification dependency. Batched (≤4 parallel).")
+	.action(async (posts: string[], { show }) => out(show ? await batch(posts, tools.context) : await batch(posts, tools.draft)));
 
 program
 	.command("hydrate")

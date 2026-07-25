@@ -16,5 +16,6 @@ export interface XEngagements {
    * ISO 8601 date or date-time
    */
   "Scanned at"?: string;
-  Status?: "To qualify" | "To engage" | "Not qualified" | "Draft pending review" | "Approved";
+  Status?:
+    "To qualify" | "To engage" | "Not qualified" | "Draft pending review" | "Approved" | "Qualification pending review";
 }

@@ -2,6 +2,7 @@
 	import { fly } from "svelte/transition";
 	import { goto, invalidate, preloadData } from "$app/navigation";
 	import { page, navigating } from "$app/state";
+	import { browser } from "$app/environment";
 	import { Button } from "$lib/components/ui/button/index.js";
 	import DecisionList from "$lib/cards/DecisionList.svelte";
 	import ReviewCard from "$lib/cards/ReviewCard.svelte";
@@ -18,6 +19,15 @@
 	let menuOpen = $state(false);
 	let userEl = $state<HTMLElement>();
 
+	// theme — app-wide chrome (core owns it). The no-flash boot script in app.html applies the saved
+	// choice before paint; this just flips the root `.dark` class and persists it. Default dark.
+	let dark = $state(browser ? document.documentElement.classList.contains("dark") : true);
+	const setTheme = (d: boolean) => {
+		dark = d;
+		document.documentElement.classList.toggle("dark", d);
+		localStorage.theme = d ? "dark" : "light";
+	};
+
 	const dashless = (id: string) => id.replace(/-/g, "");
 
 	// the URL is the cursor: `page.params.id` is the current card, `data.rows` (from the layout, the
@@ -28,10 +38,15 @@
 	const prev = $derived(index > 0 ? href(index - 1) : undefined);
 	const next = $derived(index >= 0 ? href(index + 1) : undefined);
 
-	// the one slow op is loading a card — show a skeleton in the card slot while navigating TO a
-	// different card (the rail/header persist since layout data doesn't reload). Settled state:
-	// data.current is the card for this URL.
-	const loadingCard = $derived(!!navigating.to?.params?.id && navigating.to.params.id !== currentId);
+	// the one slow op is loading a card, so the slot shows a skeleton until the card is the one the
+	// URL names — a fact of the DATA, never of the router's in-flight status. Deriving this from
+	// `navigating` latched it: a superseded navigation leaves `navigating.to` set, and the flag never
+	// cleared. Compared against data it self-heals — the instant data.current matches, the card renders.
+	const stale = $derived(dashless(data.current?.id ?? "") !== dashless(currentId ?? ""));
+
+	// the one in-flight commit: this card is decided (so it must not stay interactive) while the rail
+	// refreshes and its successor loads. Local state, not an effect — it has an explicit lifecycle.
+	let committing = $state(false);
 
 	// leaving the deck for the list ends the session scrollback — a fresh deck visit starts clean.
 	$effect(() => {
@@ -52,57 +67,71 @@
 		if (prev) preloadData(prev);
 	});
 
-	// Persist a judgment (fire-and-forget, so the deck stays snappy) then advance. No committedOutput
-	// is a Save — the row stays put. Otherwise the committed output IS the decision: stamp a receipt,
-	// invalidate the rail (so the decided row leaves the review set), and move to the next card — or
-	// back to the list when this was the last one.
-	const judge = (
+	// Persist a judgment, then advance. The ORDER is the whole correctness argument, and each step is
+	// awaited because the next one reads what it wrote: the commit must land before the rail is
+	// re-queried (the DAG gate reads an upstream's committed output to unlock its dependent), and the
+	// rail must be fresh before we choose where to go. One await chain ⇒ exactly ONE router mutation,
+	// so nothing races and nothing is superseded. No committedOutput is a Save — the row stays put.
+	const judge = async (
 		committedOutput: Record<string, unknown> | undefined,
 		feedback: string,
 		reasoning?: Statement[]
 	) => {
-		if (!data.current) return;
+		if (!data.current || committing) return;
 		const j = data.current;
-		const finalReasoning = reasoning ? JSON.stringify(reasoning) : undefined;
-		fetch("/api/decide", {
+		// the queue slot this row occupies — where its successor slides in once it leaves the set.
+		const slot = index;
+		const res = await fetch("/api/decide", {
 			method: "POST",
 			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ id: j.id, committedOutput, feedback, finalReasoning })
-		}).catch((e) => console.error("decide failed", e));
+			body: JSON.stringify({
+				id: j.id,
+				committedOutput,
+				feedback,
+				finalReasoning: reasoning ? JSON.stringify(reasoning) : undefined
+			})
+		}).catch(() => undefined);
 		dropCard(j.id); // the card was written to — a re-view must refetch the persisted state
 
-		if (!committedOutput) {
-			fireToast("Saved");
+		// a refused write (e.g. a dependent whose upstream isn't approved) must be seen, not swallowed.
+		if (!res?.ok) {
+			const { message } = await res?.json().catch(() => ({})) ?? {};
+			fireToast(message ?? "Not saved");
 			return;
 		}
+		if (!committedOutput) return fireToast("Saved");
+
 		pushReceipt({
 			edited: JSON.stringify(committedOutput) !== JSON.stringify(j.output),
 			title: j.title,
 			href: j.href
 		});
 		fireToast("Confirmed");
-		goto(next ?? `/${filterQuery(data.filter)}`);
-		invalidate("app:rail"); // the decided row must drop from the review set
+		committing = true;
+		await invalidate("app:rail"); // the decided row leaves the set; anything it unlocked joins it
+		// whatever now occupies the vacated slot — which is precisely the dependent this decision just
+		// unlocked, when there is one (it sorts immediately above the row that left).
+		await goto(href(slot) ?? `/${filterQuery(data.filter)}`);
+		committing = false;
 	};
 
 	const save = () => card?.save();
 
 	// The page-level chords: ⌘S saves, ⌘E toggles the note, ⌘⏎ confirms — all here (not in the card)
-	// so they fire even while typing a note, and no bare key commits.
-	$effect(() => {
-		if (!data.user || !currentId) return;
-		const onkey = (e: KeyboardEvent) => {
-			if (!(e.metaKey || e.ctrlKey)) return;
-			if (e.key === "s") (e.preventDefault(), save());
-			else if (e.key === "e") (e.preventDefault(), card?.note());
-			else if (e.key === "Enter") (e.preventDefault(), card?.confirm());
-		};
-		window.addEventListener("keydown", onkey);
-		return () => window.removeEventListener("keydown", onkey);
-	});
+	// so they fire even while typing a note, and no bare key commits. Bound declaratively on
+	// <svelte:window>, so there is no listener to attach, tear down, or leak.
+	const hotkey = (e: KeyboardEvent) => {
+		if (!data.user || !currentId || !(e.metaKey || e.ctrlKey)) return;
+		if (e.key === "s") (e.preventDefault(), save());
+		else if (e.key === "e") (e.preventDefault(), card?.note());
+		else if (e.key === "Enter") (e.preventDefault(), card?.confirm());
+	};
 </script>
 
-<svelte:window onclick={(e) => menuOpen && !userEl?.contains(e.target as Node) && (menuOpen = false)} />
+<svelte:window
+	onclick={(e) => menuOpen && !userEl?.contains(e.target as Node) && (menuOpen = false)}
+	onkeydown={hotkey}
+/>
 
 {#if session.toast}
 	{#key session.toast.id}
@@ -154,8 +183,18 @@
 					{#if menuOpen}
 						<div class="menu">
 							<div class="who">{data.user.name}</div>
+							<div class="seg" role="group" aria-label="Theme">
+								<button class:on={dark} aria-pressed={dark} onclick={() => setTheme(true)}>
+									<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" /></svg>
+									Dark
+								</button>
+								<button class:on={!dark} aria-pressed={!dark} onclick={() => setTheme(false)}>
+									<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" /></svg>
+									Light
+								</button>
+							</div>
 							<form method="POST" action="?/signout">
-								<button type="submit" class="logout">Log out</button>
+								<button type="submit" class="item">Log out</button>
 							</form>
 						</div>
 					{/if}
@@ -177,7 +216,7 @@
 				</div>
 			{/if}
 
-			{#if loadingCard || !data.current}
+			{#if !data.current || stale || committing}
 				<CardSkeleton />
 			{:else}
 				{#key data.current.id}
@@ -185,7 +224,7 @@
 						<ReviewCard
 							bind:this={card}
 							judgment={data.current}
-							pos={index >= 0 ? index + 1 : 1}
+							pos={index >= 0 ? index + 1 : undefined}
 							total={data.rows.length || 1}
 							onjudge={judge}
 							onnav={nav}
@@ -260,8 +299,10 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
-	.logout {
-		display: block;
+	.item {
+		display: flex;
+		align-items: center;
+		gap: 8px;
 		width: 100%;
 		text-align: left;
 		border: none;
@@ -272,7 +313,37 @@
 		color: var(--foreground);
 		padding: 9px 12px;
 	}
-	.logout:hover {
+	.item:hover {
 		background: var(--accent);
+	}
+	/* the theme toggle — a two-state pill, the same segmented language as the filter bar */
+	.seg {
+		display: flex;
+		gap: 4px;
+		margin: 8px;
+		padding: 3px;
+		background: var(--secondary);
+		border-radius: 9px;
+	}
+	.seg button {
+		flex: 1;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		gap: 6px;
+		border: none;
+		background: transparent;
+		color: var(--muted-foreground);
+		font: inherit;
+		font-size: 12.5px;
+		padding: 5px 8px;
+		border-radius: 7px;
+		cursor: pointer;
+	}
+	.seg button.on {
+		background: var(--card);
+		color: var(--foreground);
+		box-shadow: 0 1px 2px rgb(0 0 0 / 0.15);
+		font-weight: 550;
 	}
 </style>

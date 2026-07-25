@@ -58,5 +58,11 @@ export interface AgentConfig {
 	// both consumers: the runtime binds the Decision to it (decide.ts), and the review app moves that
 	// entity's Status on confirm (app/…/notion.ts). An agent has one pipeline entity, so it's one string.
 	entity: string;
+	// The pipeline entity's forward status ladder — the ONE declaration of which way is forward,
+	// read by both consumers exactly as `resolve` is: the runtime's stages (which never drag an entity
+	// backward) and the review app's commit (an advancing decision may move the entity forward, never
+	// regress it). Without it two Decisions tied to one entity fight over its Status and the last
+	// confirm wins, undoing a move that already happened. Statuses off the ladder are terminal.
+	ladder?: readonly string[];
 	prompts?: Record<string, PromptSpec>; // decision kind (e.g. qualify) → its contract row + transitions
 }

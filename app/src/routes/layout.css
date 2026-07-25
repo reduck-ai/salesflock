@@ -80,4 +80,16 @@
 	body {
 		@apply bg-background text-foreground;
 	}
+
+	/* Touch: iOS Safari zooms the viewport whenever a focused field is under 16px.
+	   One rule here holds every field in the app to it — the dock's note, the pin's
+	   reply, the selection menu's claim input, and OutputForm's schema-driven
+	   widgets — so no component has to remember. */
+	@media (pointer: coarse) {
+		input,
+		textarea,
+		select {
+			font-size: 16px;
+		}
+	}
 }

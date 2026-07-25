@@ -1,9 +1,13 @@
 <script lang="ts">
 	// One evidenced judgment, read like a chat: the evidence is the document (one column,
 	// window scroll), and the dock — the single interaction surface, styled like a composer —
-	// floats at the bottom in two zones: PROPOSAL (the agent's proposal, headed by the Prompt's
-	// framing, editable within its schema) first, then LEARNING (the claims that justify it, each
-	// with one dot per proof, annotatable) — you decide, then read the reasoning.
+	// floats at the bottom. ONE placement, whatever the judgment: a head (where you are · fold ·
+	// step, identical folded or not, so nothing moves under the pointer), then PROPOSAL (the
+	// agent's proposal, headed by the Prompt's framing, editable within its schema), then LEARNING
+	// (the claims that justify it, each with one dot per proof, annotatable) — you decide, then
+	// read the reasoning. Body and acts split so Confirm never scrolls away, and the body is the
+	// dock's only scroller, capped: head + body + acts can't eat the screen, so the evidence
+	// survives above it on any viewport — which is what keeps this a dock and not a second page.
 	// The committed output IS the decision — one Confirm; there is no Reject (disagreeing is
 	// editing the output). Every quote is highlighted in the evidence at all times, stance-
 	// coloured and subtle, with its claim pinned in the right margin like a doc comment. One
@@ -34,7 +38,7 @@
 		onnav
 	}: {
 		judgment: EvidencedJudgment;
-		pos: number;
+		pos?: number; // the card's place in the rail — absent when it isn't in the current set (a deep link)
 		total: number;
 		onjudge?: (
 			committedOutput: Record<string, unknown> | undefined,
@@ -49,6 +53,9 @@
 	// (provenance is read off `judgment.statements`, never this editable copy).
 	let feedback = $state(judgment.draft?.feedback ?? "");
 	let noting = $state(false); // the note field — closed on arrival; ⌘E toggles, the value seeds from the draft
+	// the dock folded down to its head — you arrive to decide, so it starts open; folding is the
+	// deliberate act (go read the evidence). The card remounts per id, so every card opens on its own.
+	let open = $state(true);
 	// the committed output — seeded from the judge's, edited in place; committing it IS the
 	// decision (the card remounts per id, so it re-seeds from the judge's proposal)
 	let output = $state<Record<string, unknown>>(structuredClone(judgment.output));
@@ -93,29 +100,9 @@
 	const miOf = (si: number) => statements.slice(0, si).reduce((n, s) => n + s.quotes.length, 0);
 	const activeSi = $derived(activeMi === null ? null : marks[activeMi].si);
 
-	// PLACEMENT — the one branch: a judgment with an `anchor` (code-computed — the span of the Input
-	// field the output answers) attaches the composer BELOW that span; without one it floats in the
-	// dock (a verdict about the whole subject). The anchor only SPLITS the evidence — it is never
-	// itself highlighted (the field's `### header` already labels what's answered), so nothing new
-	// enters the mark pipeline; `mi` is stamped explicitly so a split keeps global mark indices.
-	const attached = $derived(!!judgment.anchor);
+	// `mi` is stamped explicitly rather than left to the array index — highlight.ts falls back to the
+	// index, and being explicit keeps the cursor's addressing independent of how the evidence renders.
 	const hls = $derived(marks.map((m, mi) => ({ ...m, mi })));
-	// split the evidence at the first block boundary at/after the anchored span, so the composer sits
-	// right beneath the post it answers. Block-aligned, so no quote straddles the cut; each half gets
-	// the marks that fall in it (the lower half rebased), keeping global `mi` via the explicit field.
-	const splitAt = $derived.by(() => {
-		if (!attached) return 0;
-		const nl = judgment.evidence.indexOf("\n\n", judgment.anchor!.end);
-		return nl < 0 ? judgment.evidence.length : nl;
-	});
-	const before = $derived(attached ? judgment.evidence.slice(0, splitAt) : "");
-	const after = $derived(attached ? judgment.evidence.slice(splitAt) : "");
-	const marksBefore = $derived(hls.filter((m) => m.q.end <= splitAt));
-	const marksAfter = $derived(
-		hls
-			.filter((m) => m.q.start >= splitAt)
-			.map((m) => ({ ...m, q: { start: m.q.start - splitAt, end: m.q.end - splitAt } }))
-	);
 
 	// provenance, derived from the canonical prop — never stored. A claim or quote is the
 	// human's iff it isn't in the judge's frozen judgment; the judge's stay immutable
@@ -375,34 +362,15 @@
 	}}
 />
 
-<div class="page" class:attached>
+<div class="page">
 	<div class="topmeta">
-		<div class="rail" title={`${pos} / ${total}`}>
-			<div class="fill" style={`width:${(pos / total) * 100}%`}></div>
-		</div>
-		<div class="meta">
-			<span class="left">
-				{pos} / {total}
-				{#if judgment.hasFeedback}
-					<Badge variant="outline" class="fb">feedback</Badge>
-				{/if}
-			</span>
-			<span class="hint">
-				<kbd>←</kbd><kbd>→</kbd> navigate · <kbd>Tab</kbd> proof · <kbd>⌘E</kbd> note · <kbd>⌘⏎</kbd> confirm
-			</span>
+		<div class="rail" title={pos ? `${pos} / ${total}` : undefined}>
+			<div class="fill" style={`width:${pos ? (pos / total) * 100 : 0}%`}></div>
 		</div>
 	</div>
 
 	<div class="doc" bind:this={evEl}>
-		{#if attached}
-			<Markdown source={before} highlights={marksBefore} class="evidence" />
-			<div class="dock attached" bind:this={dockEl}>{@render dockBody()}</div>
-			{#if after.trim()}
-				<Markdown source={after} highlights={marksAfter} class="evidence" />
-			{/if}
-		{:else}
-			<Markdown source={judgment.evidence} highlights={hls} class="evidence" />
-		{/if}
+		<Markdown source={judgment.evidence} highlights={hls} class="evidence" />
 		<div class="gutter">
 			{#each notes as n (n.si)}
 				<div
@@ -472,9 +440,7 @@
 	</div>
 </div>
 
-{#if !attached}
-	<div class="veil"></div>
-{/if}
+<div class="veil"></div>
 
 {#if menu && place}
 	<div
@@ -529,104 +495,160 @@
 	</div>
 {/if}
 
-<!-- the floating dock — the composer for a verdict (no anchor); the attached case renders the
-     same body in-flow below the answered span (see .doc above). One body, two placements. -->
-{#if !attached}
-	<div class="dock" bind:this={dockEl}>{@render dockBody()}</div>
-{/if}
-
-{#snippet dockBody()}
-	<!-- PROPOSAL — the agent's proposal, headed by the Prompt's framing, editable within its
-	     schema; committing it IS the decision. First, so you decide, then read the reasoning. -->
-	<div class="proposal">
-		{#if judgment.proposal}
-			<h2 class="proposal-head">{judgment.proposal}</h2>
-		{/if}
-		<OutputForm schema={judgment.outputSchema} bind:value={output} id={judgment.id} />
-		{#if outputError}
-			<p class="err">{outputError}</p>
-		{/if}
-	</div>
-
-	<!-- LEARNING — the judge's reasoning, annotatable; follows the proposal it justifies -->
-	<div class="why">
-		{#each statements as s, i (i)}
-			<div
-				class="claim"
-				class:active={activeSi === i}
-				class:against={!s.supporting}
-				class:noted={!!s.comment?.trim()}
+<!-- The dock — the one composer, one placement. Three parts, in reading order:
+     HEAD (chrome: where you are, fold, step) · BODY (the judgment, the only scroller)
+     · ACTS (pinned, so Confirm is reachable whatever the body is doing). The head is
+     identical folded or not — it IS the dock when folded, so nothing moves under the
+     pointer — and it carries what the top band used to duplicate. -->
+<div class="dock" class:open bind:this={dockEl}>
+	<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+	<div class="dhead" onclick={(e) => !(e.target as Element).closest(".nav") && (open = !open)}>
+		<span class="count">
+			{#if pos}{pos} / {total}{/if}
+			{#if judgment.hasFeedback}
+				<Badge variant="outline" class="fb">feedback</Badge>
+			{/if}
+		</span>
+		<span class="chev" aria-hidden="true">
+			<svg
+				width="20"
+				height="20"
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="2.2"
+				stroke-linecap="round"
+				stroke-linejoin="round"><path d="m6 15 6-6 6 6" /></svg
 			>
+		</span>
+		<span class="nav">
+			<!-- the touch twin of ←/→; onnav is the caller's existing goto, so this is markup only -->
+			<button onclick={() => onnav?.(-1)} title="Previous (←)" aria-label="Previous decision">
 				<svg
-					class="mark"
-					width="13"
-					height="13"
+					width="21"
+					height="21"
 					viewBox="0 0 24 24"
 					fill="none"
 					stroke="currentColor"
-					stroke-width="3"
+					stroke-width="2.2"
 					stroke-linecap="round"
-					stroke-linejoin="round"
-					aria-label={s.supporting ? "supports the verdict" : "argues against the verdict"}
+					stroke-linejoin="round"><path d="m15 18-6-6 6-6" /></svg
 				>
-					{#if s.supporting}
-						<path d="M20 6 9 17l-5-5" />
-					{:else}
-						<path d="M18 6 6 18" /><path d="m6 6 12 12" />
-					{/if}
-				</svg>
-				<!-- the judge's claims are read-only labelling data; the human's own are editable -->
-				{#if isUserClaim(s.claim)}
-					<input
-						class="text edit"
-						aria-label="Edit claim"
-						bind:value={statements[i].claim}
-						onkeydown={(e) => (e.key === "Enter" || e.key === "Escape") && e.currentTarget.blur()}
-					/>
-				{:else}
-					<button class="text" onclick={() => focusClaim(i)}>{s.claim}</button>
-				{/if}
-				<span class="dots">
-					{#each s.quotes as q, j (j)}
-						<button
-							class="dot"
-							class:on={activeMi === miOf(i) + j}
-							class:userq={isUserQuote(s.claim, q)}
-							aria-label="proof"
-							onclick={() => goto(miOf(i) + j)}
-						></button>
-					{/each}
-				</span>
-			</div>
-		{/each}
+			</button>
+			<button onclick={() => onnav?.(1)} title="Next (→)" aria-label="Next decision">
+				<svg
+					width="21"
+					height="21"
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2.2"
+					stroke-linecap="round"
+					stroke-linejoin="round"><path d="m9 18 6-6-6-6" /></svg
+				>
+			</button>
+		</span>
 	</div>
 
-	<div class="acts-wrap">
-		<div class="acts">
-			<button class="btn confirm" onclick={commit} disabled={!!outputError}>
-				Confirm <kbd>⌘⏎</kbd>
-			</button>
-			<button
-				class="btn-note"
-				class:on={noting}
-				title="Add a note (⌘E)"
-				aria-expanded={noting}
-				onclick={() => (noting = !noting)}
-			>
-				Note <kbd>⌘E</kbd>
-			</button>
+	<!-- 0fr → 1fr: the fold animates without measuring anything, so no height math and no flash -->
+	<div class="dstack">
+		<div class="dwrap">
+			<div class="dbody">
+				<!-- PROPOSAL — the agent's proposal, headed by the Prompt's framing, editable within its
+	     schema; committing it IS the decision. First, so you decide, then read the reasoning. -->
+				<div class="proposal">
+					{#if judgment.proposal}
+						<h2 class="proposal-head">{judgment.proposal}</h2>
+					{/if}
+					<OutputForm schema={judgment.outputSchema} bind:value={output} id={judgment.id} />
+					{#if outputError}
+						<p class="err">{outputError}</p>
+					{/if}
+				</div>
+
+				<!-- LEARNING — the judge's reasoning, annotatable; follows the proposal it justifies -->
+				<div class="why">
+					{#each statements as s, i (i)}
+						<div
+							class="claim"
+							class:active={activeSi === i}
+							class:against={!s.supporting}
+							class:noted={!!s.comment?.trim()}
+						>
+							<svg
+								class="mark"
+								width="13"
+								height="13"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="3"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								aria-label={s.supporting ? "supports the verdict" : "argues against the verdict"}
+							>
+								{#if s.supporting}
+									<path d="M20 6 9 17l-5-5" />
+								{:else}
+									<path d="M18 6 6 18" /><path d="m6 6 12 12" />
+								{/if}
+							</svg>
+							<!-- the judge's claims are read-only labelling data; the human's own are editable -->
+							{#if isUserClaim(s.claim)}
+								<input
+									class="text edit"
+									aria-label="Edit claim"
+									bind:value={statements[i].claim}
+									onkeydown={(e) => (e.key === "Enter" || e.key === "Escape") && e.currentTarget.blur()}
+								/>
+							{:else}
+								<button class="text" onclick={() => focusClaim(i)}>{s.claim}</button>
+							{/if}
+							<span class="dots">
+								{#each s.quotes as q, j (j)}
+									<button
+										class="dot"
+										class:on={activeMi === miOf(i) + j}
+										class:userq={isUserQuote(s.claim, q)}
+										aria-label="proof"
+										onclick={() => goto(miOf(i) + j)}
+									></button>
+								{/each}
+							</span>
+						</div>
+					{/each}
+				</div>
+			</div>
+
+			<!-- ACTS — outside the scroller, so Confirm never scrolls away -->
+			<div class="acts-wrap">
+				<div class="acts">
+					<button class="btn confirm" onclick={commit} disabled={!!outputError}>
+						Confirm <kbd>⌘⏎</kbd>
+					</button>
+					<button
+						class="btn-note"
+						class:on={noting}
+						title="Add a note (⌘E)"
+						aria-expanded={noting}
+						onclick={() => (noting = !noting)}
+					>
+						Note <kbd>⌘E</kbd>
+					</button>
+				</div>
+				{#if noting}
+					<input
+						bind:value={feedback}
+						class="note"
+						placeholder="Optional note — why you (dis)agree"
+						{@attach (el) => el.focus()}
+						onkeydown={(e) => e.key === "Escape" && (noting = false)}
+					/>
+				{/if}
+			</div>
 		</div>
-		{#if noting}
-			<input
-				bind:value={feedback}
-				class="note"
-				placeholder="Optional note — why you (dis)agree"
-				{@attach (el) => el.focus()}
-				onkeydown={(e) => e.key === "Escape" && (noting = false)}
-			/>
-		{/if}
 	</div>
-{/snippet}
+</div>
 
 <style>
 	.page {
@@ -634,12 +656,8 @@
 		margin: 0 auto;
 		padding: 0 4px 340px; /* deep bottom pad: last evidence clears the dock */
 	}
-	/* attached mode: the composer is in flow, so no floating dock to clear — trim the deep pad */
-	.page.attached {
-		padding-bottom: 40px;
-	}
-	/* the card's half of the top bar — progress + key hints — sticks flush beneath the app
-	   header, so the whole band stays put while the evidence scrolls under it */
+	/* the card's half of the top bar — the progress rail alone; where you are and how you step
+	   live in the dock head, beside the decision they belong to */
 	.topmeta {
 		position: sticky;
 		top: var(--topbar);
@@ -657,33 +675,6 @@
 	.rail .fill {
 		height: 100%;
 		background: var(--ring);
-	}
-	.meta {
-		display: flex;
-		justify-content: space-between;
-		align-items: baseline;
-		font-family: ui-monospace, monospace;
-		font-size: 11.5px;
-		color: var(--muted-foreground);
-		margin-bottom: 14px;
-	}
-	.meta .left {
-		display: inline-flex;
-		align-items: center;
-		gap: 8px;
-	}
-	/* the feedback marker — a subtle gold outline, the same "human touched this" language as .noted */
-	.meta :global(.fb) {
-		border-color: color-mix(in oklch, #d97706 55%, var(--border));
-		color: #d97706;
-		font-family: ui-monospace, monospace;
-		letter-spacing: 0.04em;
-	}
-	kbd {
-		border: 1px solid var(--border);
-		border-radius: 4px;
-		padding: 1px 5px;
-		margin: 0 1px;
 	}
 
 	/* the document: plain markdown, no chrome — the page itself scrolls */
@@ -1005,15 +996,97 @@
 			0 24px 60px -18px rgb(0 0 0 / 0.28);
 		overflow: hidden;
 	}
-	/* attached — the same composer body, but in the document flow directly below the span it
-	   answers: static (nothing overlaid), solid card (no blur, nothing behind it), full column. */
-	.dock.attached {
-		position: static;
-		inset: auto;
-		max-width: none;
-		margin: 18px 0;
-		background: var(--card);
-		backdrop-filter: none;
+
+	/* HEAD — chrome, and the whole dock when folded: where you are · fold · step. Laid out so
+	   the chevron is dead centre and NOTHING moves between the two states — the row you tap is
+	   the row you tapped. The arrows opt out of the fold (they navigate, they don't unfold). */
+	.dhead {
+		display: grid;
+		grid-template-columns: 1fr auto 1fr;
+		align-items: center;
+		padding: 5px 8px;
+		height: 54px;
+		cursor: pointer;
+		user-select: none;
+		-webkit-tap-highlight-color: transparent;
+	}
+	.count {
+		justify-self: start;
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+		padding-left: 10px;
+		font-family: ui-monospace, monospace;
+		font-size: 11.5px;
+		color: var(--muted-foreground);
+		font-variant-numeric: tabular-nums;
+	}
+	/* the feedback marker — a subtle gold outline, the same "human touched this" language as .noted */
+	.count :global(.fb) {
+		border-color: color-mix(in oklch, #d97706 55%, var(--border));
+		color: #d97706;
+		font-family: ui-monospace, monospace;
+		letter-spacing: 0.04em;
+	}
+	.chev {
+		justify-self: center;
+		display: grid;
+		place-items: center;
+		width: 56px;
+		height: 44px;
+		color: var(--muted-foreground);
+	}
+	.chev svg {
+		transition: transform 0.26s cubic-bezier(0.32, 0.72, 0, 1);
+	}
+	.dock.open .chev svg {
+		transform: rotate(180deg);
+	}
+	.nav {
+		justify-self: end;
+		display: flex;
+		gap: 2px;
+	}
+	.nav button {
+		width: 44px;
+		height: 44px;
+		display: grid;
+		place-items: center;
+		border: none;
+		background: none;
+		border-radius: 11px;
+		color: var(--muted-foreground);
+		cursor: pointer;
+		transition:
+			color 0.15s ease,
+			background 0.15s ease;
+	}
+	.nav button:hover {
+		color: var(--foreground);
+		background: var(--accent);
+	}
+
+	/* the fold — 0fr → 1fr animates a collapse without measuring anything (no height math, no
+	   flash), and the wrapper's overflow is what lets the row actually reach zero */
+	.dstack {
+		display: grid;
+		grid-template-rows: 0fr;
+		transition: grid-template-rows 0.26s cubic-bezier(0.32, 0.72, 0, 1);
+	}
+	.dock.open .dstack {
+		grid-template-rows: 1fr;
+	}
+	.dstack > .dwrap {
+		overflow: hidden;
+		min-height: 0;
+	}
+
+	/* THE CAP — the dock's one scroller, and the reason it stays a dock: head + this + acts can
+	   never eat the screen, so the evidence above it survives on any viewport. */
+	.dbody {
+		overflow-y: auto;
+		overscroll-behavior: contain;
+		max-height: min(38vh, 340px);
 	}
 
 	/* PROPOSAL — the dock's top zone: the Prompt's framing over the editable output */
@@ -1037,8 +1110,6 @@
 	.why {
 		padding: 12px 10px 8px;
 		border-top: 1px solid var(--border);
-		max-height: 32vh;
-		overflow-y: auto;
 		display: flex;
 		flex-direction: column;
 		gap: 2px;
@@ -1242,6 +1313,29 @@
 		font-size: 12px;
 		line-height: 1.4;
 		color: #dc2626;
+	}
+
+	/* TOUCH — the same dock, sized for a thumb: tighter to the edges (and clear of the home
+	   indicator), fingertip targets on the 6px proof dots (hit area only — the dots stay 6px),
+	   and no chord badges, since there is no keyboard to press them on. */
+	@media (pointer: coarse) {
+		.dock {
+			left: 12px;
+			right: 12px;
+			bottom: calc(12px + env(safe-area-inset-bottom));
+		}
+		.claim .dot {
+			position: relative;
+		}
+		.claim .dot::after {
+			content: "";
+			position: absolute;
+			inset: -14px;
+		}
+		.btn kbd,
+		.btn-note kbd {
+			display: none;
+		}
 	}
 
 	@media (prefers-reduced-motion: reduce) {

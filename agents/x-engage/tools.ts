@@ -148,10 +148,12 @@ const decider = createDecider({
 
 // The funnel's forward order; a stage never drags an engagement backward. "Not qualified" is the
 // terminal miss, off the ladder. "Approved" is terminal (the agent is read-only — nothing posts, so
-// there is no "Posted" state to model until reply_to_tweet is wired).
-const LADDER = ["To qualify", "To engage", "Draft pending review", "Approved"] as const;
-const rank = (s: string | null): number => (s ? LADDER.indexOf(s as (typeof LADDER)[number]) : -1);
-type Entry = "To qualify" | "To engage";
+// there is no "Posted" state to model until reply_to_tweet is wired). "Qualification pending review"
+// is the qualify Decision's gate — reached by everyone the signal passes, before the reply is drafted.
+// It lives in config.ts because the review app's commit obeys the same ladder: one declaration, both
+// consumers, so a human Confirm can no more regress an engagement than a stage can.
+const LADDER: readonly string[] = config.ladder;
+const rank = (s: string | null): number => (s ? LADDER.indexOf(s) : -1);
 
 const statusOf = async (postUrl: string): Promise<string | null> => {
 	const [e] = await store.query(config.models.XEngagements, { property: "Post URL", url: { equals: postUrl } });
@@ -193,13 +195,14 @@ const approvedSet = async (): Promise<Set<string>> => {
 	return new Set(rows.map((r) => String(r.fields.Handle ?? "").toLowerCase().replace(/^@/, "")).filter(Boolean));
 };
 
-// queue(t, known) — make (or refresh) the engagement candidate. Never queues the owner (you don't reply
-// to yourself) or stale tweets. Entry depends only on whether the author is Approved (`known`):
-//   Approved → "To engage" (pre-vetted; skips the signal) — and "Not qualified" is NOT terminal for
-//     them, so a stale drop is rehabilitated back up. They never stay dropped.
-//   everyone else → "To qualify" — a path that needs a crowd, so a reply-less post is skipped there.
-// Monotonic: the entry Status is only written when the lead hasn't already advanced past it, so a
-// re-run — or the same tweet arriving from both hydrate and the feed — converges, never moves backward.
+// queue(t, known) — make (or refresh) the engagement candidate. Never queues the owner (you don't
+// reply to yourself) or stale tweets. Everyone enters the funnel at "To qualify"; `engage` fast-paths
+// Approved authors past the signal + qualify gates at engage time. A reply-less post gives the signal
+// nothing to read, so it's skipped — UNLESS the author is Approved (pre-vetted, bypasses the signal).
+// Monotonic: "To qualify" is written only when the engagement hasn't already advanced, so a re-run —
+// or the same tweet arriving from both hydrate and the feed — converges, never moves backward. A
+// stale "Not qualified" is rehabilitated to "To qualify" for an Approved author (never terminally
+// out), but stays put for everyone else (an evidence-backed elimination is terminal).
 const queue = async (
 	t: NormTweet,
 	known: Set<string>,
@@ -209,11 +212,10 @@ const queue = async (
 		return { url: t.url, author: t.author, queued: false, status: null, reason: "owner" };
 	if (!isFresh(t.createdAt)) return { url: t.url, author: t.author, queued: false, status: null, reason: "stale" };
 	const approved = known.has(t.author.toLowerCase());
-	const entry: Entry = approved ? "To engage" : "To qualify";
 	if (!approved && !t.replyCount) return { url: t.url, author: t.author, queued: false, status: null, reason: "no-replies" };
 	const current = await statusOf(t.url);
 	const advanced = approved
-		? rank(current) >= rank("To engage")
+		? rank(current) >= rank("To qualify")
 		: current === "Not qualified" || rank(current) >= rank("To qualify");
 	const row: XEngagements = {
 		Name: `@${t.author} — ${label(t.text)}`,
@@ -240,10 +242,10 @@ const queue = async (
 		),
 		Reach: t.views,
 		"Scanned at": ranAt,
-		...(advanced ? {} : { Status: entry })
+		...(advanced ? {} : { Status: "To qualify" })
 	};
 	const e = await store.upsert(config.models.XEngagements, row, "Post URL");
-	return { url: t.url, author: t.author, queued: !advanced, status: advanced ? current : entry, engagement: e.url };
+	return { url: t.url, author: t.author, queued: !advanced, status: advanced ? current : "To qualify", engagement: e.url };
 };
 
 // ingest — archive then (maybe) queue: the one path both discovery sources funnel through.
@@ -296,10 +298,48 @@ const ensureContext = async (postUrl: string): Promise<void> => {
 		);
 };
 
+// GATE 1 — the deterministic pre-filter (signal.ts): does a crowd exist and does the author answer
+// its repliers? On a pass it stores the answered exchanges as the evidence the qualify judge reads and
+// returns `pass` (spend the LLM); an evidence-backed miss eliminates here (terminal "Not qualified" +
+// comment); a thin/capped read defers (nothing written — the engagement stays "To qualify" to retry).
+// It no longer advances the funnel — that's the qualify Decision's job. Approved authors never reach it.
+const preFilter = async (
+	postUrl: string,
+	name: string,
+	author: string,
+	known: Set<string>,
+	replyDepth = 60
+): Promise<{ pass: boolean; eliminate: boolean; answered: number }> => {
+	const { replies, complete } = await getTweet(postUrl, replyDepth);
+	const q = classify(author, tweetIdOf(postUrl), replies, complete);
+	const eliminate = q.eliminate && !known.has(author.toLowerCase());
+	if (q.pass) {
+		const patch: XEngagements = {
+			Name: name,
+			"Post URL": postUrl,
+			"Author engagement": stringify(
+				{ author, exchanges: q.answered.map((a) => ({ replier: a.to.author?.handle, text: a.to.text, reply: a.opReply.text })) },
+				{ lineWidth: 0 }
+			)
+		};
+		await store.upsert(config.models.XEngagements, patch, "Post URL");
+	} else if (eliminate) {
+		const e = await store.upsert(config.models.XEngagements, { Name: name, "Post URL": postUrl, Status: "Not qualified" }, "Post URL");
+		await store.comment(e.id, disposition(q, author));
+	}
+	return { pass: q.pass, eliminate, answered: q.answered.length };
+};
+
+// (Re-)draft one reply as a Decision — enrich the reply/quote context first (1:1 x.com fidelity), then
+// judge in the owner's voice. `dependsOn` binds it to a qualification so the review app holds it until
+// that qualification is human-approved; standalone (undefined) when the author is pre-vetted.
+const draftReply = (postUrl: string, dependsOn?: string[]) =>
+	ensureContext(postUrl).then(() => decider.decide("reply", postUrl, dependsOn ? { dependsOn } : {}));
+
 export const tools = {
 	// hydrate — pull a person's own posts + replies, record ALL of them in the archive, and queue the
-	// fresh ones as candidates. Since we only ever hydrate Approved people, their candidates enter "To
-	// engage" (queue reads `known`). `hydrate(OWNER)` is the voice-corpus maintainer (records the owner's
+	// fresh ones as candidates at "To qualify" (`engage` fast-paths Approved authors past the gates at
+	// engage time). `hydrate(OWNER)` is the voice-corpus maintainer (records the owner's
 	// rows, queues nothing — the self-guard in queue). `known` defaults to the Approved set for standalone
 	// use; scan passes the set it already built. Idempotent.
 	hydrate: async (handle: string, count = 30, name?: string, known?: Set<string>) => {
@@ -316,9 +356,9 @@ export const tools = {
 	},
 
 	// scan — the unified discovery: hydrate every Approved X Person (the people we follow), then the For
-	// You feed, archiving everything and queueing candidates. One entry rule everywhere (queue reads
-	// `known`): an Approved author → "To engage" (pre-vetted, skips qualify), anyone else → "To qualify".
-	// Dedup across the two sources is structural — Post URL + the monotonic guard.
+	// You feed, archiving everything and queueing candidates at "To qualify". `engage` later fast-paths
+	// Approved authors past the signal + qualify gates. Dedup across the two sources is structural —
+	// Post URL + the monotonic guard.
 	scan: async (count = 20) => {
 		const approved = await store.query(config.models.XPeople, { property: "Approved", checkbox: { equals: true } });
 		const known = new Set(
@@ -337,64 +377,50 @@ export const tools = {
 		return { people, feed: { archived: feedTweets.length, queued: feedResults.filter((r) => r.queued) } };
 	},
 
-	// qualify — the deterministic gate (former-rpa-pms pre-qualify's analogue). No-ops once past qualify.
-	// Otherwise ONE reply pull → classify: author answered a commenter? PASS ⇒ "To engage" (+store the
-	// signal); data-backed MISS ⇒ "Not qualified" (+comment); INSUFFICIENT DATA (no replies, or a capped
-	// pull that didn't see the whole thread) ⇒ left at "To qualify" to retry. No Decision, no LLM — the
-	// slow LLM draft only runs on survivors. URL-agnostic: a reply candidate qualifies on its sub-thread.
-	qualify: async (postUrl: string, replyDepth = 60, known?: Set<string>) => {
+	// engage — the merged funnel: walk one post through the three gates in a single call, stopping at
+	// the first that closes. Approved (pre-vetted) authors skip gates 1-2 and go straight to a standalone
+	// draft; everyone else must clear the deterministic signal (gate 1), then the LLM qualification
+	// (gate 2 — a Decision), before a reply is drafted (gate 3). The reply is created the moment the AI
+	// qualifies the post ("if it scores well, draft"), but bound to the qualification via `dependsOn`, so
+	// the review app keeps it hidden until a human approves the qualification — and drops it for good if
+	// they instead mark the post "Not interesting". Monotonic: no-ops once a qualification is pending or
+	// beyond (and on the terminal "Not qualified"), so a re-run — or engagePending — never double-drafts.
+	engage: async (postUrl: string, known?: Set<string>) => {
 		const status = await statusOf(postUrl);
-		if (status === "Not qualified" || rank(status) >= rank("To engage"))
+		if (status === "Not qualified" || rank(status) >= rank("Qualification pending review"))
 			return { url: postUrl, skipped: true, status };
 		const row = await store.read(config.models.XEngagements, "Post URL", postUrl);
+		const name = String(row.fields.Name ?? postUrl);
 		const author = String(row.fields.Author ?? "");
-		const { replies, complete } = await getTweet(postUrl, replyDepth);
-		// `complete` is the script's own drained-vs-capped flag; a capped read can't prove a negative, so it defers.
-		const q = classify(author, tweetIdOf(postUrl), replies, complete);
-		// An Approved author is pre-vetted — never eliminate them (belt-and-suspenders for a legacy row
-		// stranded at "To qualify"); a miss just defers until scan promotes them to "To engage".
 		const set = known ?? (await approvedSet());
-		const eliminate = q.eliminate && !set.has(author.toLowerCase());
-		const advance = q.pass ? "To engage" : eliminate ? "Not qualified" : null;
-		const patch: XEngagements = {
-			Name: String(row.fields.Name),
-			"Post URL": postUrl,
-			...(q.pass
-				? {
-						"Author engagement": stringify(
-							{ author, exchanges: q.answered.map((a) => ({ replier: a.to.author?.handle, text: a.to.text, reply: a.opReply.text })) },
-							{ lineWidth: 0 }
-						)
-					}
-				: {}),
-			...(advance ? { Status: advance } : {})
-		};
-		const e = await store.upsert(config.models.XEngagements, patch, "Post URL");
-		if (eliminate) await store.comment(e.id, disposition(q, author));
-		return { url: postUrl, author, pass: q.pass, eliminate, answered: q.answered.length, deferred: !advance, status: advance ?? status };
+		const approved = set.has(author.toLowerCase());
+
+		let qualify: string | undefined;
+		let good = true;
+		if (!approved) {
+			const pf = await preFilter(postUrl, name, author, set);
+			if (!pf.pass) return { url: postUrl, author, stage: pf.eliminate ? "eliminated" : "deferred", answered: pf.answered };
+			const q = await decider.decide("qualify", postUrl);
+			qualify = q.id;
+			good = config.prompts!.qualify.resolve(q.output).advances;
+		}
+		const draft = good ? await draftReply(postUrl, qualify ? [qualify] : undefined) : null;
+		return { url: postUrl, author, stage: draft ? "drafted" : "qualified-out", qualify, draft: draft?.id };
 	},
 
-	// qualifyPending — qualify every engagement still at "To qualify" (build the Approved set once).
-	qualifyPending: async (replyDepth?: number) => {
+	// engagePending — run `engage` over every engagement at "To qualify" (scan's output), building the
+	// Approved set once. Replaces the old qualifyPending + draftPending: one pass, one place.
+	engagePending: async () => {
 		const known = await approvedSet();
 		const rows = await store.query(config.models.XEngagements, { property: "Status", select: { equals: "To qualify" } });
-		return mapLimit(rows, (r) => tools.qualify(String(r.fields["Post URL"]), replyDepth, known));
+		return mapLimit(rows, (r) => tools.engage(String(r.fields["Post URL"]), known));
 	},
 
-	// draft — judge one engagement against the "X Reply" contract, grounded in the owner's voice;
-	// writes one Decision and moves the engagement to the pending review gate. `context` prints the
-	// frozen judgment context (contract + evidence + the voice block), writes nothing.
-	draft: async (postUrl: string) => {
-		await ensureContext(postUrl);
-		return decider.decide("reply", postUrl);
-	},
+	// draft — manually (re-)draft a reply for one post as a STANDALONE Decision (no qualification
+	// dependency), for a redraft after editing. `context` prints the frozen judgment context (contract +
+	// evidence + the voice block), writes nothing.
+	draft: (postUrl: string) => draftReply(postUrl),
 	context: (postUrl: string) => decider.context("reply", postUrl),
-
-	// draftPending — draft every engagement at "To engage" (each enriches its context first).
-	draftPending: async () => {
-		const rows = await store.query(config.models.XEngagements, { property: "Status", select: { equals: "To engage" } });
-		return mapLimit(rows, (r) => tools.draft(String(r.fields["Post URL"])));
-	},
 
 	// list / show — the review queue and one Decision, straight off the shared engine.
 	list: () => decider.list(),

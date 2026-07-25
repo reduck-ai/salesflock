@@ -1,5 +1,9 @@
 // x-engage — feed-driven X engagement, a clean funnel that mirrors the LinkedIn agents:
-//   scan → qualify (deterministic) → draft → [human gate].  Binds to the shared CRM: its own
+//   scan → engage [ pre-filter (deterministic) → qualify (LLM) → draft (LLM) ] → [human gate].
+// One tool walks a post through three gates: the cheap signal (signal.ts) filters dead threads,
+// the qualify Decision judges whether the post is worth a reply, and — only if it is — the reply
+// Decision drafts, held behind the qualify's approval by `dependsOn` (like linkedin-leads' engage).
+// Binds to the shared CRM: its own
 // pipeline/backlog table (X Engagements, the peer of Leads) + the owner's voice corpus (X Posts,
 // X Replies) that grounds the drafter + a manual fast-path allowlist (X People) + the two universal
 // tables every agent shares (Decisions, Prompts). Model keys are 1:1 with the Notion table titles
@@ -30,7 +34,23 @@ export default {
 		Prompts: "942c4138-c9db-404c-9ae0-472f8edb0712"
 	},
 	entity: "X Engagement",
+	// The forward ladder — declared once here, obeyed by the runtime's stages (tools.ts) AND by the
+	// review app's commit, so neither can move an X Engagement backward. "Not qualified" is off it:
+	// terminal, and only reachable through a non-advancing decision.
+	ladder: ["To qualify", "Qualification pending review", "To engage", "Draft pending review", "Approved"],
 	prompts: {
+		// Is this post worth a reply? The soft, semantic judgement (the deterministic signal already
+		// proved the author engages a crowd). Its committed output IS the decision: "Not interesting"
+		// is the terminal miss (non-advancing, so the DAG gate permanently hides any reply drafted
+		// against it); anything else advances to "To engage". Mirrors linkedin-leads' qualify tier.
+		qualify: {
+			name: "X Post Qualification",
+			pending: "Qualification pending review",
+			resolve: (o) =>
+				o.tier === "Not interesting"
+					? { status: "Not qualified", advances: false }
+					: { status: "To engage", advances: true }
+		},
 		// The draft of a reply, grounded in the owner's own Posts+Replies voice. The committed output
 		// IS the decision: `resolve` advances the Backlog to "Approved" (the terminal gate, since post
 		// is unwired). No negative branch — declining to engage is simply not confirming.
