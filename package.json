@@ -7,7 +7,8 @@
 		"sflock": "./dist/src/cli.js",
 		"leads": "./dist/agents/linkedin-leads/cli.js",
 		"rpa": "./dist/agents/former-rpa-pms/cli.js",
-		"xeng": "./dist/agents/x-engage/cli.js"
+		"xeng": "./dist/agents/x-engage/cli.js",
+		"lkeng": "./dist/agents/lk-engage/cli.js"
 	},
 	"scripts": {
 		"build": "tsc",

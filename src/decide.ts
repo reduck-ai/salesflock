@@ -1,12 +1,12 @@
-// The judgment engine — agent-agnostic. Judge a person against a Prompt row (an LLM two-tool loop,
-// or a manual verdict) and persist ONE Decision, held to the Prompt's Output schema + quote-range
-// contract before the write. Extracted from the linkedin-leads agent so every LinkedIn agent
-// (linkedin-leads, former-rpa-pms) shares one judge: `createDecider` closes over the agent's store,
-// config, and evidence renderers, returning the decision tools (decide/context/list/showDecision).
+// The decision engine — agent-agnostic. Decide a person against a Prompt row (an LLM two-tool
+// loop, or a manual verdict) and persist ONE Decision, held to the Prompt's Output schema +
+// quote-range contract before the write. Extracted from the linkedin-leads agent so every agent
+// shares one engine: `createDecider` closes over the agent's store, config, and evidence
+// renderers, returning the decision tools (decide/context/list/showDecision).
 //
-// The LLM judges in a two-tool loop — `search_quotes` turns cited text into {start,end} spans (the
-// judge never invents offsets; code owns them) and `submit_claims` commits, stopping the moment a
-// submit passes both gates (the Output schema, and every quote in-range) BEFORE the single write.
+// The LLM decides in a two-tool loop — `search_quotes` turns cited text into {start,end} spans
+// (the model never invents offsets; code owns them) and `submit_claims` commits, stopping the
+// moment a submit passes both gates (the Output schema, and every quote in-range) BEFORE the write.
 
 import { getStore } from "./stores/index.js";
 import type { AgentConfig, PromptSpec, Row, Store } from "./stores/index.js";
@@ -18,7 +18,7 @@ import { schemaError } from "./output.js";
 import { createHash } from "node:crypto";
 
 // fingerprint(instructions) — what the Decision pins alongside its Model: WHICH instruction text the
-// judge actually read. The Prompt relation can't answer that — a page body is mutable in place, and it
+// LLM actually read. The Prompt relation can't answer that — a page body is mutable in place, and it
 // now transcludes a shared page, so the prose can change from a page the prompt doesn't even own. The
 // hash makes "a new version is a new row, never an edit" checkable instead of merely agreed: two
 // Decisions citing one prompt with different hashes were NOT judged alike. Short — this identifies a
@@ -26,10 +26,10 @@ import { createHash } from "node:crypto";
 const fingerprint = (instructions: string): string =>
 	createHash("sha256").update(instructions).digest("hex").slice(0, 12);
 
-// The judge's response envelope: the domain `output` — its shape declared by the Prompt's Output
+// The LLM's response envelope: the domain `output` — its shape declared by the Prompt's Output
 // schema — plus `statements`, the fixed claim→evidence anchoring layer every evidenced judgment
 // carries. A quote is a [start,end) char range into the Evidence, obtained from `search_quotes`:
-// the judge never invents offsets, it cites text and search returns the span. This contract lives
+// the model never invents offsets, it cites text and search returns the span. This contract lives
 // here, in code, not in the per-agent prompt.
 const STATEMENTS = {
 	type: "array",
@@ -92,7 +92,7 @@ export interface Subject {
 
 // createReviewer(deps) — the READ side of the review surface, needing NO agent entity bridge: list
 // decisions by review state (each flagged whether it carries human feedback) and show one decision
-// (the judge's judgment, the human diff once ruled, and the feedback snapshot). createDecider builds
+// (the LLM's decision, the human diff once ruled, and the feedback snapshot). createDecider builds
 // on this and adds the bridge-coupled judging; the agent-agnostic `sflock decisions` CLI uses it directly.
 export interface ReviewerDeps {
 	config: AgentConfig;
@@ -119,8 +119,8 @@ export const createReviewer = ({ config, renderEvidence, store: given }: Reviewe
 		Object.values(config.prompts ?? {}).find((s) => name.includes(s.name))?.name;
 
 	// livePrompt(name) — the Prompt row that governs a kind TODAY. Prompts are append-only versions
-	// sharing a Name, so the live contract is the highest Version. The one resolver: the judge reads it
-	// to build a judgment, and the staleness check below reads it to ask whether a past judgment's
+		// sharing a Name, so the live contract is the highest Version. The one resolver: the LLM reads it
+	// to build a decision, and the staleness check below reads it to ask whether a past decision's
 	// instructions still say what they said.
 	const livePrompt = async (name: string): Promise<Row> => {
 		const versions = await store.query(config.models.Prompts, { property: "Name", title: { equals: name } });
@@ -131,13 +131,13 @@ export const createReviewer = ({ config, renderEvidence, store: given }: Reviewe
 	// instructionsHash(kind) — the fingerprint the live instructions WOULD get now, so a caller can
 	// compare it to what a Decision pinned. Equal ⇒ that judgment's instructions still read the same;
 	// different ⇒ someone edited a body in place (or the shared page it syncs) instead of adding a
-	// version. Its own call, not part of showDecision, so the judge's few-shot builder never pays for it.
+	// version. Its own call, not part of showDecision, so the few-shot builder never pays for it.
 	const instructionsHash = async (kind: string): Promise<string> =>
 		fingerprint(await store.body((await livePrompt(kind)).id));
 
-	// showDecision(handle) — one Decision by the shared id, shaped for reading: the judge's judgment
+	// showDecision(handle) — one Decision by the shared id, shaped for reading: the LLM's decision
 	// always (Output, Reasoning statements, and the Evidence RE-RENDERED from the frozen Input the way
-	// the judge and the app render it), the feedback snapshot (the human delta, in any state), and the
+	// the model and the app render it), the feedback snapshot (the human delta, in any state), and the
 	// full review diff once ruled. The `show` tool and the few-shot example builder share this shaping.
 	const showDecision = async (handle: string) => {
 		const { id, fields } = await store.get(idOf(handle));
@@ -189,7 +189,7 @@ export interface DeciderDeps extends ReviewerDeps {
 	// DAG dependent — the one place the domain funnel advances) and return that row's id. The relation
 	// it binds to is `config.entity`, so linkEntity no longer reports it — it just hands back the id.
 	linkEntity: (subject: Subject, spec: PromptSpec, opts: { dependsOn?: string[] }) => Promise<string>;
-	// The few-shot block the judge sees, overridable per agent. Default: prior committed Decisions
+	// The few-shot block the LLM sees, overridable per agent. Default: prior committed Decisions
 	// (examplesFor). x-engage supplies the owner's own Posts+Replies — its authentic voice — instead.
 	renderExamples?: (key: string, subject: Subject) => Promise<string>;
 }
@@ -248,7 +248,7 @@ export const createDecider = (deps: DeciderDeps) => {
 			}
 		});
 
-		// Project the Person onto the Input schema, then render it for the judge. The app renders the
+		// Project the Person onto the Input schema, then render it for the LLM. The app renders the
 		// same map from the frozen data, so improving `renderEvidence` reflows every Decision.
 		const input = projectInput(f, inputSchema);
 		const evidence = renderEvidence(input);
@@ -264,7 +264,7 @@ export const createDecider = (deps: DeciderDeps) => {
 		return { spec, subject, prompt, system, examples, outputSchema, input, evidence, responseSchema };
 	};
 
-	// decide — judge the person against a Prompt row (the LLM two-tool loop) and persist one
+	// decide — decide the person against a Prompt row (the LLM two-tool loop) and persist one
 	// Decision. dependsOn makes the Decision a DAG node: reviewable only once every upstream is
 	// Accepted (derived by the app). A dependency-free decision moves its Lead to the prompt's
 	// pending gate; a dependent one leaves Status alone.
@@ -331,8 +331,8 @@ export const createDecider = (deps: DeciderDeps) => {
 			const prompt = [ctx.system, ctx.examples, `## Evidence\n\n${ctx.evidence}`]
 				.filter(Boolean)
 				.join("\n\n");
-			await llm.agent(prompt, { search_quotes, submit_claims }, () => submitted !== undefined);
-			if (!submitted) throw new Error("judge did not submit a valid decision within the step budget");
+			await llm.agent(prompt, { search_quotes, submit_claims }, () => submitted !== undefined, config.model);
+			if (!submitted) throw new Error("the model did not submit a valid decision within the step budget");
 			({ output, statements } = submitted);
 		}
 
@@ -345,7 +345,7 @@ export const createDecider = (deps: DeciderDeps) => {
 				Output: JSON.stringify(output),
 				Reasoning: JSON.stringify(statements),
 				Input: JSON.stringify(ctx.input),
-				Model: llm.MODEL,
+				Model: llm.modelName(config.model),
 				"Instructions hash": fingerprint(ctx.system),
 				Prompt: [ctx.prompt.id],
 				[config.entity]: [entityId],

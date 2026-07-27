@@ -1,0 +1,3 @@
+/* lk-engage evidence skin — intentionally empty: the evidence is plain Markdown (a LinkedIn-style
+   card in text, no custom classes), so the app's own typography carries it. The file exists because
+   the review card imports $agent/evidence.css unconditionally (the agent contract). */

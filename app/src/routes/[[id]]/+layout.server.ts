@@ -2,12 +2,13 @@ import { mode } from "$lib/server/auth";
 import { decisions } from "$lib/server/notion";
 import { decisionToRow } from "$lib/cards/decision";
 import { parseFilter } from "$lib/filter";
-import config from "$agent/config";
+import { KINDS } from "$agents/index";
 import type { LayoutServerLoad } from "./$types";
 
-// the per-Prompt dropdown's options — the agent's known prompt Names, so they're stable whatever
-// the current filter (deriving them from the fetched rows would drop options once a prompt is picked).
-const promptNames = Object.values(config.prompts ?? {}).map((s) => s.name);
+// the per-Prompt dropdown's options — every agent's declared prompt Names (the queue is mixed), so
+// they're stable whatever the current filter (deriving them from the fetched rows would drop
+// options once a prompt is picked).
+const promptNames = KINDS;
 
 // The per-FILTER rail — the ordered working set the list renders and the deck navigates. This load
 // reads ONLY `url.searchParams` (via parseFilter) and never `params.id`, so SvelteKit does NOT

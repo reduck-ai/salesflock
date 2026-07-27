@@ -1,15 +1,16 @@
 // Notion access for the review gate: one query for the pending queue, one write per committed
 // decision. Schema-agnostic on purpose — a fork points NOTION_DECISIONS_DS at its own database
-// and the page still renders. The one agent-specific input is `config.prompts` (via $agent): a
-// prompt's `resolve` maps a committed output → its pipeline move + polarity, shared with the
-// runtime. NOTION_TOKEN is an internal-integration token the databases are shared with.
+// and the page still renders. The one agent-specific input is resolved PER ROW via the roster
+// ($agents/index): a decision's kind names the agent that judged it, whose prompt `resolve` maps
+// a committed output → its pipeline move + polarity, and whose `entity`/`ladder` govern the move —
+// shared with the runtime. NOTION_TOKEN is an internal-integration token the databases are shared with.
 
 import { error } from "@sveltejs/kit";
 import { env } from "$env/dynamic/private";
 import { bodyOf, chunks, plain, relation, type BlockPage, type NotionValue } from "$core/stores/notion.codec";
 import { schemaError } from "$core/output";
 import { hasFeedback } from "$core/review";
-import config from "$agent/config";
+import { agentFor } from "$agents/index";
 import type { Filter } from "$lib/filter";
 
 const API = "https://api.notion.com/v1";
@@ -97,9 +98,6 @@ const promptBody = async (id: string): Promise<string | undefined> => {
 	}
 };
 
-// The prompt's pipeline semantics, by its Name — the same `resolve` the runtime declares.
-const specByName = (name: string) => Object.values(config.prompts ?? {}).find((s) => s.name === name);
-
 // advanced(id) — has this Decision advanced the pipeline? The ONE reading of a DAG edge: its
 // committed output run through its Prompt's `resolve`. Read by BOTH consumers, so the invariant does
 // not depend on which path a reviewer took — the queue hides a blocked dependent (decisions), and
@@ -111,7 +109,7 @@ const advanced = async (id: string): Promise<{ advances: boolean; created: strin
 	const fo = plain(properties["Final output"]);
 	const promptId = relation(properties.Prompt)[0];
 	if (!fo || !promptId) return { advances: false, created };
-	const spec = specByName((await promptInfo(promptId)).name);
+	const spec = agentFor((await promptInfo(promptId)).name)?.spec;
 	try {
 		return {
 			advances: !!spec && spec.resolve(JSON.parse(String(fo)) as Record<string, unknown>).advances,
@@ -122,15 +120,13 @@ const advanced = async (id: string): Promise<{ advances: boolean; created: strin
 	}
 };
 
-// ahead(to, from) — is `to` further along the agent's declared forward ladder than where the entity
-// stands? An unknown ladder or an unreadable current status has nothing to compare, so it defers to
-// the write. This is what keeps two decisions tied to ONE entity from fighting over its Status.
-// (widened once here: the agent declares its ladder `as const`, so its indexOf would only accept its
-// own literals — while a Status read back off a page is just a string.)
-const ahead = (to: string, from: string | null): boolean => {
-	const ladder: readonly string[] | undefined = config.ladder;
-	return !ladder || from === null || ladder.indexOf(to) > ladder.indexOf(from);
-};
+// ahead(to, from, ladder) — is `to` further along the owning agent's declared forward ladder than
+// where the entity stands? An unknown ladder or an unreadable current status has nothing to compare,
+// so it defers to the write. This is what keeps two decisions tied to ONE entity from fighting over
+// its Status. (widened once here: the agent declares its ladder `as const`, so its indexOf would
+// only accept its own literals — while a Status read back off a page is just a string.)
+const ahead = (to: string, from: string | null, ladder?: readonly string[]): boolean =>
+	!ladder || from === null || ladder.indexOf(to) > ladder.indexOf(from);
 
 const statusOf = async (id: string): Promise<string | null> => {
 	const v = (await page(id)).properties.Status;
@@ -369,9 +365,10 @@ export const record = async (
 	// decision it hangs off has been approved. Same `advanced` reading the queue's gate uses.
 	if (deps.some((d) => !d.advances))
 		throw error(409, "blocked: the decision this one depends on has not been approved yet");
-	const spec = specByName(name);
-	// Resolve BEFORE the write so a malformed output fails loud, persisting nothing.
-	const move = spec?.resolve(committedOutput as Record<string, unknown>);
+	// The row's own agent — its spec drives the move; its entity/ladder say what moves and which
+	// way is forward. Resolve BEFORE the write so a malformed output fails loud, persisting nothing.
+	const owner = agentFor(name);
+	const move = owner?.spec.resolve(committedOutput as Record<string, unknown>);
 
 	// Wave 3: the writes, one flight — the commit itself, the rejecting gate's dependent archiving,
 	// and the entity moves are mutually independent once the gates above have ruled.
@@ -379,10 +376,10 @@ export const record = async (
 		...learning,
 		"Final output": { rich_text: chunks(JSON.stringify(committedOutput)) }
 	});
-	if (move === undefined) {
+	if (move === undefined || owner === undefined) {
 		await commit;
 		return void console.error(
-			`record: no prompt spec for ${promptId} — Final output written, entity not moved`
+			`record: no agent declares kind "${name}" (prompt ${promptId}) — Final output written, entity not moved`
 		);
 	}
 	// A rejecting gate deletes the eager work it held back — each unreviewed dependent is archived.
@@ -391,22 +388,23 @@ export const record = async (
 		: relation(properties["Unlocks"]).map(async (depId) => {
 				if (!plain((await page(depId)).properties["Final output"])) await archive(depId);
 			});
-	// Move whichever pipeline entity this agent binds a Decision to — the relation `$agent` names
-	// (config.entity: "Lead" | "X Engagement"), not a hardcoded one. Two decisions can be tied to
-	// ONE entity (a qualification and the draft held behind it), so an unconditional write is "last
-	// confirm wins" — enough to drag the entity BACKWARD (confirm the draft, then its qualification,
-	// and Approved becomes To engage). An ADVANCING outcome may only move the entity forward along
-	// the ladder the agent declares — the same ladder its runtime stages obey. A non-advancing one
-	// is the human's terminal reject and always lands: the one move legitimately not forward.
-	const entityIds = relation(properties[config.entity]);
+	// Move whichever pipeline entity the OWNING agent binds a Decision to — the relation its config
+	// names (entity: "Lead" | "X Engagement" | "Lk Engagement"), not a hardcoded one. Two decisions
+	// can be tied to ONE entity (a qualification and the draft held behind it), so an unconditional
+	// write is "last confirm wins" — enough to drag the entity BACKWARD (confirm the draft, then its
+	// qualification, and Approved becomes To engage). An ADVANCING outcome may only move the entity
+	// forward along the ladder that agent declares — the same ladder its runtime stages obey. A
+	// non-advancing one is the human's terminal reject and always lands: the one move legitimately
+	// not forward.
+	const entityIds = relation(properties[owner.config.entity]);
 	const moves = entityIds.map(async (id) => {
-		if (move.advances && !ahead(move.status, await statusOf(id))) return;
+		if (move.advances && !ahead(move.status, await statusOf(id), owner.config.ladder)) return;
 		await patch(id, { Status: { select: { name: move.status } } });
 	});
 	await Promise.all([commit, ...archives, ...moves]);
 	// A committed decision with no entity relation is an anomaly — surfaced loud, never swallowed.
 	if (!entityIds.length)
 		console.error(
-			`record: decision ${pageId} has no "${config.entity}" relation — Final output written, entity not moved`
+			`record: decision ${pageId} has no "${owner.config.entity}" relation — Final output written, entity not moved`
 		);
 };

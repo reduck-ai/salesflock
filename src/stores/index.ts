@@ -66,4 +66,8 @@ export interface AgentConfig {
 	// confirm wins, undoing a move that already happened. Statuses off the ladder are terminal.
 	ladder?: readonly string[];
 	prompts?: Record<string, PromptSpec>; // decision kind (e.g. qualify) → its contract row + transitions
+	// The LLM, "provider/modelId" (e.g. "bedrock/us.anthropic.claude-sonnet-4-6") — declared here
+	// like `destination`, never injected through env (env carries only credentials). Absent,
+	// llm.ts's DEFAULT_MODEL applies.
+	model?: string;
 }

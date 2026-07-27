@@ -15,15 +15,15 @@
 
 import "./env.js";
 import { Command } from "commander";
-import { mkdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { compile } from "json-schema-to-typescript";
 import { bind } from "./scripts.js";
 import { renderError } from "./errors.js";
-import { STORES, type AgentConfig } from "./stores/index.js";
+import { STORES } from "./stores/index.js";
 import { createReviewer } from "./decide.js";
-import { renderEvidence } from "./linkedin/evidence.js";
 import { renderFeedback } from "./review.js";
+import { AGENTS, type Agent } from "../agents/index.js";
 
 // Writable-property count of a described model (a JSON Schema's `properties`) — for the
 // progress line. Every store now emits JSON Schema, so there is one shape to read.
@@ -34,20 +34,17 @@ const program = new Command()
 	.name("sflock")
 	.description("Operator CLI — compile contracts into TS types, and inspect an agent's Decisions.");
 
-// An agent's config.ts by id — the one loader both `pull` and `decisions` use to resolve --agent.
-const loadConfig = async (agent: string): Promise<AgentConfig> => {
-	const agentDir = join("agents", agent);
-	const ok = await stat(agentDir).then((s) => s.isDirectory()).catch(() => false);
-	if (!ok) program.error(`no agent "${agent}" — ${agentDir}/ does not exist.`);
-	return ((await import(`../agents/${agent}/config.js`)) as { default: AgentConfig }).default;
-};
+// --agent → its registry entry (config + its own evidence renderer: decisions must display through
+// the renderer that judged them). The roster is agents/index.ts — one registration per agent.
+const loadAgent = (agent: string): Agent =>
+	AGENTS[agent] ?? program.error(`no agent "${agent}" — register it in agents/index.ts.`);
 
 program
 	.command("pull")
 	.description("Compile each of an agent's models → agents/<agent>/schema/<Model>.ts (TS type)")
 	.requiredOption("--agent <id>", "agent under agents/ whose config.ts names the destination + models")
 	.action(async ({ agent }: { agent: string }) => {
-		const config = await loadConfig(agent);
+		const { config } = loadAgent(agent);
 		const store = STORES[config.destination];
 		const dir = join("agents", agent, "schema");
 		await mkdir(dir, { recursive: true });
@@ -85,7 +82,7 @@ decisions
 	.option("--reviewed", "only reviewed decisions (Final output set)")
 	.option("--all", "both pending and reviewed")
 	.action(async ({ agent, reviewed, all }: { agent: string; reviewed?: boolean; all?: boolean }) => {
-		const reviewer = createReviewer({ config: await loadConfig(agent), renderEvidence });
+		const reviewer = createReviewer({ ...loadAgent(agent) });
 		const scope = all ? "all" : reviewed ? "reviewed" : "pending";
 		console.log(JSON.stringify(await reviewer.list(scope), null, 2));
 	});
@@ -97,7 +94,7 @@ decisions
 	.requiredOption("--agent <id>", "agent under agents/ whose config.ts names the Decisions table")
 	.option("--feedback", "print only the human feedback snapshot (LLM-oriented markdown)")
 	.action(async (decision: string, { agent, feedback }: { agent: string; feedback?: boolean }) => {
-		const reviewer = createReviewer({ config: await loadConfig(agent), renderEvidence });
+		const reviewer = createReviewer({ ...loadAgent(agent) });
 		const shown = await reviewer.showDecision(decision);
 		if (feedback) return void console.log(shown.feedback ? renderFeedback(shown.feedback) : "(no human feedback)");
 		// Was this judged under the instructions that are live now? The Decision pinned their

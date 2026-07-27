@@ -21,10 +21,11 @@
 	// output; meaning is the caller's.
 	import Markdown from "$lib/components/Markdown.svelte";
 	import OutputForm from "./OutputForm.svelte";
-	// The agent owns its evidence's skin (the x.com tweet card), loaded generically through the
-	// $agent alias — the same seam that gives us $agent/evidence and $agent/config, so core stays
-	// agent-agnostic. The runtime CLI imports only evidence.ts, never this.
-	import "$agent/evidence.css";
+	// Each agent owns its evidence's skin; the queue is mixed, so every skin loads (classes are
+	// namespaced per agent — x-engage's tw-*; the card the row renders decides which ones fire).
+	// The runtime CLI imports only evidence.ts, never these.
+	import "$agents/x-engage/evidence.css";
+	import "$agents/lk-engage/evidence.css";
 	import { Badge } from "$lib/components/ui/badge";
 	import { quoteAt, canonNormalize, quoteKey } from "$core/anchor";
 	import { schemaError } from "$core/output";
@@ -695,7 +696,7 @@
 		margin-top: 6px;
 	}
 	/* generic YAML/code blocks wrap instead of bleeding off the column; the agent's tweet card
-	   (pre.tw) owns its own whitespace in $agent/evidence.css, so exclude it here (no cascade tie) */
+	   (pre.tw) owns its own whitespace in x-engage's evidence.css, so exclude it here (no cascade tie) */
 	.doc :global(pre:not(.tw)) {
 		white-space: pre-wrap;
 		overflow-wrap: anywhere;

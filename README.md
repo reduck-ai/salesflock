@@ -56,17 +56,20 @@ says what it does. If a fact can drift, it belongs in code, not here.
 9. **Stage, and stop early.** Work proceeds in stages; stop at the first stage that
    answers the question — don't enrich what you won't use.
 
-10. **The agent is a folder; the core is a seam.** Everything agent-specific lives under
-   `agents/<id>/`; everything shared lives under `src/` (the engine) and `app/` (the review
-   surface). They meet at two aliases the app declares — `$core` (shared primitives, never
-   re-implemented) and `$agent` (the one bound agent). An agent *is* a fixed contract resolved
-   by convention — `config.ts` (pipeline semantics), an `evidence.ts` (+ optional
-   `evidence.css` skin) that renders what it judges, and the funnel wiring (`tools.ts` /
-   `cli.ts`) — nothing more. So the agent owns its evidence's *identity* (what it is, how it
-   looks) and its funnel; core owns the *engine* (judge, stores, clients) and the *review
-   machinery* (dock, highlighting, theme). The agent renders in theme *tokens*, never a
-   hardcoded palette — the proof the line is right: swap `$agent`, or flip the theme, and
-   neither side breaks the other.
+10. **The agent is a folder; the core is a seam; the decision names its agent.** Everything
+   agent-specific lives under `agents/<id>/`; everything shared lives under `src/` (the engine)
+   and `app/` (the review surface). They meet at `$core` (shared primitives, never re-implemented)
+   and the roster `agents/index.ts` (`$agents`): every agent registered once, resolved **per
+   Decision** by its kind — all agents share ONE Decisions table, so which config semantics and
+   which evidence renderer govern a row is data on the row, never a build-time binding. An agent
+   *is* a fixed contract resolved by convention — `config.ts` (pipeline semantics), an
+   `evidence.ts` (+ optional `evidence.css` skin) that renders what it judges, and the funnel
+   wiring (`tools.ts` / `cli.ts`) — plus its registration: the checklist atop `agents/index.ts`,
+   the ONE authoritative list (docs point there, never restate it). So the agent owns its
+   evidence's *identity* (what it is, how it looks) and its funnel; core owns the *engine*
+   (judge, stores, clients) and the *review machinery* (dock, highlighting, theme). The agent
+   renders in theme *tokens*, never a hardcoded palette — the proof the line is right: add an
+   agent, or flip the theme, and neither side breaks the other.
 
 ## Applied
 
@@ -75,5 +78,5 @@ says what it does. If a fact can drift, it belongs in code, not here.
 `reduck run` can't express. Its method — the stage sequence — lives in the
 `linkedin-leads` skill; its identity lives in the CRM, as its Prompt bodies (with the generic
 part — who we are — a synced block from one shared page, per #5).
-`former-rpa-pms` and `x-engage` (on X) realize the same contract (#10); the review app
-binds exactly one via `$agent`, currently `x-engage`.
+`former-rpa-pms`, `x-engage` (on X) and `lk-engage` (LinkedIn engagement) realize the same
+contract (#10); the review app resolves each Decision's agent from the roster (`$agents`).

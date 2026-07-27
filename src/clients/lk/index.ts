@@ -7,7 +7,7 @@ import { run, type Args } from "../reduck.js";
 import { scripts } from "./scripts.js";
 import { scripts as google } from "../google/scripts.js";
 import type { Search } from "../google/schema.js";
-import type { Card, Experience, Posts, Comments, Company } from "./schema.js";
+import type { Card, Experience, Posts, Comments, Company, Feed } from "./schema.js";
 
 // LinkedIn's profile scripts key off publicId — the /in/<publicId> slug. Accept a
 // full profile URL or a bare publicId.
@@ -91,6 +91,15 @@ export const getProfile = async (profile: string): Promise<Profile> => {
 	const [experience, rest] = await Promise.all([getExperience(profile), getProfileRest(profile)]);
 	return { publicId: rest.publicId, card: rest.card, experience, posts: rest.posts, comments: rest.comments };
 };
+
+// get_profile_posts alone — a person's own recent posts (their activity feed), the discovery pull
+// for a watched author. One run; count bounds the scroll.
+export const getProfilePosts = (profile: string, count = 10): Promise<Posts> =>
+	run<Posts>(scripts.posts, { publicId: publicIdOf(profile), count });
+
+// get_feed_posts — the logged-in user's own LinkedIn home feed, the other discovery surface.
+export type { Feed, Posts };
+export const getFeedPosts = (count = 10): Promise<Feed> => run<Feed>(scripts.feed, { count });
 
 // get_company_info — a single run (no composition), but the Lk client owns it so the
 // agent's tool speaks one client. Accepts a company URL or a bare slug (the script's own

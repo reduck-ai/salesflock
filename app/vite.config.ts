@@ -19,10 +19,11 @@ export default defineConfig({
 			},
 			adapter: adapter(),
 			// The parent repo's core — shared primitives the app must not re-implement
-			// (first user: the Notion codec) — and the agent's config, the one map of
-			// decision kind → pipeline semantics (its store imports are type-only, so the
-			// app pulls in pure data). See APP.md → Deploy for the Vercel toggle.
-			alias: { $core: "../src", $agent: "../agents/x-engage" }
+			// (first user: the Notion codec) — and the agent roster ($agents/index), which
+			// resolves each Decision's kind to the agent that judged it (config semantics +
+			// evidence renderer). All agents share one Decisions table, so the binding is
+			// per-row data, not a build-time choice. See APP.md → Deploy for the Vercel toggle.
+			alias: { $core: "../src", $agents: "../agents" }
 		})
 	]
 });

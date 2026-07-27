@@ -7,5 +7,6 @@ export const scripts = {
 	experience: "reduck/linkedin.com/get_profile_experience",
 	posts: "reduck/linkedin.com/get_profile_posts",
 	comments: "reduck/linkedin.com/get_profile_comments",
-	company: "reduck/linkedin.com/get_company_info"
+	company: "reduck/linkedin.com/get_company_info",
+	feed: "reduck/linkedin.com/get_feed_posts"
 } as const;

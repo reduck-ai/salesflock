@@ -7,7 +7,10 @@
 // place, held to that contract; this adapter no longer knows the contracts.
 
 import type { Decision } from "$lib/server/notion";
-import { renderEvidence, fieldSpan } from "$agent/evidence";
+import { agentFor } from "$agents/index";
+// The fallback for a kind no agent declares today (a renamed prompt, a decommissioned agent): the
+// row must stay readable, so it renders through the shared markdown renderer rather than throwing.
+import { renderEvidence as genericEvidence, fieldSpan as genericSpan } from "$core/linkedin/evidence";
 import { hasFeedback, reviewOf } from "$core/review";
 import type { EvidencedJudgment, Quote, Statement } from "./types";
 
@@ -39,6 +42,12 @@ export const decisionToRow = (d: Decision): DecisionRow => ({
 const byStart = (quotes: Quote[]): Quote[] => [...quotes].sort((a, b) => a.start - b.start);
 
 export const decisionToJudgment = (d: Decision): EvidencedJudgment => {
+	// The row's own agent: the kind (Prompt Name) names who judged it, and that agent's renderer is
+	// the one its quote ranges anchor against — another agent's rendering would corrupt every span.
+	const { renderEvidence, fieldSpan } = agentFor(d.promptName) ?? {
+		renderEvidence: genericEvidence,
+		fieldSpan: genericSpan
+	};
 	const output = JSON.parse(d.fields.Output) as Record<string, unknown>;
 	const input = JSON.parse(d.fields.Input) as Record<string, string>;
 	const evidence = renderEvidence(input);
