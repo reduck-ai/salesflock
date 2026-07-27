@@ -41,8 +41,8 @@ export default {
 	prompts: {
 		// Is this post worth a reply? The soft, semantic judgement (the deterministic signal already
 		// proved the author engages a crowd). Its committed output IS the decision: "Not interesting"
-		// is the terminal miss (non-advancing, so the DAG gate permanently hides any reply drafted
-		// against it); anything else advances to "To engage". Mirrors linkedin-leads' qualify tier.
+		// is the terminal miss (non-advancing, so the review app archives any reply drafted against
+		// it); anything else advances to "To engage". Mirrors linkedin-leads' qualify tier.
 		qualify: {
 			name: "X Post Qualification",
 			pending: "Qualification pending review",

@@ -37,7 +37,8 @@ export const getStore = (name: keyof typeof STORES): Store => STORES[name];
 // output IS the decision, so a single function of that output yields both where the Lead
 // moves (`status`) and whether the outcome advances the pipeline (`advances` — read by the
 // DAG gate to unlock speculative dependents; a non-advancing outcome, e.g. "Not qualified",
-// permanently hides them). "Which outcome advances" is a business rule, not derivable from
+// deletes them — the review app archives a rejected gate's unreviewed dependents, eager work
+// that no longer matters). "Which outcome advances" is a business rule, not derivable from
 // the output — so it lives here, declared once, and both consumers (the runtime's `decide`
 // pending stamp and the review app's `record`) read the same map of decision kind → semantics.
 export interface PromptSpec {

@@ -26,11 +26,6 @@ export interface Decision {
 	title: string;
 	fields: Record<string, string>;
 	deps: string[]; // upstream Decision ids ("Depends on") — the DAG edges
-	// The Decision held behind this one — Notion's SYNCED inverse of "Depends on" (the property pair
-	// is one relation, so downstream is a read direction, not a second stored fact). This is how a
-	// confirmed gate knows which decision it just unlocked, and it rides on the page itself, so a
-	// deep-linked card knows it too. Chains are linear in every agent today, hence one id, not a list.
-	unlocks?: string;
 	prompt?: string; // the Prompt page id — its Output schema governs the editable output
 	promptName?: string; // the Prompt's Name (the row's kind) — the per-Prompt filter + sort key
 	outputSchema?: Record<string, unknown>; // the Prompt's Output JSON Schema (the edit contract)
@@ -109,16 +104,21 @@ const specByName = (name: string) => Object.values(config.prompts ?? {}).find((s
 // committed output run through its Prompt's `resolve`. Read by BOTH consumers, so the invariant does
 // not depend on which path a reviewer took — the queue hides a blocked dependent (decisions), and
 // the write refuses to commit one (record). Unreviewed, unknown-prompt or malformed ⇒ not advanced.
-const advanced = async (id: string): Promise<boolean> => {
-	const { properties } = await page(id);
+// `created` rides along because the same fetch yields the CHAIN sort key: a dependent sorts at its
+// gate's created time, so once the gate is confirmed the dependent appears at the very slot it held.
+const advanced = async (id: string): Promise<{ advances: boolean; created: string }> => {
+	const { properties, created_time: created } = await page(id);
 	const fo = plain(properties["Final output"]);
 	const promptId = relation(properties.Prompt)[0];
-	if (!fo || !promptId) return false;
+	if (!fo || !promptId) return { advances: false, created };
 	const spec = specByName((await promptInfo(promptId)).name);
 	try {
-		return !!spec && spec.resolve(JSON.parse(String(fo)) as Record<string, unknown>).advances;
+		return {
+			advances: !!spec && spec.resolve(JSON.parse(String(fo)) as Record<string, unknown>).advances,
+			created
+		};
 	} catch {
-		return false;
+		return { advances: false, created };
 	}
 };
 
@@ -173,7 +173,6 @@ const toDecision = ({
 		title,
 		fields,
 		deps: relation(properties["Depends on"]),
-		unlocks: relation(properties["Unlocks"])[0],
 		prompt: relation(properties.Prompt)[0]
 	};
 };
@@ -249,6 +248,11 @@ export const decisions = async (filter: Filter): Promise<Decision[]> => {
 	// upstream it depends on has *advanced* the pipeline. Only the review tab gates: past rows are a
 	// log of decisions already made (they were gated when reviewed), so the gate would be moot there.
 	let gated = rows;
+	// The chain key: a dependent sorts at its GATE's created time, not its own. That single fact is
+	// the whole sequencing — the gate and its dependent never co-exist in the queue (pending gate ⇒
+	// dependent hidden), so confirming the gate makes the dependent surface at the exact slot the
+	// gate vacated: refreshing the rail IS advancing to the follow-up. No stored order, no jump.
+	const chainKey = new Map<string, string>();
 	if (filter.tab === "review") {
 		// A dep that is ITSELF in this pending set has no "Final output" — that is what made it
 		// pending — and `advanced` is false for exactly that reason. So its answer is already in hand:
@@ -257,27 +261,33 @@ export const decisions = async (filter: Filter): Promise<Decision[]> => {
 		// mid-chain and orphaned rows. Same semantics, minus the round trips.
 		const pending = new Set(rows.map((r) => r.id));
 		const depIds = [...new Set(rows.flatMap((r) => r.deps))].filter((id) => !pending.has(id));
-		const advances = new Map(
+		const gates = new Map(
 			await Promise.all(depIds.map(async (id) => [id, await advanced(id)] as const))
 		);
-		gated = rows.filter((r) => r.deps.every((d) => advances.get(d)));
+		gated = rows.filter((r) => r.deps.every((d) => gates.get(d)?.advances));
+		for (const r of gated) {
+			const gate = r.deps.length ? gates.get(r.deps[0]) : undefined;
+			if (gate) chainKey.set(r.id, gate.created);
+		}
 	}
 
-	// prompt / feedback in code (over fields already fetched), then sort. Date is created desc;
-	// Prompt groups by Name, created desc within a group. Both stable — a re-query reads the same.
+	// prompt / feedback in code (over fields already fetched), then sort. Date is created desc
+	// (chain-keyed, above); Prompt groups by Name, created desc within a group. Both stable — a
+	// re-query reads the same.
 	let out = gated;
 	if (filter.prompt !== "all") out = out.filter((r) => r.promptName === filter.prompt);
 	if (filter.feedback !== "any") {
 		const want = filter.feedback === "has";
 		out = out.filter((r) => hasFeedback(r.fields) === want);
 	}
+	const key = (r: Decision) => chainKey.get(r.id) ?? r.created;
 	return out
 		.slice()
 		.sort(
 			filter.sort === "prompt"
 				? (a, b) =>
-						(a.promptName ?? "").localeCompare(b.promptName ?? "") || b.created.localeCompare(a.created)
-				: (a, b) => b.created.localeCompare(a.created)
+						(a.promptName ?? "").localeCompare(b.promptName ?? "") || key(b).localeCompare(key(a))
+				: (a, b) => key(b).localeCompare(key(a))
 		);
 };
 
@@ -286,6 +296,17 @@ const patch = async (pageId: string, properties: Record<string, unknown>) => {
 		method: "PATCH",
 		headers,
 		body: JSON.stringify({ properties })
+	});
+	if (!res.ok) throw new Error(`Notion ${res.status}: ${await res.text()}`);
+};
+
+// archive(pageId) — remove a page (Notion's archive = delete-to-trash). Used for exactly one thing:
+// a rejected gate's unreviewed dependents — eager work that no longer matters.
+const archive = async (pageId: string) => {
+	const res = await fetch(`${API}/pages/${pageId}`, {
+		method: "PATCH",
+		headers,
+		body: JSON.stringify({ archived: true })
 	});
 	if (!res.ok) throw new Error(`Notion ${res.status}: ${await res.text()}`);
 };
@@ -302,10 +323,12 @@ const patch = async (pageId: string, properties: Record<string, unknown>) => {
 // output but moves nothing (loud, so a config gap can't silently strand a Lead). Idempotent:
 // re-deciding overwrites. Needs "Update content" on BOTH the Decisions and Leads databases.
 //
-// Returns whether the committed outcome ADVANCED the pipeline — the one thing the caller can't
-// derive: `advances` is the agent's semantics (config.prompts[k].resolve), and the deck needs it to
-// decide whether to open the decision this one unlocks. A rejecting outcome invalidates its
-// dependent, so the answer must come from here rather than be re-guessed client-side.
+// A NON-advancing outcome also archives the unreviewed dependents this decision holds back (read
+// off "Unlocks", Notion's synced inverse of "Depends on"): they were drafted eagerly against a
+// gate the human just rejected, carry no judgment of their own (the 409 below guarantees it), and
+// their subject left the funnel — so they are deleted, not hidden forever. Append-only still holds
+// for every JUDGED decision; this row itself stays as the audit trail. The caller learns nothing
+// back: the rail's chain-keyed order already encodes what comes next.
 export const record = async (
 	pageId: string,
 	{
@@ -313,7 +336,7 @@ export const record = async (
 		feedback,
 		finalReasoning
 	}: { committedOutput?: unknown; feedback: string; finalReasoning?: string }
-): Promise<{ advances: boolean }> => {
+): Promise<void> => {
 	// The learning channel is a full snapshot of the human's live draft, not a sparse patch:
 	// both columns always land as exactly what the human has — empty included, which CLEARS the
 	// column (a rich_text stays stale unless you write it). So reverting a note to nothing
@@ -323,15 +346,19 @@ export const record = async (
 		"Final reasoning": { rich_text: chunks(finalReasoning ?? "") }
 	};
 	if (committedOutput === undefined) {
-		await patch(pageId, learning); // a Save — decision withheld, draft snapshotted
-		return { advances: false }; // nothing was decided, so nothing was unlocked
+		return void (await patch(pageId, learning)); // a Save — decision withheld, draft snapshotted
 	}
 
+	// The write runs in three waves — the calls were always independent, only the awaits serialized
+	// them. Wave 1: the decision page (everything below hangs off its properties).
 	const { properties } = await page(pageId);
 	const promptId = relation(properties.Prompt)[0];
-	const { name, outputSchema } = promptId
-		? await promptInfo(promptId)
-		: { name: "", outputSchema: undefined };
+	// Wave 2: the two reads the gates need, in one flight — the prompt's contract and the DAG deps'
+	// state. Every gate below is pure and runs BEFORE any write.
+	const [{ name, outputSchema }, deps] = await Promise.all([
+		promptId ? promptInfo(promptId) : { name: "", outputSchema: undefined },
+		Promise.all(relation(properties["Depends on"]).map(advanced))
+	]);
 	// The same gate the LLM passes: a committed output that violates its Prompt schema is refused
 	// (defense behind the client's own check) — nothing is persisted.
 	const invalid = outputSchema && schemaError(outputSchema, committedOutput);
@@ -340,39 +367,46 @@ export const record = async (
 	// A deep link, a bookmark, a preloaded neighbour and a stale rail step all reach this endpoint, so
 	// a dependent must be refused HERE or it can be committed (and move the entity) before the
 	// decision it hangs off has been approved. Same `advanced` reading the queue's gate uses.
-	const blocked = (await Promise.all(relation(properties["Depends on"]).map(advanced))).some((ok) => !ok);
-	if (blocked)
+	if (deps.some((d) => !d.advances))
 		throw error(409, "blocked: the decision this one depends on has not been approved yet");
 	const spec = specByName(name);
 	// Resolve BEFORE the write so a malformed output fails loud, persisting nothing.
 	const move = spec?.resolve(committedOutput as Record<string, unknown>);
-	await patch(pageId, {
+
+	// Wave 3: the writes, one flight — the commit itself, the rejecting gate's dependent archiving,
+	// and the entity moves are mutually independent once the gates above have ruled.
+	const commit = patch(pageId, {
 		...learning,
 		"Final output": { rich_text: chunks(JSON.stringify(committedOutput)) }
 	});
 	if (move === undefined) {
-		console.error(`record: no prompt spec for ${promptId} — Final output written, entity not moved`);
-		return { advances: false };
+		await commit;
+		return void console.error(
+			`record: no prompt spec for ${promptId} — Final output written, entity not moved`
+		);
 	}
+	// A rejecting gate deletes the eager work it held back — each unreviewed dependent is archived.
+	const archives = move.advances
+		? []
+		: relation(properties["Unlocks"]).map(async (depId) => {
+				if (!plain((await page(depId)).properties["Final output"])) await archive(depId);
+			});
 	// Move whichever pipeline entity this agent binds a Decision to — the relation `$agent` names
-	// (config.entity: "Lead" | "X Engagement"), not a hardcoded one. A committed decision with no
-	// such relation is an anomaly, so it's surfaced loud (the row still advanced no entity).
+	// (config.entity: "Lead" | "X Engagement"), not a hardcoded one. Two decisions can be tied to
+	// ONE entity (a qualification and the draft held behind it), so an unconditional write is "last
+	// confirm wins" — enough to drag the entity BACKWARD (confirm the draft, then its qualification,
+	// and Approved becomes To engage). An ADVANCING outcome may only move the entity forward along
+	// the ladder the agent declares — the same ladder its runtime stages obey. A non-advancing one
+	// is the human's terminal reject and always lands: the one move legitimately not forward.
 	const entityIds = relation(properties[config.entity]);
-	if (!entityIds.length) {
-		console.error(`record: decision ${pageId} has no "${config.entity}" relation — Final output written, entity not moved`);
-		return { advances: move.advances };
-	}
-	// Two decisions can be tied to ONE entity (a qualification and the draft held behind it), so an
-	// unconditional write is "last confirm wins" — enough to drag the entity BACKWARD (confirm the
-	// draft, then its qualification, and Approved becomes To engage). An ADVANCING outcome may only
-	// move the entity forward along the ladder the agent declares — the same ladder its runtime stages
-	// obey. A non-advancing one is the human's terminal reject and always lands: that is the one move
-	// which is legitimately not forward.
-	await Promise.all(
-		entityIds.map(async (id) => {
-			if (move.advances && !ahead(move.status, await statusOf(id))) return;
-			await patch(id, { Status: { select: { name: move.status } } });
-		})
-	);
-	return { advances: move.advances };
+	const moves = entityIds.map(async (id) => {
+		if (move.advances && !ahead(move.status, await statusOf(id))) return;
+		await patch(id, { Status: { select: { name: move.status } } });
+	});
+	await Promise.all([commit, ...archives, ...moves]);
+	// A committed decision with no entity relation is an anomaly — surfaced loud, never swallowed.
+	if (!entityIds.length)
+		console.error(
+			`record: decision ${pageId} has no "${config.entity}" relation — Final output written, entity not moved`
+		);
 };

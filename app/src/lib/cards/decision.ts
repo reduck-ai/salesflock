@@ -69,7 +69,6 @@ export const decisionToJudgment = (d: Decision): EvidencedJudgment => {
 		// dock floats. Derived here from the frozen Input, exactly like `evidence` — never stored.
 		anchor: d.anchorField ? (fieldSpan(input, d.anchorField) ?? undefined) : undefined,
 		hasFeedback: hasFeedback(d.fields),
-		unlocks: d.unlocks,
 		draft
 	};
 };

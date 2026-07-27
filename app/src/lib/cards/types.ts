@@ -47,11 +47,6 @@ export interface EvidencedJudgment {
 	anchor?: Quote; // the evidence span the composer attaches BELOW (a writing prompt supplies it);
 	// absent ⇒ the composer floats in the dock (a verdict about the whole subject, not one span)
 	hasFeedback: boolean; // does this decision already carry a human delta (any channel, any state)
-	// the decision held behind this one (Notion's synced inverse of "Depends on"): confirming this
-	// card unlocks it, so the deck steps straight to it instead of guessing from the queue's order.
-	// Carried on the card, not the rail, so a deep-linked card knows its successor too.
-	unlocks?: string;
-
 	// a saved-but-undecided draft, when one exists: the human's note and edited statements
 	// (Feedback / Final reasoning). The card seeds from this; `statements` stays the judge's
 	// canonical copy, so provenance (which claim is whose) is still read off it.

@@ -37,12 +37,6 @@
 	const href = (i: number) => (data.rows[i] ? `/${dashless(data.rows[i].id)}${filterQuery(data.filter)}` : undefined);
 	const prev = $derived(index > 0 ? href(index - 1) : undefined);
 	const next = $derived(index >= 0 ? href(index + 1) : undefined);
-	// the decision THIS card unlocks (Notion's synced inverse of "Depends on") — where a confirm goes
-	// next when it advances: the qualification's draft, deliberately, rather than whatever the queue's
-	// sort happened to put in the vacated slot. Off the card, not the rail, so a deep link has it too.
-	const followUp = $derived(
-		data.current?.unlocks ? `/${dashless(data.current.unlocks)}${filterQuery(data.filter)}` : undefined
-	);
 
 	// the one slow op is loading a card, so the slot shows a skeleton until the card is the one the
 	// URL names — a fact of the DATA, never of the router's in-flight status. Deriving this from
@@ -67,21 +61,19 @@
 	// ReviewCard is the whole nav surface (it shows pos/total + the ←/→ hint and owns the keys); the
 	// page just turns onnav into a goto. Warm the neighbours the moment a card settles — no links to
 	// hover, so preload proactively — making a step instant without any duplicated nav chrome.
-	// `followUp` rides along: warming it is what makes confirming a gate land on the decision it
-	// unlocks with no fetch at all — the whole point of knowing the successor before the commit.
 	$effect(() => {
 		if (navigating.to) return;
 		if (next) preloadData(next);
 		if (prev) preloadData(prev);
-		if (followUp) preloadData(followUp);
 	});
 
-	// Persist a judgment, then advance. Where we go is known BEFORE the commit — `followUp` is the
-	// decision this one unlocks — so the rail never gates the step: we navigate straight there (warm,
-	// so no fetch) and refresh the rail behind us. Exactly ONE router mutation while anything is in
-	// flight, which is what keeps a navigation from being superseded. `advances` decides whether the
-	// follow-up is live at all: a rejecting outcome invalidates its dependent, so we skip to the next
-	// subject instead. No committedOutput is a Save — the row stays put.
+	// Persist a judgment, then advance — by position, not by flag. The rail's chain-keyed order IS
+	// the sequencing: after a commit the decided row leaves the set, and a dependent it unblocked
+	// surfaces at the very slot its gate held (a rejected gate's dependent is archived server-side
+	// and never appears). So the step is one uniform move: refresh the rail, then open whatever row
+	// now sits at this index. Exactly ONE router mutation, after the refresh, so a navigation is
+	// never superseded; the skeleton (`committing`) covers the refresh. No committedOutput is a
+	// Save — the row stays put.
 	const judge = async (
 		committedOutput: Record<string, unknown> | undefined,
 		feedback: string,
@@ -89,6 +81,10 @@
 	) => {
 		if (!data.current || committing) return;
 		const j = data.current;
+		const at = index; // the slot to re-open once the refreshed rail shifts into it
+		// the wait state arms AT the click, not after the write returns — the decided card swaps to
+		// the skeleton for the whole round-trip (a Save keeps the card: you're still editing it)
+		committing = !!committedOutput;
 		const res = await fetch("/api/decide", {
 			method: "POST",
 			headers: { "content-type": "application/json" },
@@ -101,12 +97,10 @@
 		}).catch(() => undefined);
 		dropCard(j.id); // the card was written to — a re-view must refetch the persisted state
 
-		// read once — a Response body is single-use, and both branches below want it
-		const body = (await res?.json().catch(() => ({}))) as
-			| { message?: string; advances?: boolean }
-			| undefined;
+		const body = (await res?.json().catch(() => ({}))) as { message?: string } | undefined;
 		// a refused write (e.g. a dependent whose upstream isn't approved) must be seen, not swallowed.
 		if (!res?.ok) {
+			committing = false; // the card comes back — the judgment wasn't taken
 			fireToast(body?.message ?? "Not saved");
 			return;
 		}
@@ -118,13 +112,9 @@
 			href: j.href
 		});
 		fireToast("Confirmed");
-		committing = true;
-		// The decision this one unlocked when it advanced, else the next subject. `next` is read off the
-		// rail as it stands NOW — still holding this row — so index+1 is genuinely the following subject;
-		// that is exactly why the refresh belongs after the step, not before it.
-		await goto((body?.advances && followUp) || next || `/${filterQuery(data.filter)}`);
+		await invalidate("app:rail"); // the decided row leaves the set; its successor takes the slot
+		await goto(href(Math.min(at, data.rows.length - 1)) ?? `/${filterQuery(data.filter)}`);
 		committing = false;
-		invalidate("app:rail"); // behind the step, not in front of it — the decided row leaves the set
 	};
 
 	const save = () => card?.save();
