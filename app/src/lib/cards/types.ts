@@ -37,7 +37,7 @@ export interface Statement {
 // Prompt's own framing — what the output proposes — headed above it so you know what you're deciding.
 export interface EvidencedJudgment {
 	id: string; // stable key; what a Judgment refers back to
-	title: string; // the source record's name — what a decided card's receipt line reads
+	title: string; // the source record's name — the detail line a decided card's toast reads
 	href?: string; // the source record (the Notion Decision page)
 	statements: Statement[];
 	evidence: string; // markdown — rendered live from the Input data map; quotes anchor into it

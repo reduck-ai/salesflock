@@ -7,8 +7,8 @@
 	import DecisionList from "$lib/cards/DecisionList.svelte";
 	import ReviewCard from "$lib/cards/ReviewCard.svelte";
 	import CardSkeleton from "$lib/cards/CardSkeleton.svelte";
-	import Toast from "$lib/cards/Toast.svelte";
-	import { session, pushReceipt, fireToast, clearToast, clearSession } from "$lib/cards/session.svelte";
+	import Toaster from "$lib/cards/Toaster.svelte";
+	import { toast } from "$lib/cards/toast.svelte";
 	import { dropCard } from "$lib/cards/cache";
 	import { filterQuery } from "$lib/filter";
 	import type { Statement } from "$lib/cards/types";
@@ -47,11 +47,6 @@
 	// the one in-flight commit: this card is decided (so it must not stay interactive) while the rail
 	// refreshes and its successor loads. Local state, not an effect — it has an explicit lifecycle.
 	let committing = $state(false);
-
-	// leaving the deck for the list ends the session scrollback — a fresh deck visit starts clean.
-	$effect(() => {
-		if (!currentId) clearSession();
-	});
 
 	const nav = (dir: -1 | 1) => {
 		const to = dir === -1 ? prev : next;
@@ -101,17 +96,18 @@
 		// a refused write (e.g. a dependent whose upstream isn't approved) must be seen, not swallowed.
 		if (!res?.ok) {
 			committing = false; // the card comes back — the judgment wasn't taken
-			fireToast(body?.message ?? "Not saved");
-			return;
+			return toast({ message: body?.message ?? "Not saved", tone: "error" });
 		}
-		if (!committedOutput) return fireToast("Saved");
+		if (!committedOutput) return toast({ message: "Saved", tone: "ok" });
 
-		pushReceipt({
-			edited: JSON.stringify(committedOutput) !== JSON.stringify(j.output),
-			title: j.title,
+		// the toast IS the receipt: what happened, to whom, and a way back to the written row.
+		const edited = JSON.stringify(committedOutput) !== JSON.stringify(j.output);
+		toast({
+			message: edited ? "Edited" : "Confirmed",
+			tone: edited ? "edit" : "ok",
+			detail: j.title,
 			href: j.href
 		});
-		fireToast("Confirmed");
 		await invalidate("app:rail"); // the decided row leaves the set; its successor takes the slot
 		await goto(href(Math.min(at, data.rows.length - 1)) ?? `/${filterQuery(data.filter)}`);
 		committing = false;
@@ -135,11 +131,7 @@
 	onkeydown={hotkey}
 />
 
-{#if session.toast}
-	{#key session.toast.id}
-		<Toast message={session.toast.message} ondone={clearToast} />
-	{/key}
-{/if}
+<Toaster />
 
 {#if !data.user}
 	<main class="grid min-h-svh place-items-center">
@@ -207,17 +199,6 @@
 		{#if !currentId}
 			<DecisionList rows={data.rows} prompts={data.prompts} filter={data.filter} />
 		{:else}
-			{#if session.receipts.length}
-				<div class="mb-4 space-y-1">
-					{#each session.receipts as r, i (i)}
-						<a class="text-muted-foreground hover:text-foreground flex items-baseline gap-2 font-mono text-xs" href={r.href} target="_blank" rel="noopener" in:fly={{ y: -6, duration: 200 }}>
-							<span class={r.edited ? "text-amber-600" : "text-green-600"}>{r.edited ? "✎ Edited" : "✓ Confirmed"}</span>
-							<span class="truncate">{r.title}</span>
-						</a>
-					{/each}
-				</div>
-			{/if}
-
 			{#if !data.current || stale || committing}
 				<CardSkeleton />
 			{:else}
