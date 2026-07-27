@@ -71,7 +71,8 @@ export const findQuotes = (evidence: string, text: string): Quote[] => {
 
 // canonicalize(E) — E projected into its RENDERED text space: whitespace runs collapse to a
 // single space (never leading), and markdown syntax the renderer removes — inline emphasis
-// (`**`) and line-leading block markers (`#`, `-`/`*`/`+`, `>`) — is stripped, with `at[k]`
+// (`**`), link syntax (`[text](url)` keeps only its text) and line-leading block markers
+// (`#`, `-`/`*`/`+`, `>`) — is stripped, with `at[k]`
 // the source index of `canon[k]`. A browser selection is matched in this space (the visible
 // text the human sees ≈ `canon`), and its approximate position disambiguates a repeat.
 export const canonicalize = (evidence: string): { canon: string; at: number[] } => {
@@ -105,6 +106,20 @@ export const canonicalize = (evidence: string): { canon: string; at: number[] } 
 		if (c === "*" && evidence[i + 1] === "*") {
 			i += 2;
 			continue;
+		}
+		// A markdown link is chrome around its text — `[` opens it, `](url)` closes it. The text
+		// stays in canon (it's what the reader sees, and what a DOM selection yields); the syntax
+		// drops, exactly like `**` and HTML tags. A bare `[`/`]` (e.g. a "[1]" citation) is kept.
+		if (c === "[" && /^\[[^\]\n]*\]\([^)]*\)/.test(evidence.slice(i))) {
+			i++;
+			continue;
+		}
+		if (c === "]") {
+			const link = /^\]\([^)]*\)/.exec(evidence.slice(i));
+			if (link) {
+				i += link[0].length;
+				continue;
+			}
 		}
 		(canon += c), at.push(i), i++;
 	}

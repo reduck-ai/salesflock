@@ -147,6 +147,7 @@ const queue = async (
 			{
 				name: p.authorName ?? p.author,
 				publicId: p.author,
+				url: p.url,
 				headline: p.headline ?? undefined,
 				age: p.postedAgo ?? undefined,
 				text: p.text,

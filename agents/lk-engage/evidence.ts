@@ -17,6 +17,7 @@ const dot = (...parts: (string | number | false | null | undefined)[]): string =
 interface Post {
 	name?: string | null;
 	publicId?: string | null;
+	url?: string | null;
 	headline?: string | null;
 	age?: string | null;
 	text?: string | null;
@@ -25,18 +26,27 @@ interface Post {
 	reposts?: number | null;
 }
 
-// The focal post as a LinkedIn card: `**Name** · headline · age`, the body PLAIN (quotes anchor on
-// it), then metrics. Falls back to generic Markdown when the field isn't the YAML shape `scan`
-// freezes.
-const renderPost = (yaml: string): string => {
-	let p: Post | null;
+// The frozen Post YAML parsed, or null when the field isn't the shape `scan` freezes (then the
+// generic Markdown fallback applies). One parse, shared by the card body and the section heading.
+const postOf = (yaml: string): Post | null => {
 	try {
-		p = parse(yaml);
+		const p = parse(yaml) as Post | null;
+		return p && typeof p === "object" && typeof p.text === "string" ? p : null;
 	} catch {
-		return markdown(yaml);
+		return null;
 	}
-	if (!p || typeof p !== "object" || typeof p.text !== "string") return markdown(yaml);
-	const header = dot(`**${p.name ?? p.publicId ?? "Unknown"}**`, p.headline, p.age);
+};
+
+// The focal post as a LinkedIn card, links where LinkedIn puts them: the author NAME links to the
+// profile (derived from publicId — never stored), the section heading below links to the post. The
+// body stays PLAIN (quotes anchor on it), then metrics. NB: any change ABOVE the body shifts every
+// committed Decision's quote offsets — that needs a re-anchoring migration, not just this file.
+const renderPost = (yaml: string): string => {
+	const p = postOf(yaml);
+	if (!p) return markdown(yaml);
+	const name = p.name ?? p.publicId ?? "Unknown";
+	const author = p.publicId ? `[${name}](https://www.linkedin.com/in/${p.publicId})` : name;
+	const header = dot(`**${author}**`, p.headline, p.age);
 	const metrics = dot(
 		p.reactions != null && `${p.reactions} reactions`,
 		p.comments != null && `${p.comments} comments`,
@@ -49,12 +59,20 @@ const renderPost = (yaml: string): string => {
 const renderers: Record<string, (v: string) => string> = { Post: renderPost };
 const render = (k: string, v: string): string => (renderers[k] ?? markdown)(v);
 
+// A field's section heading. The Post heading IS the link to the post (its permalink rides in the
+// seed — absent on pre-url rows, then a plain heading). One helper, used by renderEvidence AND
+// fieldSpan, so their offset math can't drift.
+const heading = (k: string, v: string): string => {
+	const url = k === "Post" ? postOf(v)?.url : undefined;
+	return url ? `### [${k}](${url})` : `### ${k}`;
+};
+
 // The lossless input map → one Markdown document, a `### field` section each — verbatim values, so
 // a quote resolves against it. The judge reads this as its prompt; the app renders the same from
 // the frozen map. One renderer, every caller. (The Lk twin of x-engage's renderEvidence.)
 export const renderEvidence = (input: Record<string, string>): string =>
 	Object.entries(input)
-		.map(([k, v]) => `### ${k}\n\n${render(k, v)}`)
+		.map(([k, v]) => `${heading(k, v)}\n\n${render(k, v)}`)
 		.join("\n\n");
 
 // fieldSpan(input, key) — the [start,end) of `key`'s rendered CONTENT within renderEvidence(input),
@@ -67,8 +85,8 @@ export const fieldSpan = (input: Record<string, string>, key: string): Quote | n
 	if (i < 0) return null;
 	const pre = entries
 		.slice(0, i)
-		.map(([k, v]) => `### ${k}\n\n${render(k, v)}`)
+		.map(([k, v]) => `${heading(k, v)}\n\n${render(k, v)}`)
 		.join("\n\n");
-	const start = (i ? pre.length + 2 : 0) + `### ${key}\n\n`.length;
+	const start = (i ? pre.length + 2 : 0) + `${heading(key, input[key])}\n\n`.length;
 	return { start, end: start + render(key, input[key]).length };
 };
