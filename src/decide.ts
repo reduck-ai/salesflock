@@ -11,7 +11,7 @@
 import { getStore } from "./stores/index.js";
 import type { AgentConfig, PromptSpec, Row, Store } from "./stores/index.js";
 import { idOf } from "./stores/notion.js";
-import { reviewOf, feedbackOf } from "./review.js";
+import { reviewOf, feedbackOf, renderFeedback } from "./review.js";
 import * as llm from "./ai/llm.js";
 import { collectQuotes, findQuotes, inRange, quoteKey, type Statement } from "./anchor.js";
 import { schemaError } from "./output.js";
@@ -158,19 +158,34 @@ export const createReviewer = ({ config, renderEvidence, store: given }: Reviewe
 		return { ...base, feedback: feedbackOf(fields), review };
 	};
 
-	// list(scope) — decisions by review state, each flagged with the human delta it carries (free —
+	// list(scope, opts) — decisions by review state, each flagged with the human delta it carries (free —
 	// `query` returns the fields, and one feedbackOf per row yields both flags): `hasFeedback` (any
 	// channel touched) and the stricter `overturned` (the human changed the committed Output — a
 	// disagreement, not just a note). "Final output" set = reviewed (the committed output IS the
 	// decision); pending is the queue, all is both (a union — every Decision has the property, so
 	// is_empty ∪ is_not_empty is exhaustive).
-	const list = async (scope: "pending" | "reviewed" | "all" = "pending") => {
+	//
+	// `opts.feedback` keeps ONLY the rows carrying a delta, and carries the delta itself — the same
+	// `renderFeedback` markdown `showDecision --feedback` prints. It costs nothing: `feedbackOf`
+	// already ran per row, and this stops the result being thrown away. That one field is what makes
+	// "what have I told this agent?" a single call instead of a list, a manual scan for the flag, and
+	// a show per id — which reads the whole corpus of human corrections in one go.
+	const list = async (scope: "pending" | "reviewed" | "all" = "pending", opts: { feedback?: boolean } = {}) => {
 		const filter = scope === "all" ? { or: [SCOPE.pending, SCOPE.reviewed] } : SCOPE[scope];
 		const rows = await store.query(config.models.Decisions, filter);
-		return rows.map((r) => {
+		return rows.flatMap((r) => {
 			const fb = feedbackOf(r.fields);
+			if (opts.feedback && !fb) return [];
 			const name = String(r.fields.Name ?? r.id);
-			return { id: r.id, name, kind: kindOf(name), hasFeedback: fb !== null, overturned: !!fb?.outputChange, open: appLink(r.id) };
+			return {
+				id: r.id,
+				name,
+				kind: kindOf(name),
+				hasFeedback: fb !== null,
+				overturned: !!fb?.outputChange,
+				...(fb && opts.feedback ? { feedback: renderFeedback(fb) } : {}),
+				open: appLink(r.id)
+			};
 		});
 	};
 

@@ -5,6 +5,7 @@
 //   sflock pull --agent <id>            an agent's destination models → agents/<id>/schema/<Model>.ts
 //   sflock bind --client <name>         a reduck source's manifest     → src/clients/<name>/schema.ts
 //   sflock decisions list --agent <id>  the review queue (or --reviewed/--all), each flagged hasFeedback/overturned
+//   sflock decisions list --agent <id> --feedback   every decision I have given feedback on, with the feedback
 //   sflock decisions show --agent <id> <decision> [--feedback]   one decision, or just its feedback
 //
 // pull reads the agent's config.ts (destination + model→table map) and, per model, asks the
@@ -81,10 +82,14 @@ decisions
 	.requiredOption("--agent <id>", "agent under agents/ whose config.ts names the Decisions table")
 	.option("--reviewed", "only reviewed decisions (Final output set)")
 	.option("--all", "both pending and reviewed")
-	.action(async ({ agent, reviewed, all }: { agent: string; reviewed?: boolean; all?: boolean }) => {
+	.option("--feedback", "only decisions carrying human feedback, each with the feedback itself — spans both states unless you narrow the scope")
+	.action(async ({ agent, reviewed, all, feedback }: { agent: string; reviewed?: boolean; all?: boolean; feedback?: boolean }) => {
 		const reviewer = createReviewer({ ...loadAgent(agent) });
-		const scope = all ? "all" : reviewed ? "reviewed" : "pending";
-		console.log(JSON.stringify(await reviewer.list(scope), null, 2));
+		// Feedback lives in BOTH states — a Save carries a note with no Final output, a commit carries
+		// an overturn — so asking for it means "wherever it is", not "in the pending queue". Hence the
+		// default widens to `all`; an explicit --reviewed still narrows it.
+		const scope = all || (feedback && !reviewed) ? "all" : reviewed ? "reviewed" : "pending";
+		console.log(JSON.stringify(await reviewer.list(scope, { feedback }), null, 2));
 	});
 
 decisions
