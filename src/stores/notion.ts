@@ -266,11 +266,25 @@ export const read = async (model: string, keyProp: string, value: unknown): Prom
 // query(model, filter) — every row of a data source matching a Notion filter object (e.g.
 // `{ property: "Human verdict", select: { is_empty: true } }`). read is this taking the first
 // equals-match; query keeps the whole set — the queue an agent lists.
+//
+// ONE page, as large as Notion allows, and loud when that still isn't the whole set. `--limit` is
+// the API's own `page_size` passed through server-side (verified: resuming a limit=5 cursor starts
+// at row 6, not row 26), so PAGE is 1:1 with Notion's documented maximum — ntn's own default of 25
+// is the CLI's choice, not the API's. Callers reason on absence — "no lead at this status", "no
+// decision carries feedback" — and act on it (advance, reset, re-run), so a silently capped page
+// manufactures false negatives. Notion says when it truncated (`has_more`); refuse rather than hand
+// back a partial set indistinguishable from a complete one.
+const PAGE = 100;
 export const query = async (model: string, filter: object): Promise<Row[]> => {
 	const dsId = await resolveDsId(model);
-	const { results } = JSON.parse(
-		await ntn(["datasources", "query", dsId, "--filter", JSON.stringify(filter), "--json"])
-	) as { results: { id: string; properties: Record<string, NotionValue> }[] };
+	const { results, has_more } = JSON.parse(
+		await ntn(["datasources", "query", dsId, "--filter", JSON.stringify(filter), "--limit", String(PAGE), "--json"])
+	) as { results: { id: string; properties: Record<string, NotionValue> }[]; has_more?: boolean };
+	if (has_more)
+		throw new Error(
+			`notion.query: "${model}" matched more rows than one page returns (${results.length}) — ` +
+				`this result is truncated, so absence from it proves nothing. Narrow the filter; query does not page.`
+		);
 	return results.map(rowOf);
 };
 
