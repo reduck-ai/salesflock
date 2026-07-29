@@ -18,6 +18,10 @@ export interface Store {
 	upsert(model: string, record: object, key: string): Promise<Ref>; // idempotent write, keyed by `key`
 	read(model: string, key: string, value: unknown): Promise<Row>; // the one row where key = value
 	query(model: string, filter: object): Promise<Row[]>; // every row matching a store-native filter
+	// ONE page of matches + whether more exist. The worklist primitive: a consumer that DRAINS
+	// (process a page, which moves rows out of the filter, then re-query) may see a partial set;
+	// one that reasons on absence must use `query`, which refuses truncation.
+	queryPage(model: string, filter: object): Promise<{ rows: Row[]; more: boolean }>;
 	get(id: string): Promise<Row>; // the row with this id — model-agnostic (an id implies its model)
 	title(model: string, id: string): Promise<string>; // a record's name, by id (the join)
 	body(id: string): Promise<string>; // a page's CONTENT as markdown — where authored prose lives

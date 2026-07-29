@@ -288,18 +288,27 @@ export const read = async (model: string, keyProp: string, value: unknown): Prom
 // Notion says when it truncated (`has_more`); refuse rather than hand back a partial set
 // indistinguishable from a complete one.
 const PAGE = 100;
-export const query = async (model: string, filter: object): Promise<Row[]> => {
+
+// queryPage(model, filter) — ONE page of matches plus whether more exist: the worklist primitive.
+// A drain loop (process a page — which moves rows out of the filter — then re-query) is the one
+// legitimate consumer of a partial set; anything reasoning on absence goes through `query`.
+export const queryPage = async (model: string, filter: object): Promise<{ rows: Row[]; more: boolean }> => {
 	const dsId = await resolveDsId(model);
 	const { results, has_more } = await api<{
 		results: { id: string; properties: Record<string, NotionValue> }[];
 		has_more?: boolean;
 	}>(`/data_sources/${dsId}/query`, { body: { filter, page_size: PAGE } });
-	if (has_more)
+	return { rows: results.map(rowOf), more: !!has_more };
+};
+
+export const query = async (model: string, filter: object): Promise<Row[]> => {
+	const { rows, more } = await queryPage(model, filter);
+	if (more)
 		throw new Error(
-			`notion.query: "${model}" matched more rows than one page returns (${results.length}) — ` +
-				`this result is truncated, so absence from it proves nothing. Narrow the filter; query does not page.`
+			`notion.query: "${model}" matched more rows than one page returns (${rows.length}) — ` +
+				`this result is truncated, so absence from it proves nothing. Narrow the filter, or drain via queryPage.`
 		);
-	return results.map(rowOf);
+	return rows;
 };
 
 // get(id) — the page with this id, flattened like read. A page id already implies its data
@@ -362,4 +371,4 @@ export const describe = async (model: string): Promise<Record<string, unknown>> 
 };
 
 // The Store this module implements (Notion is the full System of Record).
-export const notion: Store = { describe, upsert, read, query, get, title, body, comment };
+export const notion: Store = { describe, upsert, read, query, queryPage, get, title, body, comment };

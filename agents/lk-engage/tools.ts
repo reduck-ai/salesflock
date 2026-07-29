@@ -15,6 +15,7 @@ import { createDecider } from "../../src/decide.js";
 import { renderEvidence } from "./evidence.js";
 import { projectInput } from "../../src/project.js";
 import { mapLimit } from "../../src/concurrency.js";
+import { drain } from "../../src/drain.js";
 import { stringify } from "yaml";
 import config, { OWNER } from "./config.js";
 import type { Subject } from "../../src/decide.js";
@@ -202,11 +203,12 @@ export const tools = {
 		return { url: postUrl, stage: draft ? "drafted" : "qualified-out", qualify: q.id, draft: draft?.id };
 	},
 
-	// engagePending — run `engage` over every engagement at "To qualify" (scan's output).
-	engagePending: async () => {
-		const rows = await store.query(config.models.LkEngagements, { property: "Status", select: { equals: "To qualify" } });
-		return mapLimit(rows, (r) => tools.engage(String(r.fields["Post URL"])));
-	},
+	// engagePending — drain `engage` over every engagement at "To qualify" (scan's output). Judging
+	// advances a row out of the filter, so the drain pages any backlog with no cursor.
+	engagePending: () =>
+		drain(store, config.models.LkEngagements, { property: "Status", select: { equals: "To qualify" } }, (r) =>
+			tools.engage(String(r.fields["Post URL"]))
+		),
 
 	// draft — manually (re-)draft a comment for one post as a STANDALONE Decision (no qualification
 	// dependency), for a redraft after editing. `context` prints the frozen judgment context, writes nothing.

@@ -1,9 +1,11 @@
 #!/usr/bin/env node
-// reddit-engage as CLI subcommands — JSON on stdout. The whole READ-ONLY funnel is one command:
-//   scan → new threads of the watched subreddits (the listing carries the full post text) →
-//   parallel [ qualification Decision → (if good) reply draft held behind it via dependsOn ] →
-//   [human gate]; plus draft (manual redraft) and list/show for the shared review queue.
-// Idempotent and monotonic on the canonical Thread URL; sending is unwired.
+// reddit-engage as CLI subcommands — JSON on stdout. The READ-ONLY funnel, two stages joined by
+// the store (the "To qualify" status is the worklist between them):
+//   scan → new threads of the watched subreddits (the listing carries the full post text), queued
+//   at "To qualify" — then engage → [ qualification Decision → (if good) reply draft held behind
+//   it via dependsOn ] → [human gate]; plus draft (manual redraft) and list/show for the shared
+//   review queue. Each stage is idempotent and monotonic on the canonical Thread URL, so either
+//   re-runs safely after a crash; sending is unwired.
 
 import "../../src/env.js";
 import { Command } from "commander";
@@ -21,8 +23,14 @@ program
 	.command("scan")
 	.argument("[subreddits...]", "subreddits to scan; omit for the config watchlist")
 	.option("--since <window>", `how far back — ISO date or shorthand ("48h", "7d")`, "48h")
-	.description("The funnel: each subreddit's threads newer than --since → new ones queued with evidence (title + full post) → parallel qualify → chained reply draft on the good ones. Deduped on Thread URL.")
+	.description("Discovery: each subreddit's threads newer than --since → new ones queued with evidence (title + full post) at 'To qualify'. Deduped on Thread URL. No LLM — judge with `engage`.")
 	.action(async (subreddits: string[], { since }) => out(await tools.scan(since, subreddits.length ? subreddits : undefined)));
+
+program
+	.command("engage")
+	.argument("[threads...]", "thread URLs to engage; omit to drain every thread at 'To qualify'")
+	.description("Qualification Decision → (if it scores well) a reply draft held behind it via dependsOn. Batched; no args drains scan's whole backlog, page by page.")
+	.action(async (threads: string[]) => out(threads.length ? await batch(threads, tools.engage) : await tools.engagePending()));
 
 program
 	.command("draft")

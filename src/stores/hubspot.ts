@@ -91,6 +91,7 @@ export const hubspot: Store = {
 	upsert: notImplemented,
 	read: notImplemented,
 	query: notImplemented,
+	queryPage: notImplemented,
 	get: notImplemented,
 	title: notImplemented,
 	body: notImplemented,
