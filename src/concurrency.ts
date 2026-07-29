@@ -1,9 +1,10 @@
-// Bounded concurrency — where "how many at once" is decided. Three DISTINCT scarce backends, three
+// Bounded concurrency — where "how many at once" is decided. Distinct scarce backends, distinct
 // limits (conflating them under one number throttles fast API calls to the slowest backend's ceiling):
 //   REDUCK_CONCURRENCY — the single browser device (the reduck runner's gate). Physical.
 //   NOTION_CONCURRENCY — the Notion API (the store's gate). Near its rate limit.
-//   TASK_CONCURRENCY   — a tool's fan-out over a list (mapLimit's default), and thus the effective
-//                        LLM concurrency (Bedrock tolerates it, so it needs no gate of its own).
+//   LLM_CONCURRENCY    — the model provider (llm.ts's gate). Providers throttle wide fan-outs
+//                        (Bedrock 429s at even 2 concurrent on some accounts — measured, not assumed).
+//   TASK_CONCURRENCY   — a tool's fan-out over a list (mapLimit's default).
 // A tool fans a list out wide; each underlying call still acquires its backend's gate, so browser,
 // Notion and LLM work progress concurrently instead of serializing inside one narrow wave.
 
@@ -11,6 +12,7 @@ import { renderError } from "./errors.js";
 
 export const REDUCK_CONCURRENCY = Number(process.env.REDUCK_CONCURRENCY) || 4;
 export const NOTION_CONCURRENCY = Number(process.env.NOTION_CONCURRENCY) || 4;
+export const LLM_CONCURRENCY = Number(process.env.LLM_CONCURRENCY) || 8;
 export const TASK_CONCURRENCY = Number(process.env.TASK_CONCURRENCY) || 8;
 
 // gate(limit) — a FIFO admission gate: at most `limit` thunks run at once, the rest queue. Returns

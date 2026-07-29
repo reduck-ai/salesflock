@@ -11,7 +11,28 @@ import { generateObject, generateText, jsonSchema, stepCountIs, tool, type Langu
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock";
 import { fromNodeProviderChain } from "@aws-sdk/credential-providers";
+import { gate, LLM_CONCURRENCY } from "../concurrency.js";
 import { log } from "../log.js";
+
+// One gate for the whole LLM backend (its own ceiling, so a tool can fan out wider than it), with
+// retry-on-throttle: providers rate-limit wide fan-outs (Bedrock 429s at even 2 concurrent on some
+// accounts), so back off and retry rather than fail the run. Same shape as the Notion store's gate;
+// the retry is the sole diagnostic — normal calls stay quiet. A whole agent() loop holds one slot:
+// its steps are one conversation, interleaving them wouldn't add throughput at the provider.
+const slot = gate(LLM_CONCURRENCY);
+const RATE = /too many requests|\b429\b|throttl|rate.?limit|resource.?exhausted/i;
+const withRetry = async <T>(fn: () => Promise<T>, label: string): Promise<T> => {
+	for (let attempt = 0; ; attempt++) {
+		try {
+			return await fn();
+		} catch (e) {
+			if (attempt >= 4 || !RATE.test((e as Error).message)) throw e;
+			const wait = 1000 * 2 ** attempt;
+			log("llm", `${label} rate-limited, retry ${attempt + 1}/4 in ${wait}ms`);
+			await new Promise((r) => setTimeout(r, wait));
+		}
+	}
+};
 
 export const DEFAULT_MODEL = "google/gemini-3.5-flash";
 
@@ -61,12 +82,18 @@ export const generate = async <T>(prompt: string, schema: object, spec = DEFAULT
 	const model = modelFor(spec);
 	log("llm", `${model.modelId} generate …`);
 	const t0 = Date.now();
-	const { object } = await generateObject({
-		model,
-		schema: jsonSchema<T>(strict(schema) as never),
-		prompt,
-		temperature: 0
-	});
+	const { object } = await slot(() =>
+		withRetry(
+			() =>
+				generateObject({
+					model,
+					schema: jsonSchema<T>(strict(schema) as never),
+					prompt,
+					temperature: 0
+				}),
+			`${model.modelId} generate`
+		)
+	);
 	log("llm", `${model.modelId} generate done (${Date.now() - t0}ms)`);
 	return object;
 };
@@ -94,15 +121,21 @@ export const agent = (prompt: string, tools: ToolSet, done: () => boolean, spec 
 	const model = modelFor(spec);
 	log("llm", `${model.modelId} …`);
 	const t0 = Date.now();
-	return generateText({
-		model,
-		tools,
-		prompt,
-		temperature: 0,
-		stopWhen: [done, stepCountIs(maxSteps)],
-		onStepFinish: (s) =>
-			log("llm", `${model.modelId} step: ${s.toolCalls.map((c) => c.toolName).join(", ") || "—"}`)
-	}).then(
+	return slot(() =>
+		withRetry(
+			() =>
+				generateText({
+					model,
+					tools,
+					prompt,
+					temperature: 0,
+					stopWhen: [done, stepCountIs(maxSteps)],
+					onStepFinish: (s) =>
+						log("llm", `${model.modelId} step: ${s.toolCalls.map((c) => c.toolName).join(", ") || "—"}`)
+				}),
+			model.modelId
+		)
+	).then(
 		(r) => (
 			log(
 				"llm",
