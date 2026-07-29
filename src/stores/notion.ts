@@ -327,6 +327,13 @@ export const title = async (_model: string, id: string): Promise<string> => {
 	return t.map((x) => x.plain_text).join("");
 };
 
+// archive(id) — move a page to Notion's trash (recoverable there; `in_trash` is page state, not a
+// property, so upsert can't express it). How eager work that no longer matters is deleted — the
+// append-only rule holds for judged decisions, not for drafts a cleanup or a rejecting gate voids.
+export const archive = async (id: string): Promise<void> => {
+	await api(`/pages/${idOf(id)}`, { method: "PATCH", body: { in_trash: true } });
+};
+
 // comment(id, text) — append a top-level comment to a page: the append-only obs trail for why a
 // record landed where it did (a deterministic reject reason, a human's overturn). Reuses the same
 // rich-text codec as a property write; a page id already implies its parent, so no model is needed.
@@ -371,4 +378,4 @@ export const describe = async (model: string): Promise<Record<string, unknown>> 
 };
 
 // The Store this module implements (Notion is the full System of Record).
-export const notion: Store = { describe, upsert, read, query, queryPage, get, title, body, comment };
+export const notion: Store = { describe, upsert, read, query, queryPage, get, title, body, comment, archive };

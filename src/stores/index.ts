@@ -26,6 +26,7 @@ export interface Store {
 	title(model: string, id: string): Promise<string>; // a record's name, by id (the join)
 	body(id: string): Promise<string>; // a page's CONTENT as markdown — where authored prose lives
 	comment(id: string, text: string): Promise<void>; // append a comment to a page — the obs trail
+	archive(id: string): Promise<void>; // move a page to trash (recoverable) — how eager work is deleted
 }
 
 import { notion } from "./notion.js";
