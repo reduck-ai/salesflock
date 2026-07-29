@@ -78,5 +78,6 @@ says what it does. If a fact can drift, it belongs in code, not here.
 `reduck run` can't express. Its method — the stage sequence — lives in the
 `linkedin-leads` skill; its identity lives in the CRM, as its Prompt bodies (with the generic
 part — who we are — a synced block from one shared page, per #5).
-`former-rpa-pms`, `x-engage` (on X) and `lk-engage` (LinkedIn engagement) realize the same
-contract (#10); the review app resolves each Decision's agent from the roster (`$agents`).
+`former-rpa-pms`, `x-engage` (on X), `lk-engage` (LinkedIn engagement) and `reddit-engage`
+(Reddit engagement) realize the same contract (#10); the review app resolves each Decision's
+agent from the roster (`$agents`).

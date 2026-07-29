@@ -28,6 +28,8 @@ import xEngage from "./x-engage/config.js";
 import * as xEngageEvidence from "./x-engage/evidence.js";
 import lkEngage from "./lk-engage/config.js";
 import * as lkEngageEvidence from "./lk-engage/evidence.js";
+import redditEngage from "./reddit-engage/config.js";
+import * as redditEngageEvidence from "./reddit-engage/evidence.js";
 
 export interface Agent {
 	config: AgentConfig;
@@ -46,7 +48,8 @@ export const AGENTS: Record<string, Agent> = {
 	"linkedin-leads": agent(linkedinLeads, linkedinLeadsEvidence),
 	"former-rpa-pms": agent(formerRpaPms, formerRpaPmsEvidence),
 	"x-engage": agent(xEngage, xEngageEvidence),
-	"lk-engage": agent(lkEngage, lkEngageEvidence)
+	"lk-engage": agent(lkEngage, lkEngageEvidence),
+	"reddit-engage": agent(redditEngage, redditEngageEvidence)
 };
 
 // kind (Prompt Name) → the one agent that declares it, plus the spec itself. Two agents declaring
