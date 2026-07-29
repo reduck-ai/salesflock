@@ -1,7 +1,10 @@
 // Bounded concurrency — where "how many at once" is decided. Distinct scarce backends, distinct
 // limits (conflating them under one number throttles fast API calls to the slowest backend's ceiling):
 //   REDUCK_CONCURRENCY — the single browser device (the reduck runner's gate). Physical.
-//   NOTION_CONCURRENCY — the Notion API (the store's gate). Near its rate limit.
+//   NOTION_CONCURRENCY — the Notion API (the store's gate). Measured, not the documented "3 rps":
+//                        40 concurrent full-table queries sustained draw zero 429s (both keychain
+//                        and integration auth), and the store retries on 429 anyway; 16 is still
+//                        well under the observed ceiling while 4 made the same workload 5× slower.
 //   LLM_CONCURRENCY    — the model provider (llm.ts's gate). Providers throttle wide fan-outs
 //                        (Bedrock 429s at even 2 concurrent on some accounts — measured, not assumed).
 //   TASK_CONCURRENCY   — a tool's fan-out over a list (mapLimit's default).
@@ -11,7 +14,7 @@
 import { renderError } from "./errors.js";
 
 export const REDUCK_CONCURRENCY = Number(process.env.REDUCK_CONCURRENCY) || 4;
-export const NOTION_CONCURRENCY = Number(process.env.NOTION_CONCURRENCY) || 4;
+export const NOTION_CONCURRENCY = Number(process.env.NOTION_CONCURRENCY) || 16;
 export const LLM_CONCURRENCY = Number(process.env.LLM_CONCURRENCY) || 8;
 export const TASK_CONCURRENCY = Number(process.env.TASK_CONCURRENCY) || 8;
 

@@ -4,10 +4,13 @@
 // fragment) is the one Notion-specific thing here; the schema it emits is the uniform
 // contract the generic layer compiles to TS.
 //
-// Auth is the `ntn` CLI's own (keychain) session: we shell `ntn`, so login/refresh
-// stays the CLI's job and we never hold a token. A profile NOTION_API_TOKEN is an
-// *integration* identity that can't see a personal CRM (404), so we drop it and let
-// `ntn` use the logged-in person.
+// Auth: `ntn` owns login/refresh (its keychain session); we harvest its bearer ONCE per
+// process — the harvest call itself makes ntn refresh, so the token is fresh by
+// construction — then every request is direct HTTP (Node's pooled fetch; shelling ntn
+// per call cost ~600ms of spawn + TLS each). We persist nothing: the token lives in
+// process memory and dies with it. NOTION_TOKEN overrides (an *integration* identity,
+// the review app's mode — it only sees databases explicitly shared with it, where the
+// logged-in person sees the whole personal CRM). Same contract as hubspot.ts.
 
 import { spawn } from "node:child_process";
 import { bodyOf, chunks, plain, type BlockPage, type NotionValue } from "./notion.codec.js";
@@ -15,46 +18,66 @@ import { gate, NOTION_CONCURRENCY } from "../concurrency.js";
 import { log } from "../log.js";
 import type { Ref, Row, Store } from "./index.js";
 
-// Strip the integration token so `ntn` falls back to the personal keychain login.
-const ntnEnv = (() => {
-	const { NOTION_API_TOKEN, ...env } = process.env;
-	return env;
-})();
-
-// Spawn `ntn` and capture stdout. stdin is closed ("ignore"): `ntn api` reads a request
-// body from stdin, so an open empty pipe would hang it forever.
+// Spawn `ntn` capturing stderr (the verbose trace rides there) — only the token harvest uses it.
+// stdin is closed ("ignore"): `ntn api` reads a request body from stdin, so an open empty pipe
+// would hang it forever.
 const spawnNtn = (args: string[]): Promise<string> =>
 	new Promise((resolve, reject) => {
-		const child = spawn("ntn", args, { env: ntnEnv, stdio: ["ignore", "pipe", "pipe"] });
-		let out = "";
+		const child = spawn("ntn", args, { stdio: ["ignore", "pipe", "pipe"] });
 		let err = "";
-		child.stdout.on("data", (d) => (out += d));
 		child.stderr.on("data", (d) => (err += d));
 		child.on("error", reject);
 		child.on("close", (code) =>
-			code === 0
-				? resolve(out)
-				: reject(new Error(`ntn ${args.join(" ")} → exit ${code}: ${err.trim()}`))
+			code === 0 ? resolve(err) : reject(new Error(`ntn ${args.join(" ")} → exit ${code}: ${err.trim()}`))
 		);
 	});
 
+// The bearer, resolved once per process: NOTION_TOKEN if set, else harvested from ntn's own
+// verbose trace of one cheap call (`--unsafe-verbose` un-redacts the Authorization header —
+// a documented debugging flag; if a future ntn drops it, the error names both recovery paths).
+let tok: Promise<string> | undefined;
+const token = (): Promise<string> => (tok ??= resolveToken());
+const resolveToken = async (): Promise<string> => {
+	if (process.env.NOTION_TOKEN) return process.env.NOTION_TOKEN;
+	const trace = await spawnNtn(["--verbose", "--unsafe-verbose", "api", "/v1/users/me"]).catch((e: Error) => {
+		throw new Error(`ntn: no session — run \`ntn login\` (or set NOTION_TOKEN). ${e.message}`);
+	});
+	const m = trace.match(/authorization: [Bb]earer (\S+)/);
+	if (!m) throw new Error("ntn: could not read a token from `ntn --verbose --unsafe-verbose` — run `ntn login` (or set NOTION_TOKEN)");
+	return m[1];
+};
+
 // One gate for the whole Notion backend (its own ceiling, so a tool can fan out wider than it), with
-// retry-on-429: the API is rate-limited, so a concurrent burst draws 429s — back off and retry rather
-// than fail the run. The retry is the sole diagnostic here (a slow, exceptional event → the one log
-// seam); normal calls stay quiet, so stdout stays the answer and stderr only speaks when it matters.
+// retry-on-429: the API rate-limits as a long-window average, so a burst draws 429s — honor its
+// Retry-After (fall back to exponential backoff) rather than fail the run. The retry is the sole
+// diagnostic here (a slow, exceptional event → the one log seam); normal calls stay quiet, so stdout
+// stays the answer and stderr only speaks when it matters.
+const API = "https://api.notion.com/v1";
 const slot = gate(NOTION_CONCURRENCY);
-const RATE = /rate.?limit|\b429\b|too many requests/i;
-const ntn = (args: string[]): Promise<string> =>
+const api = <T>(path: string, init?: { method?: string; body?: object }): Promise<T> =>
 	slot(async () => {
 		for (let attempt = 0; ; attempt++) {
-			try {
-				return await spawnNtn(args);
-			} catch (e) {
-				if (attempt >= 4 || !RATE.test((e as Error).message)) throw e;
-				const wait = 500 * 2 ** attempt;
-				log("notion", `rate-limited, retry ${attempt + 1}/4 in ${wait}ms`);
-				await new Promise((r) => setTimeout(r, wait));
-			}
+			const res = await fetch(API + path, {
+				method: init?.method ?? (init?.body ? "POST" : "GET"),
+				headers: {
+					Authorization: `Bearer ${await token()}`,
+					"Notion-Version": "2025-09-03",
+					"Content-Type": "application/json"
+				},
+				body: init?.body ? JSON.stringify(init.body) : undefined
+			});
+			if (res.ok) return (await res.json()) as T;
+			const text = await res.text();
+			if (res.status !== 429 || attempt >= 4)
+				throw new Error(`notion ${res.status} ${init?.method ?? "GET"} ${path}: ${text}`);
+			const wait = Number(res.headers.get("retry-after")) * 1000 || 500 * 2 ** attempt;
+			// A short throttle is retried; a long ban is surfaced. Notion's Retry-After can say minutes
+			// (measured: 424s after a sustained burst) — sleeping that long turns a CLI into a silent
+			// hang, so past the cap we fail loud with the ban's own duration instead.
+			if (wait > 60_000)
+				throw new Error(`notion 429 ${path}: rate-limited for ${Math.round(wait / 1000)}s — try again later`);
+			log("notion", `rate-limited, retry ${attempt + 1}/4 in ${wait}ms`);
+			await new Promise((r) => setTimeout(r, wait));
 		}
 	});
 
@@ -78,21 +101,16 @@ interface NotionProp {
 export const idOf = (s: string): string => s.match(/[0-9a-f]{32}/i)?.[0] ?? s;
 
 // Resolve a model handle (database id / data-source id / URL) to a data source id.
-// `datasources resolve` maps a DATABASE id → its data source(s); given a value that is
-// already a data source id it errors, so a failed resolve means "use it directly".
-// Memoized: a model→dsId mapping is stable for the life of a (short-lived) CLI process, so this
-// spawns `ntn` once per model instead of on every store op.
+// `GET /databases/{id}` lists a DATABASE's data source(s); given a value that is already
+// a data source id it 404s, so a failed lookup means "use it directly".
+// Memoized: a model→dsId mapping is stable for the life of a (short-lived) CLI process.
 const dsIdCache = new Map<string, string>();
 const resolveDsId = async (model: string): Promise<string> => {
 	const cached = dsIdCache.get(model);
 	if (cached) return cached;
 	const id = idOf(model);
-	const out = await ntn(["datasources", "resolve", id]).catch(() => "");
-	const ids = out
-		.trim()
-		.split("\n")
-		.filter(Boolean)
-		.map((line) => line.split("\t")[0]);
+	const db = await api<{ data_sources?: { id: string }[] }>(`/databases/${id}`).catch(() => null);
+	const ids = db?.data_sources?.map((d) => d.id) ?? [];
 	if (ids.length > 1)
 		throw new Error(
 			`"${model}" is a database with ${ids.length} data sources — pass one of: ${ids.join(", ")}`
@@ -102,13 +120,13 @@ const resolveDsId = async (model: string): Promise<string> => {
 	return dsId;
 };
 
-// A data source's schema (its property map) — also stable per process, so fetch it once per id.
-// With resolveDsId's cache this removes the repeated `ntn` schema fetch every locate/describe made.
+// A data source's schema (its property map) — also stable per process, so fetch it once per id;
+// the cache removes the repeated schema fetch every locate/describe made.
 const dsCache = new Map<string, DataSource>();
 const loadDs = async (dsId: string): Promise<DataSource> => {
 	const hit = dsCache.get(dsId);
 	if (hit) return hit;
-	const ds: DataSource = JSON.parse(await ntn(["api", `/v1/data_sources/${dsId}`]));
+	const ds = await api<DataSource>(`/data_sources/${dsId}`);
 	dsCache.set(dsId, ds);
 	return ds;
 };
@@ -211,9 +229,9 @@ const locate = async (
 		key.type === "relation"
 			? { relation: { contains: Array.isArray(value) ? value[0] : value } }
 			: { [key.type]: { equals: value } };
-	const filter = JSON.stringify({ property: keyProp, ...clause });
-	const { results } = JSON.parse(
-		await ntn(["datasources", "query", dsId, "--filter", filter, "--json"])
+	const { results } = await api<{ results: { id: string; properties: Record<string, NotionValue> }[] }>(
+		`/data_sources/${dsId}/query`,
+		{ body: { filter: { property: keyProp, ...clause }, page_size: 1 } }
 	);
 	return { dsId, ds, page: results[0] };
 };
@@ -227,17 +245,14 @@ export const upsert = async (model: string, record: object, keyProp: string): Pr
 		if (!p) throw new Error(`notion.upsert: no property "${name}" on "${model}"`);
 		if (value != null) properties[name] = serialize(value, p);
 	}
-	const write = (args: string[]) => ntn(["api", ...args, "-d", JSON.stringify({ properties })]);
 	let id: string;
 	let created: boolean;
 	if (page) {
-		await write(["-X", "PATCH", `/v1/pages/${page.id}`]);
+		await api(`/pages/${page.id}`, { method: "PATCH", body: { properties } });
 		({ id, created } = { id: page.id, created: false });
 	} else {
 		const body = { parent: { type: "data_source_id", data_source_id: dsId }, properties };
-		({ id } = JSON.parse(
-			await ntn(["api", "-X", "POST", "/v1/pages", "-d", JSON.stringify(body)])
-		));
+		({ id } = await api<{ id: string }>("/pages", { body }));
 		created = true;
 	}
 	return { id, url: pageUrl(id), created };
@@ -267,19 +282,18 @@ export const read = async (model: string, keyProp: string, value: unknown): Prom
 // `{ property: "Human verdict", select: { is_empty: true } }`). read is this taking the first
 // equals-match; query keeps the whole set — the queue an agent lists.
 //
-// ONE page, as large as Notion allows, and loud when that still isn't the whole set. `--limit` is
-// the API's own `page_size` passed through server-side (verified: resuming a limit=5 cursor starts
-// at row 6, not row 26), so PAGE is 1:1 with Notion's documented maximum — ntn's own default of 25
-// is the CLI's choice, not the API's. Callers reason on absence — "no lead at this status", "no
-// decision carries feedback" — and act on it (advance, reset, re-run), so a silently capped page
-// manufactures false negatives. Notion says when it truncated (`has_more`); refuse rather than hand
-// back a partial set indistinguishable from a complete one.
+// ONE page, at `page_size` = Notion's documented maximum, and loud when that still isn't the whole
+// set. Callers reason on absence — "no lead at this status", "no decision carries feedback" — and
+// act on it (advance, reset, re-run), so a silently capped page manufactures false negatives.
+// Notion says when it truncated (`has_more`); refuse rather than hand back a partial set
+// indistinguishable from a complete one.
 const PAGE = 100;
 export const query = async (model: string, filter: object): Promise<Row[]> => {
 	const dsId = await resolveDsId(model);
-	const { results, has_more } = JSON.parse(
-		await ntn(["datasources", "query", dsId, "--filter", JSON.stringify(filter), "--limit", String(PAGE), "--json"])
-	) as { results: { id: string; properties: Record<string, NotionValue> }[]; has_more?: boolean };
+	const { results, has_more } = await api<{
+		results: { id: string; properties: Record<string, NotionValue> }[];
+		has_more?: boolean;
+	}>(`/data_sources/${dsId}/query`, { body: { filter, page_size: PAGE } });
 	if (has_more)
 		throw new Error(
 			`notion.query: "${model}" matched more rows than one page returns (${results.length}) — ` +
@@ -291,20 +305,15 @@ export const query = async (model: string, filter: object): Promise<Row[]> => {
 // get(id) — the page with this id, flattened like read. A page id already implies its data
 // source, so no model is needed (like title); an id / Notion URL / app URL resolves via idOf.
 export const get = async (id: string): Promise<Row> =>
-	rowOf(
-		JSON.parse(await ntn(["api", `/v1/pages/${idOf(id)}`])) as {
-			id: string;
-			properties: Record<string, NotionValue>;
-		}
-	);
+	rowOf(await api<{ id: string; properties: Record<string, NotionValue> }>(`/pages/${idOf(id)}`));
 
 // title(_model, id) — a record's title property as plain text (its "Name"). Lets a caller
 // derive one record's identity from another it points at (a Lead's name from its Person).
 // A Notion page id already implies its model, so `model` is unused.
 export const title = async (_model: string, id: string): Promise<string> => {
-	const page = JSON.parse(await ntn(["api", `/v1/pages/${id}`])) as {
+	const page = await api<{
 		properties: Record<string, { type: string; title?: { plain_text: string }[] }>;
-	};
+	}>(`/pages/${id}`);
 	const t = Object.values(page.properties).find((p) => p.type === "title")?.title ?? [];
 	return t.map((x) => x.plain_text).join("");
 };
@@ -313,8 +322,7 @@ export const title = async (_model: string, id: string): Promise<string> => {
 // record landed where it did (a deterministic reject reason, a human's overturn). Reuses the same
 // rich-text codec as a property write; a page id already implies its parent, so no model is needed.
 export const comment = async (id: string, text: string): Promise<void> => {
-	const body = { parent: { page_id: idOf(id) }, rich_text: chunks(text) };
-	await ntn(["api", "-X", "POST", "/v1/comments", "-d", JSON.stringify(body)]);
+	await api("/comments", { body: { parent: { page_id: idOf(id) }, rich_text: chunks(text) } });
 };
 
 // body(id) — a page's CONTENT as markdown: the read counterpart of `comment` (text in, text out;
@@ -322,10 +330,9 @@ export const comment = async (id: string, text: string): Promise<void> => {
 // never a column — a Prompt's instructions are the body of its page (and `chunks`' 100-item cap is
 // why a column could never hold them anyway). Paging and rendering are the codec's; this is transport.
 export const body = (id: string): Promise<string> =>
-	bodyOf(idOf(id), async (blockId, cursor) => {
-		const query = `page_size=100${cursor ? `&start_cursor=${cursor}` : ""}`;
-		return JSON.parse(await ntn(["api", `/v1/blocks/${blockId}/children?${query}`])) as BlockPage;
-	});
+	bodyOf(idOf(id), (blockId, cursor) =>
+		api<BlockPage>(`/blocks/${blockId}/children?page_size=100${cursor ? `&start_cursor=${cursor}` : ""}`)
+	);
 
 // describe(model) — a JSON Schema of the model's writable properties. The data source
 // id rides in `$id` so a writer can recover it; `title` names the dump file. Properties
