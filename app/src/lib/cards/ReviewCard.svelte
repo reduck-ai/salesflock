@@ -2,12 +2,15 @@
 	// One evidenced judgment, read like a chat: the evidence is the document (one column,
 	// window scroll), and the dock — the single interaction surface, styled like a composer —
 	// floats at the bottom. ONE placement, whatever the judgment: a head (where you are · fold ·
-	// step, identical folded or not, so nothing moves under the pointer), then PROPOSAL (the
-	// agent's proposal, headed by the Prompt's framing, editable within its schema), then LEARNING
-	// (the claims that justify it, each with one dot per proof, annotatable) — you decide, then
-	// read the reasoning. Body and acts split so Confirm never scrolls away, and the body is the
-	// dock's only scroller, capped: head + body + acts can't eat the screen, so the evidence
-	// survives above it on any viewport — which is what keeps this a dock and not a second page.
+	// step, identical folded or not, so nothing moves under the pointer), then ONE pane at a time:
+	// PROPOSAL (the agent's proposal, headed by the Prompt's framing, editable within its schema)
+	// by default, or REVIEW (the claims that justify it, each with one dot per proof, annotatable)
+	// while a proof is focused — the mode IS the cursor (activeMi): Tab or a click on any quote
+	// enters review, Esc or an unselect returns to the proposal. Body and acts split so Confirm
+	// never scrolls away, and the body is the dock's only scroller, at a CONSTANT height: head +
+	// body + acts can't eat the screen (and the footprint never jumps between panes), so the
+	// evidence survives above it on any viewport — which is what keeps this a dock and not a
+	// second page.
 	// The committed output IS the decision — one Confirm; there is no Reject (disagreeing is
 	// editing the output). Every quote is highlighted in the evidence at all times, stance-
 	// coloured and subtle, with its claim pinned in the right margin like a doc comment. One
@@ -100,6 +103,12 @@
 	// the mark index of a statement's first quote — how the claim list addresses the cursor
 	const miOf = (si: number) => statements.slice(0, si).reduce((n, s) => n + s.quotes.length, 0);
 	const activeSi = $derived(activeMi === null ? null : marks[activeMi].si);
+	// the dock's pane: false = PROPOSAL (you're deciding — the default), true = REVIEW (the
+	// claims). One boolean, not derived from the cursor alone: a claim resting on the absence of
+	// evidence has no quotes to focus, and removing a focused quote must not eject you from the
+	// reasoning. Every gesture that focuses a proof (Tab, a quote/claim/pin click) enters review;
+	// Esc and an unselect click leave it. The card remounts per id, so each card opens on its proposal.
+	let reviewing = $state(false);
 
 	// `mi` is stamped explicitly rather than left to the array index — highlight.ts falls back to the
 	// index, and being explicit keeps the cursor's addressing independent of how the evidence renders.
@@ -199,8 +208,10 @@
 		});
 	});
 
-	// center the proof in the band the dock leaves visible above it
+	// center the proof in the band the dock leaves visible above it; focusing a proof is
+	// reading the reasoning, so it also opens the review pane
 	const goto = (i: number) => {
+		reviewing = true;
 		activeMi = i;
 		const m = evEl?.querySelector(`mark.hl[data-mi="${i}"]`);
 		if (!m || !dockEl) return;
@@ -325,13 +336,16 @@
 			}
 			if (e.key === "ArrowRight") onnav?.(1);
 			else if (e.key === "ArrowLeft") onnav?.(-1);
+			else if (e.key === "Escape")
+				((reviewing = false), (activeMi = null)); // back to the proposal
 			else if ((e.key === "Backspace" || e.key === "Delete") && canRemove(activeMi)) {
 				e.preventDefault();
 				removeFocused();
 			} else if (e.key === "Tab") {
 				e.preventDefault();
 				const n = marks.length;
-				if (!n) return;
+				// no proof to walk (every claim rests on absence) — Tab still opens the claims
+				if (!n) return void (reviewing = true);
 				const at = activeMi ?? -1;
 				goto(e.shiftKey ? ((at <= 0 ? n : at) - 1) % n : (at + 1) % n);
 			}
@@ -347,19 +361,21 @@
 	onmouseup={onselect}
 	onmousedown={(e) => menu && !menuEl?.contains(e.target as Node) && (menu = null)}
 	onclick={(e) => {
-		// a quote is clickable, à la Notion: focus it and its margin comment expands.
-		// A click anywhere else — outside a quote, its pin, or a dock claim — unselects.
+		// a quote is clickable, à la Notion: focus it (which opens review) and its margin comment
+		// expands. A click anywhere else — outside a quote, its pin, or the dock — unselects and
+		// returns the dock to the proposal: the touch twin of Esc.
 		const t = e.target as Element;
 		const m = t.closest?.("mark.hl");
 		if (m && evEl?.contains(m)) {
 			const mi = Number(m.getAttribute("data-mi"));
+			reviewing = true;
 			activeMi = mi;
 			// a user-added quote carries an inline remove popover, right at the highlight
 			if (canRemove(mi)) {
 				const r = m.getBoundingClientRect();
 				menu = { kind: "remove", mi, x: r.left + r.width / 2, top: r.top, bottom: r.bottom };
 			}
-		} else if (!t.closest?.(".note-pin, .claim, .selmenu")) activeMi = null;
+		} else if (!t.closest?.(".note-pin, .claim, .selmenu, .dock")) ((reviewing = false), (activeMi = null));
 	}}
 />
 
@@ -497,10 +513,11 @@
 {/if}
 
 <!-- The dock — the one composer, one placement. Three parts, in reading order:
-     HEAD (chrome: where you are, fold, step) · BODY (the judgment, the only scroller)
-     · ACTS (pinned, so Confirm is reachable whatever the body is doing). The head is
-     identical folded or not — it IS the dock when folded, so nothing moves under the
-     pointer — and it carries what the top band used to duplicate. -->
+     HEAD (chrome: where you are, fold, step) · BODY (ONE pane at a time — the proposal by
+     default, the claims while reviewing — the only scroller, at a constant height) · ACTS
+     (pinned, so Confirm is reachable whatever the body is doing). The head is identical
+     folded or not — it IS the dock when folded, so nothing moves under the pointer — and
+     it carries what the top band used to duplicate. -->
 <div class="dock" class:open bind:this={dockEl}>
 	<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 	<div class="dhead" onclick={(e) => !(e.target as Element).closest(".nav") && (open = !open)}>
@@ -555,70 +572,72 @@
 	<div class="dstack">
 		<div class="dwrap">
 			<div class="dbody">
-				<!-- PROPOSAL — the agent's proposal, headed by the Prompt's framing, editable within its
-	     schema; committing it IS the decision. First, so you decide, then read the reasoning. -->
-				<div class="proposal">
-					{#if judgment.proposal}
-						<h2 class="proposal-head">{judgment.proposal}</h2>
-					{/if}
-					<OutputForm schema={judgment.outputSchema} bind:value={output} id={judgment.id} />
-					{#if outputError}
-						<p class="err">{outputError}</p>
-					{/if}
-				</div>
-
-				<!-- LEARNING — the judge's reasoning, annotatable; follows the proposal it justifies -->
-				<div class="why">
-					{#each statements as s, i (i)}
-						<div
-							class="claim"
-							class:active={activeSi === i}
-							class:against={!s.supporting}
-							class:noted={!!s.comment?.trim()}
-						>
-							<svg
-								class="mark"
-								width="13"
-								height="13"
-								viewBox="0 0 24 24"
-								fill="none"
-								stroke="currentColor"
-								stroke-width="3"
-								stroke-linecap="round"
-								stroke-linejoin="round"
-								aria-label={s.supporting ? "supports the verdict" : "argues against the verdict"}
+				{#if !reviewing}
+					<!-- PROPOSAL — the default pane: the agent's proposal, headed by the Prompt's framing,
+	     editable within its schema; committing it IS the decision. -->
+					<div class="proposal">
+						{#if judgment.proposal}
+							<h2 class="proposal-head">{judgment.proposal}</h2>
+						{/if}
+						<OutputForm schema={judgment.outputSchema} bind:value={output} id={judgment.id} />
+						{#if outputError}
+							<p class="err">{outputError}</p>
+						{/if}
+					</div>
+				{:else}
+					<!-- REVIEW — the judge's reasoning, annotatable; the pane Tab opens, Esc closes -->
+					<div class="why">
+						{#each statements as s, i (i)}
+							<div
+								class="claim"
+								class:active={activeSi === i}
+								class:against={!s.supporting}
+								class:noted={!!s.comment?.trim()}
 							>
-								{#if s.supporting}
-									<path d="M20 6 9 17l-5-5" />
+								<svg
+									class="mark"
+									width="13"
+									height="13"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="3"
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									aria-label={s.supporting ? "supports the verdict" : "argues against the verdict"}
+								>
+									{#if s.supporting}
+										<path d="M20 6 9 17l-5-5" />
+									{:else}
+										<path d="M18 6 6 18" /><path d="m6 6 12 12" />
+									{/if}
+								</svg>
+								<!-- the judge's claims are read-only labelling data; the human's own are editable -->
+								{#if isUserClaim(s.claim)}
+									<input
+										class="text edit"
+										aria-label="Edit claim"
+										bind:value={statements[i].claim}
+										onkeydown={(e) => (e.key === "Enter" || e.key === "Escape") && e.currentTarget.blur()}
+									/>
 								{:else}
-									<path d="M18 6 6 18" /><path d="m6 6 12 12" />
+									<button class="text" onclick={() => focusClaim(i)}>{s.claim}</button>
 								{/if}
-							</svg>
-							<!-- the judge's claims are read-only labelling data; the human's own are editable -->
-							{#if isUserClaim(s.claim)}
-								<input
-									class="text edit"
-									aria-label="Edit claim"
-									bind:value={statements[i].claim}
-									onkeydown={(e) => (e.key === "Enter" || e.key === "Escape") && e.currentTarget.blur()}
-								/>
-							{:else}
-								<button class="text" onclick={() => focusClaim(i)}>{s.claim}</button>
-							{/if}
-							<span class="dots">
-								{#each s.quotes as q, j (j)}
-									<button
-										class="dot"
-										class:on={activeMi === miOf(i) + j}
-										class:userq={isUserQuote(s.claim, q)}
-										aria-label="proof"
-										onclick={() => goto(miOf(i) + j)}
-									></button>
-								{/each}
-							</span>
-						</div>
-					{/each}
-				</div>
+								<span class="dots">
+									{#each s.quotes as q, j (j)}
+										<button
+											class="dot"
+											class:on={activeMi === miOf(i) + j}
+											class:userq={isUserQuote(s.claim, q)}
+											aria-label="proof"
+											onclick={() => goto(miOf(i) + j)}
+										></button>
+									{/each}
+								</span>
+							</div>
+						{/each}
+					</div>
+				{/if}
 			</div>
 
 			<!-- ACTS — outside the scroller, so Confirm never scrolls away -->
@@ -635,6 +654,21 @@
 						onclick={() => (noting = !noting)}
 					>
 						Note <kbd>⌘E</kbd>
+					</button>
+					<!-- the pane toggle — pinned here (never behind the body's scroll), the touch twin of
+					     Tab/Esc; label names the OTHER pane, the one the tap takes you to -->
+					<button
+						class="btn-note"
+						title={reviewing ? "Back to the proposal (Esc)" : "Read the reasoning (Tab)"}
+						onclick={() =>
+							reviewing
+								? ((reviewing = false), (activeMi = null))
+								: marks.length
+									? goto(0)
+									: (reviewing = true)}
+					>
+						{reviewing ? "Proposal" : "Review"}
+						<kbd>{reviewing ? "⎋" : "⇥"}</kbd>
 					</button>
 				</div>
 				{#if noting}
@@ -655,7 +689,11 @@
 	.page {
 		max-width: 720px;
 		margin: 0 auto;
-		padding: 0 4px 340px; /* deep bottom pad: last evidence clears the dock */
+		/* deep bottom pad — not just "clears the dock": goto() parks a focused quote at half the
+		   band above the dock (35vh with a 30vh dock), so a quote on the document's LAST line
+		   needs 65vh of runway below it to reach that line. Anything less strands bottom claims
+		   behind the dock. */
+		padding: 0 4px calc(65vh + 16px);
 	}
 	/* the card's half of the top bar — the progress rail alone; where you are and how you step
 	   live in the dock head, beside the decision they belong to */
@@ -1082,12 +1120,14 @@
 		min-height: 0;
 	}
 
-	/* THE CAP — the dock's one scroller, and the reason it stays a dock: head + this + acts can
-	   never eat the screen, so the evidence above it survives on any viewport. */
+	/* THE CAP — the dock's one scroller, and the reason it stays a dock: the WHOLE dock (head
+	   54px + this + acts ~68px) totals ~30vh — the composer's share of the screen, sized like
+	   claude.ai's — so the evidence keeps ~70% of any viewport. CONSTANT, not a max: the
+	   footprint is identical in both panes and across cards, so nothing ever jumps. */
 	.dbody {
 		overflow-y: auto;
 		overscroll-behavior: contain;
-		max-height: min(38vh, 340px);
+		height: max(96px, calc(30vh - 122px));
 	}
 
 	/* PROPOSAL — the dock's top zone: the Prompt's framing over the editable output */
@@ -1106,15 +1146,14 @@
 		color: var(--foreground);
 	}
 
-	/* the claims — LEARNING, below the proposal they justify; one dot per proof, the cursor
-	   lives in the dots */
+	/* the claims — the REVIEW pane; one dot per proof, the cursor lives in the dots */
 	.why {
 		padding: 12px 10px 8px;
-		border-top: 1px solid var(--border);
 		display: flex;
 		flex-direction: column;
 		gap: 2px;
 	}
+
 	.claim {
 		display: flex;
 		align-items: flex-start;
