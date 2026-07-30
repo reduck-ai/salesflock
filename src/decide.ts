@@ -17,14 +17,18 @@ import { collectQuotes, findQuotes, inRange, quoteKey, type Statement } from "./
 import { schemaError } from "./output.js";
 import { createHash } from "node:crypto";
 
-// fingerprint(instructions) — what the Decision pins alongside its Model: WHICH instruction text the
-// LLM actually read. The Prompt relation can't answer that — a page body is mutable in place, and it
-// now transcludes a shared page, so the prose can change from a page the prompt doesn't even own. The
-// hash makes "a new version is a new row, never an edit" checkable instead of merely agreed: two
-// Decisions citing one prompt with different hashes were NOT judged alike. Short — this identifies a
-// version, it does not defend against tampering.
+// fingerprint(contract) — what the Decision pins alongside its Model: WHICH contract the LLM
+// actually ran under. The Prompt relation can't answer that — a page body is mutable in place (and
+// transcludes a shared page), and the schema COLUMNS are just as editable under a pinned relation
+// (measured: a required Output field added mid-batch retroactively invalidated 9 judged rows, with
+// nothing flagging it). So the hash covers the whole contract — body + Input/Output schemas — making
+// "a new version is a new row, never an edit" checkable for every part of it: two Decisions citing
+// one prompt with different hashes were NOT judged alike. Short — this identifies a version, it does
+// not defend against tampering.
 const fingerprint = (instructions: string): string =>
 	createHash("sha256").update(instructions).digest("hex").slice(0, 12);
+const contractOf = (body: string, fields: Record<string, string | number | boolean>): string =>
+	[body, fields["Input schema"] ?? "", fields["Output schema"] ?? ""].join("\n");
 
 // The LLM's response envelope: the domain `output` — its shape declared by the Prompt's Output
 // schema — plus `statements`, the fixed claim→evidence anchoring layer every evidenced judgment
@@ -128,12 +132,15 @@ export const createReviewer = ({ config, renderEvidence, store: given }: Reviewe
 		return versions.reduce((a, b) => (Number(b.fields.Version ?? 0) > Number(a.fields.Version ?? 0) ? b : a));
 	};
 
-	// instructionsHash(kind) — the fingerprint the live instructions WOULD get now, so a caller can
-	// compare it to what a Decision pinned. Equal ⇒ that judgment's instructions still read the same;
-	// different ⇒ someone edited a body in place (or the shared page it syncs) instead of adding a
-	// version. Its own call, not part of showDecision, so the few-shot builder never pays for it.
-	const instructionsHash = async (kind: string): Promise<string> =>
-		fingerprint(await store.body((await livePrompt(kind)).id));
+	// instructionsHash(kind) — the fingerprint the live contract WOULD get now, so a caller can
+	// compare it to what a Decision pinned. Equal ⇒ that judgment's contract still reads the same;
+	// different ⇒ someone edited the body (or the shared page it syncs) or a schema column in place
+	// instead of adding a version. Its own call, not part of showDecision, so the few-shot builder
+	// never pays for it.
+	const instructionsHash = async (kind: string): Promise<string> => {
+		const prompt = await livePrompt(kind);
+		return fingerprint(contractOf(await store.body(prompt.id), prompt.fields));
+	};
 
 	// showDecision(handle) — one Decision by the shared id, shaped for reading: the LLM's decision
 	// always (Output, Reasoning statements, and the Evidence RE-RENDERED from the frozen Input the way
@@ -361,7 +368,7 @@ export const createDecider = (deps: DeciderDeps) => {
 				Reasoning: JSON.stringify(statements),
 				Input: JSON.stringify(ctx.input),
 				Model: llm.modelName(config.model),
-				"Instructions hash": fingerprint(ctx.system),
+				"Instructions hash": fingerprint(contractOf(ctx.system, ctx.prompt.fields)),
 				Prompt: [ctx.prompt.id],
 				[config.entity]: [entityId],
 				...(dependsOn?.length ? { "Depends on": dependsOn } : {})
