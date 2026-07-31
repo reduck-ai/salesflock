@@ -13,8 +13,8 @@ Two surfaces on one SvelteKit app, behind one auth gate, reading Notion:
 Both surfaces share the inline-autocomplete stack: `lib/autocomplete/engine.ts` (one
 debounce/abort/supersede race, plus the persisted on/off preference that ⇧⇥ toggles) and
 `/api/complete`, which grounds a suggestion either in a Decision (its Prompt body + frozen
-evidence) or in the Writer's document. Each surface only paints — a ghost overlay on the
-review form's textareas, a widget decoration in CodeMirror.
+evidence, fetched from Notion) or in the Writer's declared voice (below). Each surface only
+paints — a ghost overlay on the review form's textareas, a widget decoration in CodeMirror.
 
 Deployed on Vercel; CI/CD is Vercel's Git integration — there is nothing else to
 configure.
@@ -85,6 +85,27 @@ Output`) — there is no stored verdict column. Since a decision also moves the 
 "Update content" on the Leads database is needed too. Which Status each committed output
 moves the Lead to is the agent's config (`config.prompts`, imported via the `$agent`
 alias), not app code.
+
+## The Writer's voice (`/write` autocomplete)
+
+The two things that shape a suggestion are **local files**, not Notion rows and not env — a
+Decision's grounding is stored (frozen `Input`, a Prompt page), but the Writer's is *declared*:
+
+- **`src/lib/writer/voice.md`** — the system prompt: who is writing and how. The one place.
+- **`src/lib/writer/examples.yaml`** — which of my own pieces are canonical samples: a pointer
+  list (`file:` + a `note:` naming the register, which the model sees). The prose sits in
+  `src/lib/writer/corpus/*.md`, verbatim as published.
+
+`src/lib/server/voice.ts` assembles them. Both are `?raw` imports and the corpus is one eager
+`import.meta.glob`, so everything resolves at **build** time — on Vercel the completion runs in a
+serverless function that does not have this repo's loose files, so an `fs` read would work in dev
+and 404 in production. A `file:` the corpus lacks throws at module load, naming both sides.
+
+Order is the design: voice → samples → the document's title → the Task → the caret. Everything
+before the title is byte-identical across every request, so it is one long stable prefix for
+Gemini's implicit cache (~1.5k tokens with three samples; watch `cached=` in `complete.ts`'s log
+line). Adding samples is therefore cheap in latency but not free in tokens — this is a voice
+sample, not an archive.
 
 ## The Writer's live channel (`/write`)
 

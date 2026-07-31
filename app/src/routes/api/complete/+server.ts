@@ -5,12 +5,14 @@
 //   id present  → a Decision card: the drafter's own context, reused not rebuilt — the Prompt's
 //                 instructions (its page body) and the card's rendered Evidence (from the frozen
 //                 Input, through the renderer of the agent that judged it, $agents/index).
-//   id absent   → the standalone Writer: the document IS the draft, so there is nothing to fetch —
-//                 the title is the whole grounding, and a longer budget suits prose.
+//   id absent   → the standalone Writer: nothing to fetch, because its grounding is DECLARED, not
+//                 stored — my voice and my own writing samples, bundled at build time
+//                 ($lib/server/voice) — plus the document's title, and a longer budget for prose.
 
 import { error, json } from "@sveltejs/kit";
 import { decision } from "$lib/server/notion";
 import { complete } from "$lib/server/complete";
+import { writerGround } from "$lib/server/voice";
 import { agentFor } from "$agents/index";
 import { renderEvidence as genericEvidence } from "$core/linkedin/evidence";
 import type { RequestHandler } from "./$types";
@@ -50,7 +52,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	if (!locals.user) throw error(401, "not signed in");
 	const { id, title, field, prefix, suffix } = (await request.json()) as {
 		id?: string; // a Decision id ⇒ grounded in that card; absent ⇒ the Writer
-		title?: string; // the Writer's document title — its whole grounding
+		title?: string; // the Writer's document title — the per-request part of its grounding
 		field?: string; // the Output field being edited — only used to frame the prompt
 		prefix?: string; // draft text before the caret
 		suffix?: string; // draft text after the caret
@@ -58,13 +60,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 	// A phrase completes a form field; prose wants a sentence. The one knob that differs.
 	const max = id ? 16 : 64;
-	const ground = id
-		? await decisionGround(id, field)
-		: [
-				`You are an inline autocomplete for a writer drafting long-form content${
-					title ? ` titled "${title}"` : ""
-				}.`
-			];
+	const ground = id ? await decisionGround(id, field) : writerGround(title);
 
 	const prompt = [
 		...ground,
@@ -72,8 +68,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			`no quotes, no preamble, and do not repeat text that is already there. ` +
 			(id
 				? `Keep it short (a few words to one sentence), matching the surrounding voice.`
-				: `Continue in the author's own voice and register — at most one or two sentences, ` +
-					`picking up mid-sentence if the cursor sits mid-sentence.`),
+				: `You are ghost-writing as me: continue in MY voice as declared above, at most one or ` +
+					`two sentences, picking up mid-sentence if the cursor sits mid-sentence.`),
 		`## Draft\n\n${prefix ?? ""}${CURSOR}${suffix ?? ""}`
 	].filter(Boolean);
 

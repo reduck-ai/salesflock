@@ -1,0 +1,21 @@
+# The canonical writing samples — which of my own pieces the Writer's autocomplete imitates.
+#
+# A pointer list, deliberately: the prose lives in ./corpus/*.md (one file per piece, verbatim as
+# published), and this file is the CHOICE of which pieces speak for the voice. Adding a sample is a
+# file plus a line here; dropping one is deleting the line — the file can stay in the corpus unused.
+#
+#   file  — the corpus filename (basename; ./corpus/ is implied). Loud if it doesn't exist.
+#   note  — the register, shown to the model INSIDE the example, so it knows a launch post and a
+#           reply-to-a-thread are not the same voice. Also what makes this list readable to me.
+#
+# Order is the order the model sees. Keep the list short: every sample rides on EVERY keystroke's
+# prompt, so this is a voice sample, never an archive.
+
+- file: reduck-linkedin-leads.md
+  note: LinkedIn post — product launch, story-first (a customer ask, then the answer)
+
+- file: fable-decommission.md
+  note: LinkedIn post — a take on industry news, TL;DR then a bulleted verdict
+
+- file: anthropic-moat.md
+  note: X reply — building on someone else's point with a structural argument
