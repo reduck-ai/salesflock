@@ -46,6 +46,8 @@
 		gap: 12px;
 		font-size: 13px;
 		line-height: 1.5;
+		/* the one accent in a neutral palette: "inline suggestions are live" */
+		--suggest: oklch(0.62 0.19 255);
 	}
 	/* field label + object/branch title */
 	.form :global(.sjsf-label),
@@ -96,17 +98,37 @@
 		background: var(--card);
 		color: var(--foreground);
 		font: inherit;
+		/* Two shadow LAYERS, each owned by one state: --glow says inline suggestions are live, --focus
+		   is the focus ring. Because a state fills only its own variable, the two compose instead of
+		   overriding each other — which is the whole trick, since both want `box-shadow` and the later
+		   rule would otherwise win. Unset layers render as nothing. */
+		box-shadow: var(--glow, 0 0 #0000), var(--focus, 0 0 #0000);
+		transition: box-shadow 0.15s ease;
 	}
 	.form :global(.sjsf-textarea) {
 		resize: none;
 		field-sizing: content;
+	}
+	/* Suggestions live (⇧⇥ toggles it; the attachment sets the attribute) — a blue glow on the field.
+	   The ACTIVE state is what is marked: off is simply the plain field, nothing decorated. Blue is
+	   the one chromatic note in an otherwise neutral palette, so it reads as "the model is helping
+	   here" and can't be confused with the neutral focus ring it sits inside. Same hue both themes;
+	   only the halo's opacity does the work. */
+	.form :global(.sjsf-textarea[data-autocomplete="on"]) {
+		/* 2px, deliberately thinner than the 3px focus ring below: the two are drawn from the same edge
+		   outward, so an equal spread would hide the ring entirely and a focused field would look
+		   exactly like an unfocused one. Thinner means focus still adds a visible outer band. */
+		/* Mixed in srgb, not oklch: --input is a hueless white, and interpolating a hue against an
+		   undefined one sends the result through purple (measured: hue 302 instead of 255). */
+		--glow: 0 0 0 2px color-mix(in srgb, var(--suggest) 55%, transparent);
+		border-color: color-mix(in srgb, var(--suggest) 60%, transparent);
 	}
 	.form :global(.sjsf-text:focus),
 	.form :global(.sjsf-textarea:focus),
 	.form :global(.sjsf-select:focus) {
 		outline: none;
 		border-color: var(--ring);
-		box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring) 30%, transparent);
+		--focus: 0 0 0 3px color-mix(in oklch, var(--ring) 30%, transparent);
 	}
 	/* a nested object / anyOf branch (e.g. the drafted next step) — grouped, no box chrome */
 	.form :global(fieldset) {

@@ -1,16 +1,20 @@
 // Inline ghost-text autocomplete for the draft fields — a Svelte attachment, wired once in
 // OutputForm over whatever textareas the Output schema renders (so it is agent-agnostic). On a
-// pause in typing it asks /api/complete for a continuation and paints it as dimmed ghost text
-// behind the caret; Tab accepts, Esc or any edit dismisses. v1 offers a suggestion only when the
-// caret sits at the END of the field (the "continue my draft" case) — the honest, flicker-free
-// subset; mid-text insertion is deliberately out of scope until it earns its complexity.
+// pause in typing it asks the shared engine ($lib/autocomplete/engine) for a continuation and paints
+// it as dimmed ghost text behind the caret; Tab accepts, Esc or any edit dismisses. v1 offers a
+// suggestion only when the caret sits at the END of the field (the "continue my draft" case) — the
+// honest, flicker-free subset; mid-text insertion is deliberately out of scope until it earns its
+// complexity. ⇧⇥ turns suggestions off and on, the same key the Writer's editor uses — the preference
+// itself is the engine's, so both surfaces read and write ONE flag.
+//
+// This file is now purely the TEXTAREA PAINTER: the debounce/abort/supersede race lives once in the
+// engine, shared with the Writer's CodeMirror ghost.
+
+import { createCompleter, enabled, toggle } from "$lib/autocomplete/engine";
 
 interface Opts {
 	id: string; // the Decision id — the endpoint's grounding handle
 }
-
-const DEBOUNCE = 150;
-const MIN_CHARS = 2;
 
 // The field's human label, best-effort — only used to frame the prompt ("editing the X field").
 const fieldLabel = (el: HTMLTextAreaElement): string | undefined =>
@@ -56,9 +60,13 @@ const attachTo = (el: HTMLTextAreaElement, opts: Opts): (() => void) => {
 	parent.appendChild(ghost);
 
 	let suggestion = "";
-	let timer: ReturnType<typeof setTimeout> | undefined;
-	let ctrl: AbortController | undefined;
-	let seq = 0;
+	const completer = createCompleter({ ground: { id: opts.id } });
+
+	// The state signal: `data-autocomplete` on the field itself, styled in OutputForm (a dashed border
+	// means suggestions are off). The attribute is the state, the CSS is the look — so the field reads
+	// the theme's tokens and this file decides no colours.
+	const signal = (on: boolean) => (el.dataset.autocomplete = on ? "on" : "off");
+	signal(enabled());
 
 	const atEnd = () =>
 		el.selectionStart === el.selectionEnd && el.selectionStart === el.value.length;
@@ -83,34 +91,26 @@ const attachTo = (el: HTMLTextAreaElement, opts: Opts): (() => void) => {
 		ghost.scrollTop = el.scrollTop;
 	};
 
-	const request = async () => {
-		if (!atEnd() || el.value.trim().length < MIN_CHARS) return clear();
-		const mine = ++seq;
-		ctrl?.abort();
-		ctrl = new AbortController();
-		try {
-			const res = await fetch("/api/complete", {
-				method: "POST",
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify({ id: opts.id, field: fieldLabel(el), prefix: el.value, suffix: "" }),
-				signal: ctrl.signal
-			});
-			if (!res.ok || mine !== seq) return;
-			const { completion } = (await res.json()) as { completion?: string };
-			if (mine !== seq) return; // a newer keystroke won
-			suggestion = (completion ?? "").replace(/\s+$/, "");
-			suggestion && atEnd() ? render() : clear();
-		} catch {
-			/* aborted or offline — simply no ghost */
-		}
-	};
-
-	const onInput = () => {
+	// The engine owns the pause, the abort and the supersede check; this only decides whether the
+	// answer is still paintable (the caret may have left the end while it was in flight).
+	const onInput = async () => {
 		clear();
-		if (timer) clearTimeout(timer);
-		timer = setTimeout(request, DEBOUNCE);
+		if (!atEnd()) return completer.cancel();
+		const completion = await completer.suggest({ prefix: el.value, field: fieldLabel(el) });
+		if (!completion || !atEnd()) return clear();
+		suggestion = completion;
+		render();
 	};
 	const onKeydown = (e: KeyboardEvent) => {
+		// ⇧⇥ first, and before the no-suggestion bail: turning suggestions back ON is exactly the case
+		// where no ghost is showing, so gating this on `suggestion` would make the switch one-way.
+		if (e.key === "Tab" && e.shiftKey) {
+			e.preventDefault();
+			signal(toggle());
+			completer.cancel(); // supersede a reply in flight — it must not paint after being turned off
+			clear();
+			return;
+		}
 		if (!suggestion) return;
 		if (e.key === "Tab") {
 			e.preventDefault();
@@ -139,8 +139,7 @@ const attachTo = (el: HTMLTextAreaElement, opts: Opts): (() => void) => {
 	ro.observe(el);
 
 	return () => {
-		if (timer) clearTimeout(timer);
-		ctrl?.abort();
+		completer.cancel();
 		ro.disconnect();
 		el.removeEventListener("input", onInput);
 		el.removeEventListener("keydown", onKeydown);

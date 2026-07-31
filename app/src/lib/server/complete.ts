@@ -9,10 +9,11 @@ import { env } from "$env/dynamic/private";
 const MODEL = env.AUTOCOMPLETE_MODEL || "gemini-3.5-flash-lite";
 const API = "https://generativelanguage.googleapis.com/v1beta/models";
 
-// complete(prompt) — the continuation Gemini proposes for `prompt`. Short by construction (an inline
-// suggestion, not an essay); temperature 0 so the same draft yields the same ghost text. Fails loud:
-// a missing key or an API error throws, surfaced by the endpoint (errors never pass silently).
-export const complete = async (prompt: string): Promise<string> => {
+// complete(prompt, max) — the continuation Gemini proposes for `prompt`. Short by construction (an
+// inline suggestion, not an essay); temperature 0 so the same draft yields the same ghost text. Fails
+// loud: a missing key or an API error throws, surfaced by the endpoint (errors never pass silently).
+// `max` is the ONE thing a caller varies: a form field wants a phrase, long-form prose a sentence.
+export const complete = async (prompt: string, max = 16): Promise<string> => {
 	if (!env.GEMINI_API_KEY) throw new Error("GEMINI_API_KEY is not set");
 	const t0 = Date.now();
 	const res = await fetch(`${API}/${MODEL}:generateContent?key=${env.GEMINI_API_KEY}`, {
@@ -20,7 +21,7 @@ export const complete = async (prompt: string): Promise<string> => {
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({
 			contents: [{ parts: [{ text: prompt }] }],
-			generationConfig: { temperature: 0, maxOutputTokens: 16 }
+			generationConfig: { temperature: 0, maxOutputTokens: max }
 		})
 	});
 	if (!res.ok) throw new Error(`Gemini ${res.status}: ${await res.text()}`);

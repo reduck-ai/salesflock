@@ -188,3 +188,177 @@ export const chunks = (s: string): { text: { content: string } }[] => {
 		);
 	return out;
 };
+
+// blocksOf(markdown) — the INVERSE of bodyOf: markdown a person authored → the blocks that render it.
+// It reads the same vocabulary bodyOf writes (MARKER's prefixes, the fence, the divider, the to_do,
+// and `inline`'s four annotations), which is the whole point of it living here: read a page, edit the
+// markdown, write it back, and the shapes are the ones it started with. Without it an authored
+// "## Heading" lands as a paragraph whose literal text begins with "##".
+//
+// Deliberately NOT a markdown parser: it recognizes exactly what bodyOf can emit and treats anything
+// else as prose. Notion's own errors are the backstop for a shape it would refuse (children on a
+// divider, say) — errors never pass silently, so nothing here guesses.
+
+type Block = { object: "block"; type: string; [payload: string]: unknown };
+interface Ann {
+	bold?: boolean;
+	italic?: boolean;
+	code?: boolean;
+}
+type Run = { type: "text"; text: { content: string; link?: { url: string } }; annotations?: Ann };
+
+// One rich-text item, split like `chunks` (2000 chars, never through a surrogate pair). Annotations
+// and the link ride along only when set, so a plain run stays the minimal shape chunks writes.
+const pushRuns = (out: Run[], s: string, ann: Ann, href?: string): void => {
+	for (let i = 0; i < s.length; ) {
+		let end = Math.min(i + 2000, s.length);
+		if (end < s.length && /[\uD800-\uDBFF]/.test(s[end - 1])) end--;
+		out.push({
+			type: "text",
+			text: { content: s.slice(i, end), ...(href ? { link: { url: href } } : {}) },
+			...(Object.keys(ann).length ? { annotations: { ...ann } } : {})
+		});
+		i = end;
+	}
+};
+
+// The four forms `inline` emits. Each match recurses into its OWN text carrying the annotation down,
+// so `[**bold**](url)` nests correctly; code is the exception — its content is literal by definition,
+// so it is never re-parsed.
+const INLINE = /\[([^\]\n]*)\]\(([^)\s]*)\)|`([^`\n]+)`|\*\*([^*\n]+)\*\*|_([^_\n]+)_/;
+const richText = (text: string, ann: Ann = {}, href?: string): Run[] => {
+	const out: Run[] = [];
+	for (let rest = text; ; ) {
+		const m = INLINE.exec(rest);
+		if (!m) return pushRuns(out, rest, ann, href), out;
+		pushRuns(out, rest.slice(0, m.index), ann, href);
+		if (m[1] !== undefined) out.push(...richText(m[1], ann, m[2]));
+		else if (m[3] !== undefined) pushRuns(out, m[3], { ...ann, code: true }, href);
+		else if (m[4] !== undefined) out.push(...richText(m[4], { ...ann, bold: true }, href));
+		else out.push(...richText(m[5], { ...ann, italic: true }, href));
+		rest = rest.slice(m.index + m[0].length);
+	}
+};
+
+const block = (type: string, text: string, extra: object = {}): Block => ({
+	object: "block",
+	type,
+	[type]: { rich_text: richText(text), ...extra }
+});
+
+// A code block's `language` is a CLOSED enum on Notion's side — an unlisted value fails the whole
+// write, so it is resolved here rather than passed through hopefully. The list is Notion's own (it
+// names every accepted value in its 400); the aliases are what people actually type in a fence, and
+// anything still unrecognized degrades to plain text, because a language label is never worth losing
+// a document over.
+const CODE_LANGUAGES = new Set(
+	("abap abc agda arduino assembly bash basic bnf c c# c++ clojure coffeescript coq css dart dhall diff " +
+		"docker ebnf elixir elm erlang f# flow fortran gherkin glsl go graphql groovy haskell hcl html idris " +
+		"java javascript json julia kotlin latex less lisp livescript lua makefile markdown markup matlab " +
+		"mathematica mermaid nix objective-c ocaml pascal perl php powershell prolog protobuf purescript " +
+		"python r racket reason ruby rust sass scala scheme scss shell smalltalk solidity sql swift toml " +
+		"typescript verilog vhdl webassembly xml yaml").split(" ")
+);
+const CODE_ALIAS: Record<string, string> = {
+	ts: "typescript",
+	tsx: "typescript",
+	js: "javascript",
+	jsx: "javascript",
+	mjs: "javascript",
+	py: "python",
+	rb: "ruby",
+	rs: "rust",
+	sh: "shell",
+	zsh: "shell",
+	yml: "yaml",
+	md: "markdown",
+	dockerfile: "docker",
+	"c++": "c++",
+	golang: "go",
+	kt: "kotlin"
+};
+const codeLanguage = (fence: string): string => {
+	const key = fence.trim().toLowerCase();
+	if (!key) return "plain text";
+	const named = CODE_ALIAS[key] ?? key;
+	return CODE_LANGUAGES.has(named) ? named : "plain text";
+};
+
+const FENCE = /^```([\w#+.-]*)\s*$/;
+const HEADING = /^(#{1,6}) (.*)$/;
+const TODO = /^- \[([ xX])\] (.*)$/;
+const BULLET = /^[-*+] (.*)$/;
+const NUMBERED = /^\d+\. (.*)$/;
+const QUOTE = /^> (.*)$/;
+
+export const blocksOf = (markdown: string): Block[] => {
+	const lines = markdown.replace(/\r\n?/g, "\n").split("\n");
+	const out: Block[] = [];
+	// Consecutive prose lines are ONE paragraph (a blank line ends it), mirroring bodyOf's join: a
+	// soft line break inside a block survives the trip instead of splitting into two blocks.
+	let para: string[] = [];
+	const flush = () => {
+		if (para.length) out.push(block("paragraph", para.join("\n")));
+		para = [];
+	};
+
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i];
+		if (!line.trim()) {
+			flush();
+			continue;
+		}
+
+		// A two-space indent is how bodyOf nests a subtree, so an indented run belongs to the block
+		// above — dedent it and recurse, rather than leaving the spaces in the text.
+		if (/^ {2}\S/.test(line)) {
+			const kid: string[] = [];
+			while (i < lines.length && /^ {2}\S/.test(lines[i])) kid.push(lines[i].slice(2)), i++;
+			i--;
+			flush();
+			const parent = out[out.length - 1];
+			if (parent) {
+				(parent[parent.type] as { children?: Block[] }).children = blocksOf(kid.join("\n"));
+				continue;
+			}
+			para.push(kid.join("\n")); // nothing to hang it on — keep the text, drop the indent
+			continue;
+		}
+
+		const fence = FENCE.exec(line);
+		if (fence) {
+			flush();
+			const body: string[] = [];
+			for (i++; i < lines.length && !/^```/.test(lines[i]); i++) body.push(lines[i]);
+			const rich: Run[] = [];
+			pushRuns(rich, body.join("\n"), {}); // code content is literal — no inline parsing
+			out.push({
+				object: "block",
+				type: "code",
+				code: { rich_text: rich, language: codeLanguage(fence[1]) }
+			});
+			continue;
+		}
+
+		if (/^(-{3,}|\*{3,}|_{3,})$/.test(line)) {
+			flush();
+			out.push({ object: "block", type: "divider", divider: {} });
+			continue;
+		}
+
+		const todo = TODO.exec(line);
+		const heading = HEADING.exec(line);
+		const bullet = BULLET.exec(line);
+		const numbered = NUMBERED.exec(line);
+		const quote = QUOTE.exec(line);
+		if (todo) (flush(), out.push(block("to_do", todo[2], { checked: todo[1].toLowerCase() === "x" })));
+		// Notion has only three heading levels; deeper markdown collapses onto the last one.
+		else if (heading) (flush(), out.push(block(`heading_${Math.min(heading[1].length, 3)}`, heading[2])));
+		else if (bullet) (flush(), out.push(block("bulleted_list_item", bullet[1])));
+		else if (numbered) (flush(), out.push(block("numbered_list_item", numbered[1])));
+		else if (quote) (flush(), out.push(block("quote", quote[1])));
+		else para.push(line);
+	}
+	flush();
+	return out;
+};

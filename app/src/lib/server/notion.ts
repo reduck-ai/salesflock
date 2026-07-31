@@ -13,8 +13,11 @@ import { hasFeedback } from "$core/review";
 import { agentFor } from "$agents/index";
 import type { Filter } from "$lib/filter";
 
-const API = "https://api.notion.com/v1";
-const headers = {
+// The wire seam — exported because the Writer's own client (server/writer.ts) speaks to a DIFFERENT
+// data source with the SAME token and version pinning. Sharing the constants beats a second copy
+// drifting a Notion-Version behind.
+export const API = "https://api.notion.com/v1";
+export const headers = {
 	Authorization: `Bearer ${env.NOTION_TOKEN}`,
 	"Notion-Version": "2025-09-03",
 	"Content-Type": "application/json"
@@ -130,9 +133,15 @@ const statusOf = async (id: string): Promise<string | null> => {
 	return v ? (plain(v) as string | null) : null;
 };
 
-const page = async (
+export const page = async (
 	id: string
-): Promise<{ id: string; url: string; created_time: string; properties: Record<string, NotionValue> }> => {
+): Promise<{
+	id: string;
+	url: string;
+	created_time: string;
+	last_edited_time: string;
+	properties: Record<string, NotionValue>;
+}> => {
 	const res = await fetch(`${API}/pages/${id}`, { headers });
 	if (!res.ok) throw new Error(`Notion ${res.status}: ${await res.text()}`);
 	return res.json();
@@ -284,7 +293,7 @@ export const decisions = async (filter: Filter): Promise<Decision[]> => {
 		);
 };
 
-const patch = async (pageId: string, properties: Record<string, unknown>) => {
+export const patch = async (pageId: string, properties: Record<string, unknown>) => {
 	const res = await fetch(`${API}/pages/${pageId}`, {
 		method: "PATCH",
 		headers,

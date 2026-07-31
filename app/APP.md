@@ -1,7 +1,21 @@
 # app
 
-A one-page review surface for Decisions awaiting human judgment. SvelteKit +
-shadcn-svelte, gated by a pluggable auth module, reading one Notion data source.
+Two surfaces on one SvelteKit app, behind one auth gate, reading Notion:
+
+- **`/`** — the review surface for Decisions awaiting human judgment (shadcn-svelte,
+  one data source).
+- **`/write`** — the **Writer**: long-form drafts (blogs, posts) listed, then edited one
+  at a time in CodeMirror, saved to a Notion database where the row is the metadata and
+  the page BODY is the prose. ⌘S saves, and so does a 15s heartbeat when the draft is
+  dirty. Markdown both ways through `$core/stores/notion.codec` (`bodyOf` reads,
+  `blocksOf` writes), so the editor and the page agree on what a heading is.
+
+Both surfaces share the inline-autocomplete stack: `lib/autocomplete/engine.ts` (one
+debounce/abort/supersede race, plus the persisted on/off preference that ⇧⇥ toggles) and
+`/api/complete`, which grounds a suggestion either in a Decision (its Prompt body + frozen
+evidence) or in the Writer's document. Each surface only paints — a ghost overlay on the
+review form's textareas, a widget decoration in CodeMirror.
+
 Deployed on Vercel; CI/CD is Vercel's Git integration — there is nothing else to
 configure.
 
@@ -45,6 +59,11 @@ the mode above.
    it (⋯ → Connections), and put its data-source id in `NOTION_DECISIONS_DS`.
    The page renders whatever properties the data source has, so a fork can point
    it at any database.
+5. **`NOTION_WRITER_DS`** (the `/write` surface) — the data-source id of the database
+   holding your drafts; it needs a title property, and a `Status` select if you want the
+   list's tabs. Share that database with the same integration too — an unshared one 404s
+   with "Make sure the relevant pages and databases are shared with your integration",
+   which is the one setup mistake this surface can make.
 
 `.env.example` lists every variable; add `AUTH_PROVIDER`, `ALLOWED_DOMAINS`, and
 `ACCESS_KEY` there alongside the originals if they are not yet present.
