@@ -33,8 +33,7 @@ export interface Statement {
 // A judgment that cites evidence: the reasoning as claim→proof statements, the evidence the
 // claims point into, and the judge's structured output plus the schema it obeys. The output is
 // the editable seed — the human commits it (verbatim or corrected) and that IS the decision. It
-// carries no CTA (the output is the proposal); `proposal` is not an echo of the output but the
-// Prompt's own framing — what the output proposes — headed above it so you know what you're deciding.
+// carries no CTA and no framing header: the Output schema's own field labels say what is proposed.
 export interface EvidencedJudgment {
 	id: string; // stable key; what a Judgment refers back to
 	title: string; // the source record's name — the detail line a decided card's toast reads
@@ -43,7 +42,6 @@ export interface EvidencedJudgment {
 	evidence: string; // markdown — rendered live from the Input data map; quotes anchor into it
 	output: Record<string, unknown>; // the judge's Output — the editable seed
 	outputSchema?: Record<string, unknown>; // the Prompt's Output JSON Schema — the edit contract
-	proposal?: string; // the Prompt's framing text — the header above the output (optional)
 	anchor?: Quote; // the evidence span the composer attaches BELOW (a writing prompt supplies it);
 	// absent ⇒ the composer floats in the dock (a verdict about the whole subject, not one span)
 	hasFeedback: boolean; // does this decision already carry a human delta (any channel, any state)

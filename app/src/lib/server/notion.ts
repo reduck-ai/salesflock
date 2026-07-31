@@ -30,13 +30,11 @@ export interface Decision {
 	prompt?: string; // the Prompt page id — its Output schema governs the editable output
 	promptName?: string; // the Prompt's Name (the row's kind) — the per-Prompt filter + sort key
 	outputSchema?: Record<string, unknown>; // the Prompt's Output JSON Schema (the edit contract)
-	proposal?: string; // the Prompt's framing text — what the output proposes (the card's header)
 	anchorField?: string; // the Input field the composer attaches below (set ⇒ attached; unset ⇒ floating)
 	system?: string; // the Prompt page's BODY — the instructions, grounding the autocomplete as they ground the judge
 }
 
-// A Prompt page → its Name, Output JSON Schema (the contract the human's output obeys), and
-// its framing text ("Proposal") — proposal-oriented copy the card heads the output with. All
+// A Prompt page → its Name and Output JSON Schema (the contract the human's output obeys). All
 // optional: a fork's Prompt need not carry them, so each stays fail-soft.
 //
 // Memoized by page id: a Prompt page's content is immutable by id (a new version is a new row), and
@@ -45,7 +43,6 @@ export interface Decision {
 type PromptInfo = {
 	name: string;
 	outputSchema?: Record<string, unknown>;
-	proposal?: string;
 	anchorField?: string;
 };
 const promptInfoCache = new Map<string, PromptInfo>();
@@ -59,12 +56,10 @@ const promptInfo = async (id: string): Promise<PromptInfo> => {
 			.map(plain)[0] ?? ""
 	);
 	const schema = plain(properties["Output schema"]);
-	const proposal = plain(properties["Proposal"]);
 	const anchorField = plain(properties["Anchor field"]);
 	const info: PromptInfo = {
 		name,
 		outputSchema: schema ? (JSON.parse(String(schema)) as Record<string, unknown>) : undefined,
-		proposal: proposal ? String(proposal) : undefined,
 		anchorField: anchorField ? String(anchorField) : undefined
 	};
 	promptInfoCache.set(id, info);
@@ -93,7 +88,9 @@ const promptBody = async (id: string): Promise<string | undefined> => {
 		promptBodyCache.set(id, md);
 		return md;
 	} catch (e) {
-		console.error(`promptBody: prompt ${id} body unreadable — autocomplete ungrounded: ${(e as Error).message}`);
+		console.error(
+			`promptBody: prompt ${id} body unreadable — autocomplete ungrounded: ${(e as Error).message}`
+		);
 		return undefined;
 	}
 };
@@ -180,7 +177,6 @@ export const decision = async (id: string): Promise<Decision> => {
 	if (d.prompt) {
 		const info = await promptInfo(d.prompt);
 		d.outputSchema = info.outputSchema;
-		d.proposal = info.proposal;
 		d.anchorField = info.anchorField;
 		d.promptName = info.name;
 		d.system = await promptBody(d.prompt);
@@ -199,7 +195,12 @@ export const decisions = async (filter: Filter): Promise<Decision[]> => {
 		property: "Final output",
 		rich_text: filter.tab === "past" ? { is_not_empty: true } : { is_empty: true }
 	};
-	const results: { id: string; url: string; created_time: string; properties: Record<string, NotionValue> }[] = [];
+	const results: {
+		id: string;
+		url: string;
+		created_time: string;
+		properties: Record<string, NotionValue>;
+	}[] = [];
 	let cursor: string | undefined;
 	do {
 		const res = await fetch(`${API}/data_sources/${env.NOTION_DECISIONS_DS}/query`, {
@@ -222,7 +223,7 @@ export const decisions = async (filter: Filter): Promise<Decision[]> => {
 	} while (cursor);
 	const rows = results.map(toDecision);
 
-	// The editable output's contract + framing text + Name (the kind): each row's Prompt info (deduped).
+	// The editable output's contract + Name (the kind): each row's Prompt info (deduped).
 	const infos = new Map(
 		await Promise.all(
 			[...new Set(rows.map((r) => r.prompt).filter((p): p is string => !!p))].map(
@@ -234,7 +235,6 @@ export const decisions = async (filter: Filter): Promise<Decision[]> => {
 		const info = r.prompt && infos.get(r.prompt);
 		if (info) {
 			r.outputSchema = info.outputSchema;
-			r.proposal = info.proposal;
 			r.anchorField = info.anchorField;
 			r.promptName = info.name;
 		}
@@ -257,9 +257,7 @@ export const decisions = async (filter: Filter): Promise<Decision[]> => {
 		// mid-chain and orphaned rows. Same semantics, minus the round trips.
 		const pending = new Set(rows.map((r) => r.id));
 		const depIds = [...new Set(rows.flatMap((r) => r.deps))].filter((id) => !pending.has(id));
-		const gates = new Map(
-			await Promise.all(depIds.map(async (id) => [id, await advanced(id)] as const))
-		);
+		const gates = new Map(await Promise.all(depIds.map(async (id) => [id, await advanced(id)] as const)));
 		gated = rows.filter((r) => r.deps.every((d) => gates.get(d)?.advances));
 		for (const r of gated) {
 			const gate = r.deps.length ? gates.get(r.deps[0]) : undefined;
@@ -281,8 +279,7 @@ export const decisions = async (filter: Filter): Promise<Decision[]> => {
 		.slice()
 		.sort(
 			filter.sort === "prompt"
-				? (a, b) =>
-						(a.promptName ?? "").localeCompare(b.promptName ?? "") || key(b).localeCompare(key(a))
+				? (a, b) => (a.promptName ?? "").localeCompare(b.promptName ?? "") || key(b).localeCompare(key(a))
 				: (a, b) => key(b).localeCompare(key(a))
 		);
 };

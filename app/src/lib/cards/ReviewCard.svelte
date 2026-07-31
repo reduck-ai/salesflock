@@ -3,14 +3,14 @@
 	// window scroll), and the dock — the single interaction surface, styled like a composer —
 	// floats at the bottom. ONE placement, whatever the judgment: a head (where you are · fold ·
 	// step, identical folded or not, so nothing moves under the pointer), then ONE pane at a time:
-	// PROPOSAL (the agent's proposal, headed by the Prompt's framing, editable within its schema)
-	// by default, or REVIEW (the claims that justify it, each with one dot per proof, annotatable)
-	// while a proof is focused — the mode IS the cursor (activeMi): Tab or a click on any quote
-	// enters review, Esc or an unselect returns to the proposal. Body and acts split so Confirm
-	// never scrolls away, and the body is the dock's only scroller, at a CONSTANT height: head +
-	// body + acts can't eat the screen (and the footprint never jumps between panes), so the
-	// evidence survives above it on any viewport — which is what keeps this a dock and not a
-	// second page.
+	// PROPOSAL (the agent's proposal, editable within its schema — the schema's own field labels
+	// are the only heading) by default, or REVIEW (the claims that justify it, each with one dot
+	// per proof, annotatable) while a proof is focused — the mode IS the cursor (activeMi): Tab or
+	// a click on any quote enters review, Esc or an unselect returns to the proposal. Body and
+	// acts split so Confirm never scrolls away, and the body is the dock's only scroller, at a
+	// height the REVIEWER owns: the head doubles as the resize handle (drag = resize, remembered
+	// in localStorage; a plain click still folds), so the evidence keeps whatever share of the
+	// screen the reviewer chose — which is what keeps this a dock and not a second page.
 	// The committed output IS the decision — one Confirm; there is no Reject (disagreeing is
 	// editing the output). Every quote is highlighted in the evidence at all times, stance-
 	// coloured and subtle, with its claim pinned in the right margin like a doc comment. One
@@ -109,6 +109,38 @@
 	// reasoning. Every gesture that focuses a proof (Tab, a quote/claim/pin click) enters review;
 	// Esc and an unselect click leave it. The card remounts per id, so each card opens on its proposal.
 	let reviewing = $state(false);
+
+	// The dock's geometry is ONE number the reviewer owns: the body scroller's height, dragged via
+	// the head and remembered in localStorage. It rides as an inline --dock-body var and also sets
+	// the page's bottom padding, so the focus-line runway (goto parks a quote at dockTop/2) tracks
+	// whatever height was chosen — the two can't drift.
+	const DOCK_KEY = "dock-body";
+	const clampBody = (h: number) => Math.round(Math.max(56, Math.min(h, window.innerHeight * 0.6)));
+	let dockBody = $state(
+		typeof window === "undefined"
+			? 160
+			: clampBody(Number(localStorage.getItem(DOCK_KEY)) || window.innerHeight * 0.3 - 96)
+	);
+	// The head is the resize handle — it is already the dock's top edge and already clickable, so
+	// one pointer gesture serves both: past a 4px threshold it resizes (and persists on release),
+	// under it the release is the fold click it always was. The nav arrows keep opting out.
+	let drag: { y: number; h: number; moved: boolean } | null = null;
+	const dragStart = (e: PointerEvent) => {
+		if ((e.target as Element).closest(".nav")) return;
+		drag = { y: e.clientY, h: dockBody, moved: false };
+		(e.currentTarget as Element).setPointerCapture(e.pointerId);
+	};
+	const dragMove = (e: PointerEvent) => {
+		if (!drag || (!drag.moved && Math.abs(drag.y - e.clientY) < 4)) return;
+		drag.moved = true;
+		if (open) dockBody = clampBody(drag.h + drag.y - e.clientY);
+	};
+	const dragEnd = () => {
+		if (!drag) return;
+		if (drag.moved) localStorage.setItem(DOCK_KEY, String(dockBody));
+		else open = !open;
+		drag = null;
+	};
 
 	// `mi` is stamped explicitly rather than left to the array index — highlight.ts falls back to the
 	// index, and being explicit keeps the cursor's addressing independent of how the evidence renders.
@@ -379,7 +411,7 @@
 	}}
 />
 
-<div class="page">
+<div class="page" style={`padding-bottom: calc(50vh + ${Math.round(dockBody / 2) + 70}px)`}>
 	<div class="topmeta">
 		<div class="rail" title={pos ? `${pos} / ${total}` : undefined}>
 			<div class="fill" style={`width:${pos ? (pos / total) * 100 : 0}%`}></div>
@@ -513,14 +545,21 @@
 {/if}
 
 <!-- The dock — the one composer, one placement. Three parts, in reading order:
-     HEAD (chrome: where you are, fold, step) · BODY (ONE pane at a time — the proposal by
-     default, the claims while reviewing — the only scroller, at a constant height) · ACTS
-     (pinned, so Confirm is reachable whatever the body is doing). The head is identical
-     folded or not — it IS the dock when folded, so nothing moves under the pointer — and
-     it carries what the top band used to duplicate. -->
-<div class="dock" class:open bind:this={dockEl}>
-	<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-	<div class="dhead" onclick={(e) => !(e.target as Element).closest(".nav") && (open = !open)}>
+     HEAD (chrome: where you are, fold, step — and the resize handle: drag to size the body,
+     click to fold) · BODY (ONE pane at a time — the proposal by default, the claims while
+     reviewing — the only scroller, at the reviewer's chosen height) · ACTS (pinned, so
+     Confirm is reachable whatever the body is doing). The head is identical folded or not —
+     it IS the dock when folded, so nothing moves under the pointer — and it carries what
+     the top band used to duplicate. -->
+<div class="dock" class:open bind:this={dockEl} style={`--dock-body:${dockBody}px`}>
+	<!-- svelte-ignore a11y_no_static_element_interactions -->
+	<div
+		class="dhead"
+		onpointerdown={dragStart}
+		onpointermove={dragMove}
+		onpointerup={dragEnd}
+		onpointercancel={() => (drag = null)}
+	>
 		<span class="count">
 			{#if pos}{pos} / {total}{/if}
 			{#if judgment.hasFeedback}
@@ -576,9 +615,6 @@
 					<!-- PROPOSAL — the default pane: the agent's proposal, headed by the Prompt's framing,
 	     editable within its schema; committing it IS the decision. -->
 					<div class="proposal">
-						{#if judgment.proposal}
-							<h2 class="proposal-head">{judgment.proposal}</h2>
-						{/if}
 						<OutputForm schema={judgment.outputSchema} bind:value={output} id={judgment.id} />
 						{#if outputError}
 							<p class="err">{outputError}</p>
@@ -689,11 +725,11 @@
 	.page {
 		max-width: 720px;
 		margin: 0 auto;
-		/* deep bottom pad — not just "clears the dock": goto() parks a focused quote at half the
-		   band above the dock (35vh with a 30vh dock), so a quote on the document's LAST line
-		   needs 65vh of runway below it to reach that line. Anything less strands bottom claims
-		   behind the dock. */
-		padding: 0 4px calc(65vh + 16px);
+		/* the deep bottom pad is inline — it tracks the dock's dragged height: goto() parks a
+		   focused quote at half the band above the dock, so a quote on the document's LAST line
+		   needs ~(50vh + dock/2) of runway below it to reach that line. Anything less strands
+		   bottom claims behind the dock. */
+		padding: 0 4px;
 	}
 	/* the card's half of the top bar — the progress rail alone; where you are and how you step
 	   live in the dock head, beside the decision they belong to */
@@ -1043,9 +1079,10 @@
 		display: grid;
 		grid-template-columns: 1fr auto 1fr;
 		align-items: center;
-		padding: 5px 8px;
-		height: 54px;
-		cursor: pointer;
+		padding: 4px 6px;
+		height: 40px;
+		cursor: ns-resize; /* the head is the resize handle; a plain click still folds */
+		touch-action: none; /* the drag must own vertical touch moves, not scroll the page */
 		user-select: none;
 		-webkit-tap-highlight-color: transparent;
 	}
@@ -1071,8 +1108,8 @@
 		justify-self: center;
 		display: grid;
 		place-items: center;
-		width: 56px;
-		height: 44px;
+		width: 44px;
+		height: 32px;
 		color: var(--muted-foreground);
 	}
 	.chev svg {
@@ -1087,8 +1124,8 @@
 		gap: 2px;
 	}
 	.nav button {
-		width: 44px;
-		height: 44px;
+		width: 36px;
+		height: 32px;
 		display: grid;
 		place-items: center;
 		border: none;
@@ -1120,30 +1157,18 @@
 		min-height: 0;
 	}
 
-	/* THE CAP — the dock's one scroller, and the reason it stays a dock: the WHOLE dock (head
-	   54px + this + acts ~68px) totals ~30vh — the composer's share of the screen, sized like
-	   claude.ai's — so the evidence keeps ~70% of any viewport. CONSTANT, not a max: the
-	   footprint is identical in both panes and across cards, so nothing ever jumps. */
+	/* THE CAP — the dock's one scroller, and the reason it stays a dock: its height is the ONE
+	   number the reviewer drags (the --dock-body var the markup sets), constant across panes and
+	   cards, so the evidence keeps whatever share of the screen was chosen and nothing ever jumps. */
 	.dbody {
 		overflow-y: auto;
 		overscroll-behavior: contain;
-		height: max(96px, calc(30vh - 122px));
+		height: var(--dock-body, 160px);
 	}
 
-	/* PROPOSAL — the dock's top zone: the Prompt's framing over the editable output */
+	/* PROPOSAL — the dock's top zone: the editable output, headed only by its schema's own labels */
 	.proposal {
-		padding: 14px 18px 12px;
-	}
-	/* the framing header — the card's title, in the dock's uppercase-mono label language but
-	   foregrounded so it reads as the heading, not a field label */
-	.proposal-head {
-		margin: 0 0 11px;
-		font-family: ui-monospace, monospace;
-		font-size: 11.5px;
-		font-weight: 600;
-		letter-spacing: 0.06em;
-		text-transform: uppercase;
-		color: var(--foreground);
+		padding: 12px 16px 10px;
 	}
 
 	/* the claims — the REVIEW pane; one dot per proof, the cursor lives in the dots */
@@ -1250,18 +1275,18 @@
 
 	.acts-wrap {
 		border-top: 1px solid var(--border);
-		padding: 12px 14px;
+		padding: 8px 10px;
 		display: flex;
 		flex-direction: column;
-		gap: 10px;
+		gap: 8px;
 	}
 	.note {
 		width: 100%;
-		height: 40px;
+		height: 34px;
 		border: 1px solid var(--input);
 		background: var(--card);
-		border-radius: 11px;
-		padding: 0 13px;
+		border-radius: 10px;
+		padding: 0 12px;
 		font-size: 13px;
 		color: var(--foreground);
 	}
@@ -1275,14 +1300,14 @@
 	}
 	.acts {
 		display: flex;
-		gap: 10px;
+		gap: 8px;
 	}
 	/* the note toggle — "Note" beside Confirm; the field unfolds below when asked for (⌘E) */
 	.btn-note {
 		flex: none;
-		height: 44px;
-		padding: 0 14px;
-		border-radius: 12px;
+		height: 36px;
+		padding: 0 12px;
+		border-radius: 10px;
 		border: 1px solid var(--input);
 		background: var(--card);
 		color: var(--muted-foreground);
@@ -1314,11 +1339,11 @@
 	}
 	.btn {
 		flex: 1;
-		height: 44px;
-		border-radius: 12px;
+		height: 36px;
+		border-radius: 10px;
 		border: none;
 		cursor: pointer;
-		font-size: 14.5px;
+		font-size: 13.5px;
 		font-weight: 640;
 		color: #fff;
 		display: inline-flex;

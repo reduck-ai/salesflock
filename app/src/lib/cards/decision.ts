@@ -72,7 +72,6 @@ export const decisionToJudgment = (d: Decision): EvidencedJudgment => {
 		evidence,
 		output,
 		outputSchema: d.outputSchema,
-		proposal: d.proposal,
 		// placement is code-computed, never the LLM's: the prompt names the Input field the output
 		// answers (`anchorField`), and its rendered span attaches the composer below it. Unset ⇒ the
 		// dock floats. Derived here from the frozen Input, exactly like `evidence` — never stored.
