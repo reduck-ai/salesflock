@@ -11,10 +11,11 @@
 //            is unwired); a "No" qualification terminally parks the thread at "Not qualified".
 // READ-ONLY: never posts to Reddit. Monotonic + idempotent on the canonical Thread URL.
 
-import { getSubredditThreads, threadUrl } from "../../src/clients/reddit/index.js";
+import { getSubredditInfo, getSubredditThreads, threadUrl } from "../../src/clients/reddit/index.js";
 import { getStore, queryAll } from "../../src/stores/index.js";
 import { createDecider } from "../../src/decide.js";
 import { renderEvidence } from "./evidence.js";
+import { remember, rulesOf } from "./subreddits.js";
 import { projectInput } from "../../src/project.js";
 import { mapLimit } from "../../src/concurrency.js";
 import { drain } from "../../src/drain.js";
@@ -36,9 +37,21 @@ const nameOf = (subreddit: string, title: string): string => `r/${subreddit} —
 // The Reddit entity bridge (this agent's own wiring): the Reddit Thread row IS the subject — it
 // carries the frozen Thread evidence projectInput reads — AND the pipeline entity the Decision
 // binds to.
+//
+// One field is JOINED rather than read: the community's rules (subreddits.ts), which belong to the
+// subreddit, not the thread. Joining them here — instead of storing a copy on every thread row —
+// keeps one place to refresh them, and they still land in the Decision's frozen Input (so the review
+// app renders them and the drafter can cite one), because that freeze is of the projected fields, not
+// of the row. A prompt whose Input schema doesn't name "Subreddit rules" simply never sees them.
 const resolveSubject = async (url: string): Promise<Subject> => {
 	const row = await store.read(config.models.RedditThreads, "Thread URL", threadUrl(url));
-	return { key: url, name: String(row.fields.Name ?? url), fields: row.fields, ref: row.id };
+	const rules = rulesOf(String(row.fields.Subreddit ?? ""));
+	return {
+		key: url,
+		name: String(row.fields.Name ?? url),
+		fields: { ...row.fields, ...(rules ? { "Subreddit rules": rules } : {}) },
+		ref: row.id
+	};
 };
 const linkEntity = async (
 	subject: Subject,
@@ -117,12 +130,22 @@ export const tools = {
 	// chronological window), queued with their evidence at "To qualify". No LLM — judging is
 	// `engage`'s job, reading that status back as its worklist. Dedup across subreddits and re-runs
 	// is structural — Thread URL + the monotonic guard.
+	//
+	// One visit, both things a subreddit has to tell us: its new threads AND its own rules, fetched
+	// together (they share the browser gate, so the pair costs about as long as the listing alone) and
+	// the rules folded into subreddits.yaml. That is the whole maintenance of the rules a reply must
+	// obey — the stage that already comes here keeps them current, and `remember` only touches the
+	// file when a community actually changed them.
 	scan: async (since = "48h", subreddits: readonly string[] = SUBREDDITS) =>
 		mapLimit([...subreddits], async (subreddit) => {
 			const ranAt = new Date().toISOString();
-			const { threads } = await getSubredditThreads(subreddit, since);
+			const [info, { threads }] = await Promise.all([
+				getSubredditInfo(subreddit),
+				getSubredditThreads(subreddit, since)
+			]);
+			remember(info);
 			const queued = (await mapLimit(threads, (t) => queue(t, subreddit, ranAt))).filter((q) => q.queued);
-			return { subreddit, seen: threads.length, queued };
+			return { subreddit, rules: info.rules?.length ?? 0, seen: threads.length, queued };
 		}),
 
 	// engage — the judgment chain for one thread: qualify, accept, and — when it advances — the

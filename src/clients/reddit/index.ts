@@ -4,7 +4,7 @@
 
 import { run } from "../reduck.js";
 import { scripts } from "./scripts.js";
-import type { Threads } from "./schema.js";
+import type { Threads, Info } from "./schema.js";
 
 // The canonical thread URL — the ONE identity key (the `profileUrl` twin). Reddit renders the same
 // thread under many shapes (with/without the title slug, trailing slash, query params, mixed-case
@@ -22,3 +22,10 @@ export const threadUrl = (url: string): string => {
 export type { Threads };
 export const getSubredditThreads = (subreddit: string, since = "48h"): Promise<Threads> =>
 	run<Threads>(scripts.threads, { subreddit, sort: "new", since });
+
+// A subreddit's own metadata — its RULES above all: what this community allows a commenter to do
+// (links, self-promotion, disclosure), which is what a drafted reply must obey. Fetched beside the
+// listing, per subreddit, never per thread: rules are a property of the community.
+export type { Info };
+export const getSubredditInfo = (subreddit: string): Promise<Info> =>
+	run<Info>(scripts.info, { subreddit });

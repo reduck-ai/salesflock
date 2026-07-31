@@ -17,3 +17,34 @@ export interface Threads {
   }[];
   subreddit: string;
 }
+
+export interface Info {
+  id?: string | null;
+  rules?:
+    | {
+        body?: string | null;
+        title?: string | null;
+      }[]
+    | null;
+  title?: string | null;
+  /**
+   * Page-reported reason when banned/private
+   */
+  detail?: string | null;
+  /**
+   * Visibility as the page reports it: public/restricted/..., or banned/private
+   */
+  status: string;
+  created?: string | null;
+  subreddit: string;
+  moderators?:
+    | {
+        joined?: string | null;
+        username?: string;
+        permissions?: string | null;
+      }[]
+    | null;
+  description?: string | null;
+  weekly_active_users?: number | null;
+  weekly_contributions?: number | null;
+}

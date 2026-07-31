@@ -65,8 +65,13 @@ const renderThread = (yaml: string): string => {
 	return [`**${t.title}**`, meta, t.op_text || "(no text)", ...comments].filter(Boolean).join("\n\n");
 };
 
-// Per-field renderer: Thread mirrors Reddit; everything else is generic Markdown.
-const renderers: Record<string, (v: string) => string> = { Thread: renderThread };
+// Per-field renderer: Thread mirrors Reddit; the community's rules arrive as markdown already
+// (subreddits.ts renders them), so they pass through verbatim rather than round-tripping through the
+// generic YAML pass — which would only leave them intact by accident. Everything else is generic.
+const renderers: Record<string, (v: string) => string> = {
+	Thread: renderThread,
+	"Subreddit rules": (v) => v
+};
 const render = (k: string, v: string): string => (renderers[k] ?? markdown)(v);
 
 // A field's section heading. The Thread heading IS the link to the thread (its canonical URL rides

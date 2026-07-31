@@ -24,7 +24,7 @@ program
 	.command("scan")
 	.argument("[subreddits...]", "subreddits to scan; omit for the config watchlist")
 	.option("--since <window>", `how far back — ISO date or shorthand ("48h", "7d")`, "48h")
-	.description("Discovery: each subreddit's threads newer than --since → new ones queued with evidence (title + full post) at 'To qualify'. Deduped on Thread URL. No LLM — judge with `engage`.")
+	.description("Discovery: each subreddit's threads newer than --since → new ones queued with evidence (title + full post) at 'To qualify', and that community's rules refreshed into subreddits.yaml. Deduped on Thread URL. No LLM — judge with `engage`.")
 	.action(async (subreddits: string[], { since }) => out(await tools.scan(since, subreddits.length ? subreddits : undefined)));
 
 program
