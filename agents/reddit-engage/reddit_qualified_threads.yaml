@@ -1,6 +1,6 @@
-# r/ai_agents digest, filtered to qualifying threads only.
-# Source: ai_agents_threads.yaml (553 threads) -> 15 kept (12 T1, 3 T2).
-# Original fields untouched; `tier` and `reasoning` appended per entry.
+# r/ai_agents digest — the 15 threads the first pass qualified, with human review applied:
+# 4 overturned to tier "No" (vendor self-promo / off topic). Now 10 T1, 1 T2, 4 No.
+# Source: ai_agents_threads.yaml (553 threads). Original fields untouched; `tier` and `reasoning` per entry.
 - url: https://www.reddit.com/r/ai_agents/comments/1v51217/
   title: We asked an AI shopping agent to buy a bra. It clicked the same button 12 times and gave up
   author: nikta456
@@ -162,9 +162,9 @@
           ended up writing my own thing rather than keep fighting playwright. link in the comments per rule 3.
         
           mostly wondering what everyone else does here, especially for sites you have to be logged into.
-  tier: T1
+  tier: No
   reasoning: |
-    "chrome only lets one process own a profile at a time... hooking into the browser i already had open, with my real sessions in it, did more than every stealth tweak combined" plus selector fragility. Logged-in real-session automation is core Reduck. He links his own thing but frames it as a question - "mostly wondering what everyone else does here, especially for sites you have to be logged into" - so it's a builder asking, not a vendor launch.
+    He is trying to sell his shit as he said "link in the comments"
 - url: https://www.reddit.com/r/ai_agents/comments/1v7x4w8/
   title: Is drift on websites still a problem for ai browser agents?
   author: ryicean
@@ -192,9 +192,9 @@
         
           
           Someone else runs a procedure and now everyone can run it for free too. Like a shared database.
-  tier: T1
+  tier: No
   reasoning: |
-    "How often does an agent break because the site changed? And what's the current fix you use for it?" Mid-build builder doing market research on procedure caching + self-healing, asking the sub how they handle drift. He sits at our boundary but is asking, not launching - per the tie-break rule this is a prospect. Describes-our-loop exactly.
+    Another Vendor / open source builder trying to sell shit, competitor.
 - url: https://www.reddit.com/r/ai_agents/comments/1v89fp6/
   title: Which MCP servers give AI agents real business capabilities in 2026??
   author: Purple_Network3016
@@ -389,9 +389,9 @@
     Built an agent that lives in group chats. Started on Sendblue for iMessage, hit their free-plan rule where recipients have to verify before the bot is allowed to message them, paid up to remove that for groups. Added Telegram and SMS as fallbacks, then Linq as a fourth because it does iMessage, RCS and SMS through one API.
         
           Is anyone reaching users reliably on a single channel, or is stacking providers just what this is?
-  tier: T2
+  tier: No
   reasoning: |
-    "hit their free-plan rule where recipients have to verify before the bot is allowed to message them, paid up to remove that... Added Telegram and SMS as fallbacks, then Linq as a fourth." Gated messaging APIs and provider stacking; WhatsApp-style logged-in surfaces are core for us, but his primary channel (iMessage) is not a browser flow - partial fit.
+    Off topic.
 - url: https://www.reddit.com/r/ai_agents/comments/1v9q68u/
   title: Looking for guidance on a multi-channel AI reply system
   author: Cuncirps
@@ -455,6 +455,6 @@
           Is there a better stack or architecture for this use case, especially something that avoids Twilio's fixed SMS subscription cost?
         
           Thanks!
-  tier: T2
+  tier: No
   reasoning: |
-    "SMS + Open AI... but requires $120/mo number subscription. The dealbreaker especially for cases like low volume days." Expensive-API pain, but the honest fix is a cheaper telephony provider rather than browser automation - soft, genuinely-helpful angle only.
+    No off topic.
