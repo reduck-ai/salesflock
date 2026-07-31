@@ -1183,9 +1183,11 @@
 		padding: 12px 16px 10px;
 	}
 
-	/* the claims — the REVIEW pane; one dot per proof, the cursor lives in the dots */
+	/* the claims — the REVIEW pane; one dot per proof, the cursor lives in the dots. The bottom
+	   pad is one scroller-height of runway — the dock twin of the page's 100vh−PARK pad — so the
+	   focused row ALWAYS parks at the top, the last one included (empty space below is the cost). */
 	.why {
-		padding: 12px 10px 8px;
+		padding: 12px 10px var(--dock-body, 160px);
 		display: flex;
 		flex-direction: column;
 		gap: 2px;
