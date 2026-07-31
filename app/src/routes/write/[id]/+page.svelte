@@ -5,12 +5,19 @@
 	// Saving has ONE implementation (`save`), reached three ways: ⌘S, a 15s heartbeat, and leaving the
 	// page. It is dirty-gated and single-flight, so an idle document costs nothing and a slow Notion
 	// write is never overlapped by the next tick.
+	//
+	// Text arrives the same way: ONE implementation (`apply`), reached two ways — "Sync ↓" (a re-read,
+	// which is also how an edit made in Notion gets here) and the live channel (a save by anyone else,
+	// in practice `sflock docs push`). Applying is a single CodeMirror transaction, so the words it
+	// replaces are one ⌘Z away — that undo IS the safety net, which is why an incoming version needs no
+	// banner to accept.
 
 	import { onMount } from "svelte";
+	import { dev } from "$app/environment";
 	import { beforeNavigate } from "$app/navigation";
 	import { EditorView, keymap, placeholder } from "@codemirror/view";
 	import { EditorState } from "@codemirror/state";
-	import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+	import { defaultKeymap, history, historyKeymap, isolateHistory } from "@codemirror/commands";
 	import { markdown } from "@codemirror/lang-markdown";
 	import { ghost } from "$lib/writer/ghost";
 	import { enabled as autocompleteEnabled } from "$lib/autocomplete/engine";
@@ -29,6 +36,18 @@
 	let dirty = $state(false);
 	let saving = $state(false);
 	let savedAt = $state<string | null>(null);
+	let syncedAt = $state<string | null>(null);
+	let synced = $state(false); // an arrival JUST landed — the dot's brief accent, cleared below
+	let syncFlash: ReturnType<typeof setTimeout> | undefined;
+	const SYNC_FLASH = 4000;
+
+	// This tab's identity for the round trip. The server echoes it on the event, so a tab ignores its
+	// OWN save coming back — otherwise every autosave would re-apply the same text and cost the writer
+	// their caret. Anything without a token (a push) is by definition someone else's, so it applies.
+	const client = crypto.randomUUID();
+	// This route is ONE document, so the id never changes under it (same reason `body` reads `data` once).
+	// svelte-ignore state_referenced_locally
+	const endpoint = `/api/doc/${data.doc.id.replace(/-/g, "")}`;
 	// Seeded from the editor once it exists (the extension remembers the choice across sessions), then
 	// kept current by its `onstate`. Defaulting to true here would make the footer lie on load.
 	let suggesting = $state(false);
@@ -52,9 +71,9 @@
 		saving = true;
 		dirty = false;
 		try {
-			const res = await fetch(`/api/doc/${data.doc.id.replace(/-/g, "")}`, {
+			const res = await fetch(endpoint, {
 				method: "PUT",
-				headers: { "content-type": "application/json" },
+				headers: { "content-type": "application/json", "x-writer-client": client },
 				body: JSON.stringify({ title, markdown: body })
 			});
 			if (!res.ok) throw new Error(String(res.status));
@@ -63,6 +82,50 @@
 			dirty = true; // the work is NOT safe — say so instead of showing a false "saved"
 		} finally {
 			saving = false;
+		}
+	};
+
+	// apply(d) — the incoming document becomes this one. ONE transaction replacing the whole text, which
+	// is what makes it a single undo step (the writer's own words are never gone, just behind ⌘Z), and
+	// the caret is put back at the offset it held, clamped. `dirty = false` comes AFTER the dispatch on
+	// purpose: the update listener runs inside it and would otherwise flag the incoming text as unsaved
+	// work — and the next heartbeat would write back what we were just given.
+	const apply = (d: { title?: string; markdown?: string }) => {
+		if (!view || d.markdown === undefined) return;
+		const head = view.state.selection.main.head;
+		view.dispatch({
+			changes: { from: 0, to: view.state.doc.length, insert: d.markdown },
+			selection: { anchor: Math.min(head, d.markdown.length) },
+			// `isolateHistory` is what makes "one ⌘Z" true. Without it the history groups changes made
+			// close together in time, so an arrival that lands seconds after the writer's last keystroke
+			// merges with it — measured: one undo reverted the push AND the sentence typed before it.
+			// Isolated, the arrival is its own event: the first undo gives back exactly what was there.
+			annotations: isolateHistory.of("full")
+		});
+		if (d.title !== undefined) title = d.title;
+		dirty = false;
+		syncedAt = new Date().toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+		// The dot marks an arrival for a few seconds, then goes back to being the save light: a document
+		// that synced ten minutes ago is just a saved document.
+		synced = true;
+		clearTimeout(syncFlash);
+		syncFlash = setTimeout(() => (synced = false), SYNC_FLASH);
+	};
+
+	// The manual trigger: re-read the stored document and apply it. The one way to pick up an edit made
+	// in Notion, and the fallback whenever the live channel isn't there (it only runs in dev).
+	let pulling = $state(false);
+	const pull = async () => {
+		if (pulling) return;
+		pulling = true;
+		try {
+			const res = await fetch(endpoint, { headers: { accept: "application/json" } });
+			if (!res.ok) throw new Error(String(res.status));
+			apply((await res.json()) as { title: string; markdown: string });
+		} catch {
+			syncedAt = null; // say nothing rather than claim a sync that failed
+		} finally {
+			pulling = false;
 		}
 	};
 
@@ -107,8 +170,20 @@
 		});
 		suggesting = autocompleteEnabled();
 		const beat = setInterval(save, AUTOSAVE);
+		// The live channel — the same URL as `pull`, streaming because EventSource asks for
+		// text/event-stream. Dev only, exactly where the push knob exists: on the deployed app it would
+		// hold a serverless invocation open to hear an event that can never be published there. Its own
+		// reconnection is the browser's.
+		const live = dev ? new EventSource(endpoint) : null;
+		if (live)
+			live.onmessage = (e) => {
+				const d = JSON.parse(e.data) as { title?: string; markdown?: string; from?: string };
+				if (d.from !== client) apply(d);
+			};
 		return () => {
 			clearInterval(beat);
+			clearTimeout(syncFlash);
+			live?.close();
 			view?.destroy();
 		};
 	});
@@ -125,8 +200,21 @@
 		}
 	};
 
+	// The footer says it with a DOT, not a sentence: a writer glances at it, and prose in the corner of
+	// a prose editor reads as content. The words live in its tooltip (and its aria-label, so the state
+	// is not colour-only) — that is the whole indicator.
 	// NB: not named `state` — that would shadow the `$state` rune for the whole component.
-	const saveState = $derived(saving ? "Saving…" : dirty ? "Unsaved" : savedAt ? `Saved ${savedAt}` : "Saved");
+	const saveState = $derived(
+		saving
+			? "Saving…"
+			: dirty
+				? "Unsaved changes"
+				: synced
+					? `Synced from Claude ${syncedAt} · ⌘Z to go back`
+					: savedAt
+						? `Saved ${savedAt}`
+						: "Saved"
+	);
 </script>
 
 <svelte:head><title>{title || "Untitled"}</title></svelte:head>
@@ -137,6 +225,9 @@
 		<a class="back" href="/write">← Articles</a>
 		<div class="right">
 			{#if data.doc.status}<span class="badge">{data.doc.status}</span>{/if}
+			<button class="ext" onclick={pull} disabled={pulling} title="Re-read the stored document">
+				{pulling ? "Syncing…" : "Sync ↓"}
+			</button>
 			<a class="ext" href={data.doc.url} target="_blank" rel="noreferrer">Notion ↗</a>
 		</div>
 	</header>
@@ -153,7 +244,8 @@
 </main>
 
 <footer class="statusbar">
-	<span class:dirty>{saveState}</span>
+	<span class="dot" class:dirty class:saving class:synced title={saveState} aria-label={saveState} role="status"
+	></span>
 	<span class="hint">
 		Autocomplete <strong>{suggesting ? "on" : "off"}</strong> · ⇧⇥ toggle · ⇥ accept · ⌘S save
 	</span>
@@ -191,13 +283,24 @@
 		font-size: 10.5px;
 		font-weight: 550;
 	}
+	/* Both appbar affordances read the same, whether they navigate (Notion ↗) or act (Sync ↓) — so the
+	   button carries no chrome of its own beyond the reset. */
 	.ext {
 		font-size: 11.5px;
 		color: var(--muted-foreground);
 		text-decoration: none;
+		background: none;
+		border: none;
+		padding: 0;
+		font-family: inherit;
+		cursor: pointer;
 	}
-	.ext:hover {
+	.ext:hover:not(:disabled) {
 		color: var(--foreground);
+	}
+	.ext:disabled {
+		cursor: default;
+		opacity: 0.6;
 	}
 	.title {
 		width: 100%;
@@ -247,8 +350,41 @@
 		font-size: 11.5px;
 		color: var(--muted-foreground);
 	}
-	.statusbar .dirty {
-		color: var(--foreground);
+	/* The save light: one 6px dot. Resting (saved) it is barely there; unsaved work fills it, a save in
+	   flight breathes, and an arrival accents it for a moment. Every state is also in the tooltip and the
+	   aria-label, so nothing here is colour-only. */
+	.dot {
+		width: 6px;
+		height: 6px;
+		border-radius: 50%;
+		background: var(--muted-foreground);
+		opacity: 0.45;
+		transition:
+			background 0.2s,
+			opacity 0.2s;
+	}
+	.dot.dirty {
+		background: var(--foreground);
+		opacity: 0.9;
+	}
+	.dot.saving {
+		background: var(--foreground);
+		opacity: 0.6;
+		animation: breathe 1.2s ease-in-out infinite;
+	}
+	.dot.synced {
+		background: var(--primary);
+		opacity: 1;
+	}
+	@keyframes breathe {
+		50% {
+			opacity: 0.2;
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.dot.saving {
+			animation: none;
+		}
 	}
 	.hint {
 		font-family: ui-monospace, monospace;

@@ -141,8 +141,12 @@ const childIds = async (id: string): Promise<string[]> => {
 	return ids;
 };
 
-// save(id, {title, markdown}) — the whole document as the editor has it. There is no replace-body
-// call, so a save appends the new blocks and removes the old ones. The ORDER of those two is the
+// save(id, {title, markdown}) — the whole document as the editor has it. `title` is OPTIONAL and
+// absence means "leave the Name alone", not "clear it": a rich_text/title column stays stale unless
+// written, so writing `""` for an omitted title would silently destroy the row's name — which is
+// exactly what a body-only writer (`sflock docs push`) would do. The editor always sends both.
+//
+// There is no replace-body call, so a save appends the new blocks and removes the old ones. The ORDER of those two is the
 // whole safety property: append FIRST, delete second. Deleting first is what a "wipe and rewrite"
 // reads like, but it makes every failure between the two destructive — measured: one rejected block
 // (an invalid code language) left the page with zero blocks and the prose only still in the browser.
@@ -151,13 +155,13 @@ const childIds = async (id: string): Promise<string[]> => {
 //
 // Appends go in ≤100 batches, sequentially: Notion appends at the end, so a later batch must land
 // after an earlier one. The title write is independent and rides along with the deletes.
-export const save = async (id: string, { title, markdown }: { title: string; markdown: string }): Promise<void> => {
+export const save = async (id: string, { title, markdown }: { title?: string; markdown: string }): Promise<void> => {
 	const stale = await childIds(id);
 	const blocks = blocksOf(markdown);
 	for (let i = 0; i < blocks.length; i += APPEND_CAP)
 		await api(`/blocks/${id}/children`, { method: "PATCH", body: { children: blocks.slice(i, i + APPEND_CAP) } });
 	await Promise.all([
-		patch(id, { Name: { title: chunks(title) } }),
+		...(title === undefined ? [] : [patch(id, { Name: { title: chunks(title) } })]),
 		...stale.map((blockId) => api(`/blocks/${blockId}`, { method: "DELETE" }))
 	]);
 };

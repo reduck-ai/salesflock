@@ -12,8 +12,12 @@ says what it does. If a fact can drift, it belongs in code, not here.
 
 2. **The operator CLI vs the funnel binary.** `sflock` is agent-agnostic and never mutates
    the pipeline: it *sets up* (compile a destination's or source's contract → a TS type) and
-   *reviews* (`sflock decisions` — an agent's Decisions, and `sflock prompts` — its live Prompt
-   contracts; both read-only, over `createReviewer`, no entity bridge). The per-agent runtime
+   *reviews* (`sflock decisions` — an agent's Decisions, `sflock prompts` — its live Prompt
+   contracts, and `sflock docs` — the Writer's documents, which belong to no agent at all; over
+   `createReviewer` or the Store seam, no entity bridge). Review is read-only with ONE exception,
+   and it is a prose exception: `sflock docs push` hands a revision of a document back — through the
+   app's own save sink, so it lands in the editor a human has open rather than behind a reload. Text
+   a person will edit is the only thing `sflock` writes; pipeline state stays the runtime's. The per-agent runtime
    binary is *action* (compose scripts, persist, advance the funnel). Setup describes, review
    inspects, runtime does.
 

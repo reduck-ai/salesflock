@@ -9,22 +9,30 @@
 //   sflock decisions show --agent <id> <decision> [--feedback]   one decision, or just its feedback
 //   sflock prompts list --agent <id>    each decision kind's LIVE contract: version + fingerprint
 //   sflock prompts show --agent <id> <kind>   one live contract in full (body, schemas, hash)
+//   sflock docs list                    the Writer's documents (agent-agnostic — one shared table)
+//   sflock docs show <doc>              one document, its body as markdown
+//   sflock docs push <doc> [file]       a new version of one document — saved AND applied live in the
+//                                       open editor (the one write sflock has; prose, never pipeline state)
 //
 // pull reads the agent's config.ts (destination + model→table map) and, per model, asks the
 // store to `describe` it (a JSON Schema) then compiles that to a TS type — no intermediate
 // .json on disk, and the file is named by the model key. bind reads a source's script
 // manifest and compiles each script's output schema. decisions reads the shared CRM through
-// createReviewer (no entity bridge). sflock holds no per-store semantics.
+// createReviewer (no entity bridge); docs reads the Writer's table through the Store seam
+// (src/docs.ts) — no --agent, because the writing table belongs to no one agent — and pushes through
+// the app's own save sink, so a revision reaches the open editor. sflock holds no per-store semantics.
 
 import "./env.js";
 import { Command } from "commander";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { text } from "node:stream/consumers";
 import { join } from "node:path";
 import { compile } from "json-schema-to-typescript";
 import { bind } from "./scripts.js";
 import { renderError } from "./errors.js";
 import { STORES } from "./stores/index.js";
 import { createReviewer } from "./decide.js";
+import * as writer from "./docs.js";
 import { renderFeedback } from "./review.js";
 import { AGENTS, type Agent } from "../agents/index.js";
 
@@ -140,6 +148,38 @@ prompts
 		const { config } = loadAgent(agent);
 		const reviewer = createReviewer({ ...loadAgent(agent) });
 		console.log(JSON.stringify(await reviewer.showPrompt(config.prompts?.[kind]?.name ?? kind), null, 2));
+	});
+
+// docs — the Writer's long-form documents (the /write surface of the review app). No --agent: it is
+// ONE shared writing table (NOTION_WRITER_DS), not an agent's model. `list` indexes them, `show` prints
+// one with its body as markdown — the document itself, since prose lives in the page body — and `push`
+// hands one back, live. Authoring stays in the app's editor (or Notion's); this is the loop between them.
+const docs = program.command("docs").description("Read the Writer's documents, and push a revision into the open editor.");
+
+docs
+	.command("list")
+	.description("Every document in the Writer's table — id, url, and its properties (Name, Status, …). Bodies are `show`'s job.")
+	.action(async () => console.log(JSON.stringify(await writer.list(), null, 2)));
+
+docs
+	.command("show")
+	.argument("<doc>", "document id, Notion URL, or app URL (/write/<id>)")
+	.description("One document: its properties plus `markdown` — the page body, which IS the document.")
+	.action(async (doc: string) => console.log(JSON.stringify(await writer.show(doc), null, 2)));
+
+// push — the write, and the only one `sflock` has: a revision of a document, handed to the app's own
+// save sink so it lands on the Notion page AND in the editor that has it open (no reload). Prose to a
+// document; pipeline state stays the runtime binaries'. Markdown comes from a file or stdin, because a
+// revision is text — not an argument.
+docs
+	.command("push")
+	.argument("<doc>", "document id, Notion URL, or app URL (/write/<id>)")
+	.argument("[file]", `markdown file; omit (or "-") to read the document from stdin`)
+	.option("--title <title>", "also retitle the document (omit to leave its Name alone)")
+	.description("Push a new version of a document: saved to Notion and applied live in the open editor (one undo step). Needs the local app running.")
+	.action(async (doc: string, file: string | undefined, { title }: { title?: string }) => {
+		const markdown = file && file !== "-" ? await readFile(file, "utf8") : await text(process.stdin);
+		console.log(JSON.stringify(await writer.push(doc, { markdown, title }), null, 2));
 	});
 
 program.parseAsync().catch((e: unknown) => {

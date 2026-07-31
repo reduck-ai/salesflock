@@ -86,6 +86,32 @@ Output`) — there is no stored verdict column. Since a decision also moves the 
 moves the Lead to is the agent's config (`config.prompts`, imported via the `$agent`
 alias), not app code.
 
+## The Writer's live channel (`/write`)
+
+One document has one wire — `routes/api/doc/[id]`, all three of its jobs, because they are
+one payload:
+
+- **`PUT`** saves the whole document (title + body markdown) to the Notion page, then
+  **publishes** what it saved. `sflock docs push` calls this exact endpoint, so an agent
+  writes through the same sink the editor does: one write path, and the live fan-out is free
+  rather than a second mechanism. An omitted `title` leaves the page's Name alone.
+- **`GET`** is the same URL twice, discriminated by `Accept` (which `EventSource` sets for
+  free): JSON is the editor's `Sync ↓` (also how an edit made in Notion is picked up),
+  `text/event-stream` is the live subscription. Same loader, same payload — so the editor has
+  **one** apply path for both triggers.
+- **Applying** is a single CodeMirror transaction replacing the whole text, which makes an
+  incoming version one ⌘Z away. That undo is the safety net, and why a push needs no
+  Apply/Discard banner. The saver's own `x-writer-client` token rides on the event so a tab
+  ignores the echo of its own save (otherwise every autosave would cost the writer their caret).
+
+Two things are deliberately **dev-only** (`$app/environment`'s `dev`): the push gate — a
+request may write with `x-writer-push: local` instead of a session — and the editor's
+`EventSource`. So there is no key to manage, the knob cannot be reached on the deployed app,
+and production never holds a serverless invocation open for an event that can't arrive there.
+`lib/server/live.ts` is an in-process `Map` of subscribers for the same reason: publisher and
+subscriber are the same local dev server by construction. A missed event loses nothing — the
+document is on the Notion page regardless, and `Sync ↓` re-reads it.
+
 ## Deploy
 
 ```sh
