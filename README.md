@@ -12,9 +12,10 @@ says what it does. If a fact can drift, it belongs in code, not here.
 
 2. **The operator CLI vs the funnel binary.** `sflock` is agent-agnostic and never mutates
    the pipeline: it *sets up* (compile a destination's or source's contract → a TS type) and
-   *reviews* (`sflock decisions` — inspect an agent's Decisions read-only, over `createReviewer`,
-   no entity bridge). The per-agent runtime binary is *action* (compose scripts, persist, advance
-   the funnel). Setup describes, review inspects, runtime does.
+   *reviews* (`sflock decisions` — an agent's Decisions, and `sflock prompts` — its live Prompt
+   contracts; both read-only, over `createReviewer`, no entity bridge). The per-agent runtime
+   binary is *action* (compose scripts, persist, advance the funnel). Setup describes, review
+   inspects, runtime does.
 
 3. **`reduck` is a runner, not a schema source.** One base-script call → run it with
    `reduck run` directly. Wrap it in a tool **only** for what `reduck` can't do: compose
