@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// Offline eval of "Reddit Thread Qualification" against ./reddit_qualified_threads.yaml (the
-// human-labeled ground truth). FAITHFUL to the runtime: evidence from the frozen Notion rows
+// Offline eval of "Reddit Thread Qualification" against EVERY ./*_qualified_threads.yaml (the
+// human-labeled ground truths — one file per subreddit digest; a candidate must win them ALL, or
+// it just overfits the newest set). FAITHFUL to the runtime: evidence from the frozen Notion rows
 // (projectInput → renderEvidence) and the same search_quotes/submit_claims two-tool loop as
 // decide.ts — only the persistence is dropped and the instruction body is swappable.
 //
@@ -20,7 +21,7 @@
 //   4. Inspect versions any time: `sflock prompts list/show --agent reddit-engage`.
 
 import "../../dist/src/env.js";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { parse } from "yaml";
 import { getStore } from "../../dist/src/stores/index.js";
 import { createReviewer } from "../../dist/src/decide.js";
@@ -101,19 +102,29 @@ const judge = async (evidence) => {
 	return submitted;
 };
 
-const gt = parse(readFileSync("agents/reddit-engage/reddit_qualified_threads.yaml", "utf8"));
-const rows = await mapLimit(gt, async (t) => {
-	const u = threadUrl(t.url);
-	const row = await store.read(config.models.RedditThreads, "Thread URL", u);
-	const input = projectInput(row.fields, live.inputSchema);
-	const v = await judge(renderEvidence(input));
-	return { id: u.match(/comments\/(\w+)/)[1], title: t.title.slice(0, 55), truth: t.tier, got: v.output.tier, claims: v.statements.map((s) => `${s.supporting ? "+" : "-"} ${s.claim}`) };
-});
-
-const exact = rows.filter((r) => r.got === r.truth).length;
-const gate = rows.filter((r) => (r.got === "No") === (r.truth === "No")).length;
-console.log(`\n=== exact ${exact}/${rows.length}, engage-vs-drop ${gate}/${rows.length} ===`);
-for (const r of rows) {
-	console.log(`${r.got === r.truth ? "  " : "✗ "}${r.id}  truth=${r.truth.padEnd(3)} got=${String(r.got).padEnd(3)} ${r.title}`);
-	if (r.got !== r.truth) for (const c of r.claims) console.log(`      ${c}`);
+const DIR = "agents/reddit-engage";
+const files = readdirSync(DIR).filter((f) => f.endsWith("_qualified_threads.yaml"));
+let allExact = 0;
+let allGate = 0;
+let total = 0;
+for (const file of files) {
+	const gt = parse(readFileSync(`${DIR}/${file}`, "utf8"));
+	const rows = await mapLimit(gt, async (t) => {
+		const u = threadUrl(t.url);
+		const row = await store.read(config.models.RedditThreads, "Thread URL", u);
+		const input = projectInput(row.fields, live.inputSchema);
+		const v = await judge(renderEvidence(input));
+		return { id: u.match(/comments\/(\w+)/)[1], title: t.title.slice(0, 55), truth: t.tier, got: v.output.tier, claims: v.statements.map((s) => `${s.supporting ? "+" : "-"} ${s.claim}`) };
+	});
+	const exact = rows.filter((r) => r.got === r.truth).length;
+	const gate = rows.filter((r) => (r.got === "No") === (r.truth === "No")).length;
+	allExact += exact;
+	allGate += gate;
+	total += rows.length;
+	console.log(`\n=== ${file}: exact ${exact}/${rows.length}, engage-vs-drop ${gate}/${rows.length} ===`);
+	for (const r of rows) {
+		console.log(`${r.got === r.truth ? "  " : "✗ "}${r.id}  truth=${r.truth.padEnd(3)} got=${String(r.got).padEnd(3)} ${r.title}`);
+		if (r.got !== r.truth) for (const c of r.claims) console.log(`      ${c}`);
+	}
 }
+console.log(`\n=== TOTAL: exact ${allExact}/${total}, engage-vs-drop ${allGate}/${total} ===`);
