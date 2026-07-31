@@ -1,0 +1,460 @@
+# r/ai_agents digest, filtered to qualifying threads only.
+# Source: ai_agents_threads.yaml (553 threads) -> 15 kept (12 T1, 3 T2).
+# Original fields untouched; `tier` and `reasoning` appended per entry.
+- url: https://www.reddit.com/r/ai_agents/comments/1v51217/
+  title: We asked an AI shopping agent to buy a bra. It clicked the same button 12 times and gave up
+  author: nikta456
+  created: 2026-07-24T04:34:57.339000+0000
+  score: 3
+  num_comments: 5
+  status: To engage
+  op_text: |-
+    I ran an AI agent-readiness scan on a SKIMS product page to see how well a modern shopping agent could complete a basic purchase.
+        
+          The task was simple: add a $54 bra to the shopping cart.
+        
+          Instead, the agent:
+        
+            
+          
+          Clicked "Band Size: 32" twelve times.
+        
+        
+          
+          Never found the cup size selector.
+        
+        
+          
+          Never reached Add to Cart.
+        
+        
+          
+          The interesting part is that the agent knew what it needed to do. Its reasoning repeatedly said: "Band size 32 is already selected. Need to select cup size next."
+        
+          The problem wasn't reasoning—it was interaction. The cup-size selector was implemented with a custom JavaScript component that the agent couldn't reliably interpret.
+        
+          Some other findings from the scan:
+        
+            
+          
+          Price extraction was only correct 2/5 times because the page displayed both $54 and $37.80.
+        
+        
+          
+          Availability detection failed 5/5 times despite the structured data marking the product as in stock.
+        
+        
+          
+          Add-to-cart flow failed completely.
+        
+        
+          
+          Final score: 67/100.
+        
+          What surprised me most wasn't SKIMS specifically—it was the broader trend.
+        
+          I've now scanned 18 major DTC brands, and every single one failed the browser-based Add-to-Cart test. Most stores already have decent structured data, but AI agents still struggle with custom UI components, ambiguous pricing, and dynamic interactions.
+        
+          It makes me wonder whether we're entering a phase in which e-commerce sites need to optimize not only for human shoppers and search engines but also for AI agents.
+        
+          For those building AI shopping agents or e-commerce experiences:
+        
+          What have you found to be the biggest obstacle?
+        
+            
+          
+          Dynamic JavaScript UIs?
+        
+        
+          
+          Variant selectors?
+        
+        
+          
+          Browser automation?
+        
+        
+          
+          LLM extraction accuracy?
+        
+        
+          
+          Something else?
+  tier: T1
+  reasoning: |
+    "Clicked "Band Size: 32" twelve times. Never found the cup size selector. Never reached Add to Cart... The cup-size selector was implemented with a custom JavaScript component that the agent couldn't reliably interpret." Reliability of browser actions on real commerce UIs, and he asks the sub what the biggest obstacle is (variant selectors, browser automation). One layer above us, not a substitute.
+- url: https://www.reddit.com/r/ai_agents/comments/1v5nneu/
+  title: Everyone's building internal agents. What does yours do when it needs something from another company?
+  author: Just_Acanthisitta673
+  created: 2026-07-24T20:51:06.226000+0000
+  score: 1
+  num_comments: 14
+  status: To qualify
+  op_text: |-
+    Most of us here build agents that work inside one company. It works, and I think it works for a boring reason: you control both ends. You chose the tools, you hold the credentials, you already trust the systems. MCP, tool calls, all of it assumes that.
+        
+          Here's what I keep running into. Half the processes we're automating don't actually stop at the company wall. Someone in finance tells their agent "switch this employee's line to the XX package" — that's a request to the *mobile operator*, another company. Today the agent just... stops, or hands back to a human who clicks through the operator's panel, or uses some integration a dev hand-built months ago.
+        
+          So, genuine question for people building this stuff: **does your internal agent ever need something from outside the company, and what do you actually do when it does?**
+        
+          Because I think the interesting version of "agentic internet" isn't personal assistants booking dinner. It's company A's agent dealing with company B's agent — two systems that have never met, no prior integration, no contract. And I don't think that needs a new protocol or a registry. I think it's closer to how the web already works: an org publishes what it can do at a known spot (think robots.txt / .well-known), the other side reads it. The only genuinely new part is that one hop across the boundary.
+        
+          Ways I might be wrong, which I'd rather hear than not:
+        
+          - Maybe LLMs just get good enough at reading the human web that none of this is needed. This is the one I can't answer.
+        
+          - Maybe orgs won't publish what they can do, because being that comparable is against their interest.
+        
+          - Maybe I'm wrong that internal agents turn outward at all.
+        
+          Wrote it up properly here — no product, nothing to sign up for, just an argument I want torn apart:
+  tier: T1
+  reasoning: |
+    "the agent just... stops, or hands back to a human who clicks through the operator's panel, or uses some integration a dev hand-built months ago." He names the exact gap - internal agents needing actions on another company's system with no integration - and asks "does your internal agent ever need something from outside the company, and what do you actually do when it does?".
+- url: https://www.reddit.com/r/ai_agents/comments/1v64y4j/
+  title: How do you handle the captcha while running an automation?
+  author: dry_Relationship2007
+  created: 2026-07-25T10:40:55.477000+0000
+  score: 3
+  num_comments: 7
+  status: Qualification pending review
+  op_text: |-
+    So I tried doing some automation on claude code and codex for automation but I have to manually handle captcha every time and idk how to actually solve it?
+        
+          Like are you able to figure this out? Are there any ai agents that handle captcha on their own?
+        
+          Or is there any way to solve it?
+  tier: T1
+  reasoning: |
+    "I have to manually handle captcha every time and idk how to actually solve it... are there any ai agents that handle captcha on their own?" Stuck and asking, and it's precisely what paired real-browser sessions plus low-level primitives solve. Do not underclaim here.
+- url: https://www.reddit.com/r/ai_agents/comments/1v6l4w7/
+  title: Anyone actually doing social listening/lead gen (Reddit, FB, X) for local service niches?
+  author: Standard-Future-883
+  created: 2026-07-25T21:54:55.931000+0000
+  score: 3
+  num_comments: 16
+  status: Qualification pending review
+  op_text: |-
+    I run an AI automation agency and I'm exploring intent-based lead gen monitoring public posts where people express buying or hiring intent (e.g. insurance, recruiting, trades) and reaching out directly instead of cold outreach or paid ads.
+        
+          For anyone who's actually built or used something like this:
+        
+          - What are you using to monitor Reddit API, Apify, Phantombuster, custom scraper?- Which platforms actually produce real volume Reddit, FB groups, X?- How long before you saw actual conversions, not just keyword matches?- Roughly how many qualified leads/week is realistic for a local/niche market (not SaaS)?- Any ToS issues, bans, or account risk you ran into?
+        
+          trying to figure out if this is worth building or if I'm chasing a mirage before I sink more time into it.
+  tier: T1
+  reasoning: |
+    "What are you using to monitor Reddit API, Apify, Phantombuster, custom scraper?" and "Any ToS issues, bans, or account risk you ran into?" GTM/automation-agency persona, platform access without usable APIs, ban-safe collection from a real session - literal-answer test passes.
+- url: https://www.reddit.com/r/ai_agents/comments/1v7m7q3/
+  title: the thing that fixed my agent getting blocked wasnt stealth, it was reusing a browser i was already logged into
+  author: armanidev_
+  created: 2026-07-27T01:23:11.281000+0000
+  score: 5
+  num_comments: 12
+  status: To qualify
+  op_text: |-
+    spent weeks on fingerprint stuff. what actually helped was dumber than that.
+        
+          chrome only lets one process own a profile at a time. so when my agent launched its own browser it was always a fresh logged out session, which is exactly what looks suspicious. hooking into the browser i already had open, with my real sessions in it, did more than every stealth tweak combined.
+        
+          other change that helped: i stopped handing the model css selectors. it numbers whats on the page and picks a number instead. fewer wrong clicks, and it doesnt break every time a class name changes.
+        
+          ended up writing my own thing rather than keep fighting playwright. link in the comments per rule 3.
+        
+          mostly wondering what everyone else does here, especially for sites you have to be logged into.
+  tier: T1
+  reasoning: |
+    "chrome only lets one process own a profile at a time... hooking into the browser i already had open, with my real sessions in it, did more than every stealth tweak combined" plus selector fragility. Logged-in real-session automation is core Reduck. He links his own thing but frames it as a question - "mostly wondering what everyone else does here, especially for sites you have to be logged into" - so it's a builder asking, not a vendor launch.
+- url: https://www.reddit.com/r/ai_agents/comments/1v7x4w8/
+  title: Is drift on websites still a problem for ai browser agents?
+  author: ryicean
+  created: 2026-07-27T11:02:15.953000+0000
+  score: 3
+  num_comments: 10
+  status: Qualification pending review
+  op_text: |-
+    Recently I've been building a tool an ai agents could use to rerun learnt actions deterministically on site interfaces, that in addition can also detect element shift and drifts on those sites.
+        
+          I know I'm not the first to build something like this, but since it's already almost completely finished and I only just found out about other existing tools that do the same thing as mine a few days ago (though I have found some differentiators for most tools, not all), I'm coming on here to gather some information on the subject so that hopefully I can build something people will find useful.
+        
+          Questions for the ai agent swarm power users who also happen to use procedure caching/action memory etc to save time and money:
+        
+          \\- How often does an agent break because the site changed? And what's the current fix you use for it?
+        
+          \\- For the people who also used self-healing tools for this, does it hold up to your expectations? Is it reliable enough to make you stick to it?
+        
+          \\- Which provides more value for the same type of procedure caching + self healing tool?
+        
+            
+          
+          An open source, self hosted tool. Your procedures stay on your device. No bill, no nothing.
+        
+        
+          
+          Someone else runs a procedure and now everyone can run it for free too. Like a shared database.
+  tier: T1
+  reasoning: |
+    "How often does an agent break because the site changed? And what's the current fix you use for it?" Mid-build builder doing market research on procedure caching + self-healing, asking the sub how they handle drift. He sits at our boundary but is asking, not launching - per the tie-break rule this is a prospect. Describes-our-loop exactly.
+- url: https://www.reddit.com/r/ai_agents/comments/1v89fp6/
+  title: Which MCP servers give AI agents real business capabilities in 2026??
+  author: Purple_Network3016
+  created: 2026-07-27T18:50:15.207000+0000
+  score: 14
+  num_comments: 25
+  status: Qualification pending review
+  op_text: |-
+    Trying to figure out which MCP servers are worth wiring into my agent setup for business work, not coding. Anthropic's own numbers put the ecosystem at 10K+ active public servers (3,012 in the official registry), but community servers have 30-50% install failure rates and most of what I've tested is either demo-ware or read-only wrappers that can't take real actions. Asking here before I burn another month testing.
+        
+          What I've kept after 4 months. GitHub MCP for PR triage saves ~8 hrs/week but that's the coding side. For business work: Postgres MCP handles ~30 support tickets a week (agent reads DB, drafts reply, I approve). PostFast for social scheduling from Claude, 11 platforms including Google Business Profile at €10/mo, saves ~3 hrs/week of copy paste, though analytics are thin so I pair it with Metricool at $22/mo. HubSpot MCP for CRM is the best-supported one I found, full read/write. Tally for forms is free with 21 tools and OAuth setup takes 2 min.
+        
+          What disappointed. Slack MCP is fine for reading/summarizing but message posting without human approval feels risky. Google Ads and Meta Ads MCPs ship official servers but I keep them read-only after Claude fumbled a tool call near a live budget. Zapier/Make MCP add latency for stuff direct servers do better. Security is the bigger filter than features: only 8.5% of registry servers use OAuth (rest are static API keys or nothing), 15.4% don't even publish source code, and there were 7 CVEs against MCP implementations in 12 months including a 9.6 RCE in mcp-remote with 437K downloads. A scan of 1,808 servers found 66% had security findings. So I stick to vendor-maintained servers only.
+        
+          The gap I can't fill: a solid MCP for invoicing/billing ops (Stripe's is read-heavy), anything decent for inventory or ops management, and multi-agent orchestration across 5+ servers without the agent picking wrong tools ~20% of the time.
+        
+          What are you running that gives agents real write capabilities for business tasks?? Especially interested in finance/ops MCPs since that's where my stack has holes
+  tier: T1
+  reasoning: |
+    "The gap I can't fill: a solid MCP for invoicing/billing ops (Stripe's is read-heavy), anything decent for inventory or ops management." Incomplete/read-only API on billing and ops - home turf - and he's asking what gives agents "real write capabilities for business tasks".
+- url: https://www.reddit.com/r/ai_agents/comments/1v8o8zq/
+  title: How do bootstrapped Voice AI tools navigate 5-figure partner API paywalls in hospitality/restaurants?
+  author: vin2002
+  created: 2026-07-28T04:55:44.648000+0000
+  score: 3
+  num_comments: 5
+  status: Qualification pending review
+  op_text: |-
+    Hey everyone,
+        
+          I run a bootstrapped AI Voice agent serving a handful of active restaurant clients. Our current users run on legacy reservation platforms, but when reaching out about official API access, we ran into the classic enterprise gatekeeping wall:
+        
+            
+          
+          A massive 5-figure upfront "priority" fee just to get on the integration roadmap.
+        
+        
+          
+          High monthly minimum commitments and steep location thresholds that only venture-backed startups can digest.
+        
+        
+          
+          As a bootstrapped founder, paying the fee and committing to the monthly commitments just doesn't work for us right now. But we are getting more and more inbound from venues that use their software.
+        
+          For people who have dealt with gated enterprise APIs or platforms in restaurant tech:
+        
+            
+          
+          Any fallbacks you've discovered?
+        
+        
+          
+          Any success getting individual key access while you wait for official partner approval?
+        
+        
+          
+          How did you bridge the gap between your first few venues and until you hit scale for partner approval?
+        
+        
+          
+          DMs are open if you rather talk privately !
+  tier: T1
+  reasoning: |
+    "A massive [five-figure] upfront "priority" fee just to get on the integration roadmap. High monthly minimum commitments and steep location thresholds." Gated partner API on legacy reservation platforms, and he explicitly asks "Any fallbacks you've discovered?" Classic T1 gated-API pain.
+- url: https://www.reddit.com/r/ai_agents/comments/1v8qb8m/
+  title: Everything I've had break in the last year broke at the navigation layer, not the logic
+  author: Opening-Profile6279
+  created: 2026-07-28T06:44:32.110000+0000
+  score: 27
+  num_comments: 21
+  status: To qualify
+  op_text: |-
+    Went back through my failures for the year and almost none were logic bugs. Every one was a page changing under a working script. Class name moves, div gets renamed, selector matches nothing, script carries on returning empty. Found out three days later.
+        
+          The ones that survived are where I skipped the UI and hit whatever endpoint the frontend was calling. Uglier to set up, much more stable, because request shapes change way less than markup does.
+        
+          Been trying webcmd for this recently. It picks a strategy per site rather than defaulting to a browser, so public endpoint first, then session cookie, then replaying the intercepted request, and only clicking things when there's no other option. Same idea I'd been doing by hand, just not by hand. Apache-2.0, npm install, early project.
+        
+          Doesn't fix the real problem though. A script returning nothing is easy, you alert on empty. A script returning something wrong is the one that hurts, and I still have no good detection for it. Schema check catches a changed shape, catches nothing when the shape is fine and the values are junk.
+        
+          Anyone running something better than eyeballing it weekly?
+  tier: T1
+  reasoning: |
+    "Every one was a page changing under a working script. Class name moves, div gets renamed, selector matches nothing, script carries on returning empty. Found out three days later." Textbook description of our maintenance loop - drift, endpoint-vs-UI tradeoff, and no way to verify output ("Anyone running something better than eyeballing it weekly?"). He already adopted a half-solution (webcmd), which is proof of the pain, not disqualifying.
+- url: https://www.reddit.com/r/ai_agents/comments/1v8spgc/
+  title: Ai agent desktop + browser?
+  author: FoodItalyWorld
+  created: 2026-07-28T08:59:28.323000+0000
+  score: 3
+  num_comments: 9
+  status: Qualification pending review
+  op_text: |-
+    I'm looking for an AI agent for Windows that can automate both desktop clicks and browser actions.
+        
+          I've been using Cloud Code, and while it's great for many tasks, it blocks some very simple automations that I need.
+        
+          I also tried Kimi K3, but it's unfortunately way too slow for my workflow.
+        
+          Can anyone recommend a good alternative that is:
+        
+          - Fast
+        
+          - Reliable
+        
+          - Able to automate both Windows desktop and browser interactions
+        
+          - Suitable for more unrestricted automation
+        
+          I'd really appreciate any recommendations. Thanks!
+  tier: T1
+  reasoning: |
+    "Cloud Code... blocks some very simple automations that I need" and he wants something "Able to automate both Windows desktop and browser interactions." Actively-shopping buyer whose primary surface is browser automation; the desktop half is out of scope but the browser half is a direct answer - engage and say the rest honestly.
+- url: https://www.reddit.com/r/ai_agents/comments/1v9n984/
+  title: Most robust solution for downloading and organizing documents
+  author: Joejoe10x
+  created: 2026-07-29T05:52:18.178000+0000
+  score: 1
+  num_comments: 4
+  status: Qualification pending review
+  op_text: So I would like an agent to search for the last two IMF Article IV reports for a list of countries, then download that to a folder it created with the country name and then also rename the document using a particular syntax eg YYYY-MM Country Article IV report (IMF).I think Claude Cowork can do it but it is probably my fault but I find the way it goes off on tangents and get stuck in loops very frustrating so just wondering if their is a better automated solution for this type of use case
+  tier: T1
+  reasoning: |
+    "search for the last two IMF Article IV reports for a list of countries, then download that to a folder it created with the country name and then also rename the document using a particular syntax." Repeatable portal download + file naming, and Claude Cowork "goes off on tangents and get stuck in loops" - the deterministic-script answer.
+- url: https://www.reddit.com/r/ai_agents/comments/1va08fz/
+  title: Best way to schedule social media posts from Claude in 2026, full MCP setup tested
+  author: Purple_Network3016
+  created: 2026-07-29T15:55:35.182000+0000
+  score: 1
+  num_comments: 4
+  status: To qualify
+  op_text: |-
+    Tested 6 ways to schedule social posts straight from Claude over the past months, direct MCP connectors beat the Zapier bridge on cost and reliability every time. Sharing the breakdown since half the guides on this push whichever tool wrote them.
+        
+          The lineup with verified July 2026 numbers. Blotato at $29/mo covers 9 platforms via mcp.blotato.com/mcp, most polished MCP of the bunch and no per-post fees, but no free tier, no Google Business Profile, no Telegram, and the AI-credit model makes costs jump if you generate heavy volume ($97 Creator tier). Buffer quietly shipped a hosted MCP at mcp.buffer.com/mcp this year with OAuth, included on every plan even free, the catch is your plan caps API requests (3,000/mo free, 7,500 Essentials) and your agent's exploratory calls burn that budget fast. Metricool's MCP at ai.metricool.com/mcp ($22/mo) has the strongest analytics, clunkier posting flow through chat. PostFast at €10/mo covers 11 platforms including Google Business Profile and Telegram, OAuth 2.1 connector so no API key pasting, works on Claude Free/Pro/Max, setup took ~2 min. Postiz is open source, hosted trial or self-host with MCP support, free if you run the infra yourself. SocialClaw at $15/mo is the newest one, meters accounts and volume instead of credits.
+        
+          The Zapier MCP bridge (Claude → Zapier → your scheduler) works with anything but adds latency, a Zapier sub on top, and one more auth layer that breaks.
+        
+          Workflow once wired: write a week of content in one Claude conversation, say "schedule these across LinkedIn and X, one per day at 9am", done. Claude Code users can push further, mine reads git log weekly and drafts LinkedIn posts from shipped features.
+        
+          Honest cons. PostFast analytics are thin, I pair Metricool for reporting which adds $22. Blotato doubles PostFast's price for fewer platforms but wins on built-in AI content (trained templates, voiceovers). Buffer's request caps make it weak for agent-heavy use despite the free entry. Postiz eats savings in self-hosting time. And platform limits hit everyone equally: X API is pay-per-use now ($0.20 per post with a URL through direct API), LinkedIn approval is restrictive, TikTok forces sandbox audits, IG caps at 50 posts/24hr on Business accounts.
+        
+          What's your setup for posting from Claude?? Especially interested if anyone solved TikTok properly!
+  tier: T1
+  reasoning: |
+    "X API is pay-per-use now ($0.20 per post with a URL through direct API), LinkedIn approval is restrictive, TikTok forces sandbox audits, IG caps at 50 posts/24hr." Gated/metered social APIs, and he closes with "What's your setup for posting from Claude?? Especially interested if anyone solved TikTok properly!" Logged-in social posting from a real session is the literal answer.
+- url: https://www.reddit.com/r/ai_agents/comments/1v8auiu/
+  title: Why are machine-readable interfaces still optional integrations instead of being a funamental layer of the new web?
+  author: Keyron_
+  created: 2026-07-27T19:39:31.546000+0000
+  score: 1
+  num_comments: 6
+  status: To qualify
+  op_text: |-
+    Ever wondered about how the modern web is so focused on human interaction?
+        
+          Since the beginning, the web has been built around human interaction. You click buttons, you look at icons, you see colors, you read a very interpretation-heavy documentation, you fill forms and identify yourself.
+        
+          As of recently, some forms of web usage are shifting since more users are getting reliant on AI summaries, expecting agents to do the extensive search for them.
+        
+          However, there's a barrier for agents to navigate through a lot of websites, since the majority of websites are still human-first.
+        
+          Icons, colors, fonts that determine priority, forms, identification, buttons. The way for us to navigate comfortably is something that often requires agents to build workarounds.
+        
+          The current web makes an agent interpret a human, but that's just slowing them down.
+        
+          It's inefficient for an agent to fill forms, interpret an image, read a documentation in prose, try to dissect the HTML for what that button does. An agent needs information, context and a clear way to interact with the service as quickly as possible.
+        
+          A more native machine-facing layer, similar to APIs but not something developers have to manually integrate with one service at a time. An organized source of data, a more direct approach to the information they need.
+        
+          Another example, for a user who asks their agent for advice on buying a product:
+        
+          "Find me a laptop for programming under $1000, compare the best options, check the availability, and explain the tradeoffs"
+        
+          The agent has to go through the internet, to find a lot of information aimed at human interaction. A website with heavy JS, another one with more images than words and many that need some kind of interactivity for it to work. Thus slowing the search and even making it prone to mistakes.
+        
+          If the new web emerges with a machine-first layer, there'd be much faster searches, less room for error and a more reliable environment for agents to access information.
+        
+          As said, a machine-readable interface, instead of being hidden through layers. With focus on more direct information instead of surfing through abstraction.
+        
+          Doing experimenting on our own, but would love your views and experiments on how to make the navigation of agents through the internet much better.
+  tier: T2
+  reasoning: |
+    "there's a barrier for agents to navigate through a lot of websites, since the majority of websites are still human-first" and "not something developers have to manually integrate with one service at a time." Right diagnosis of our problem, but it's an essay asking for opinions on redesigning the web rather than a stuck workflow - engage softly with what works today.
+- url: https://www.reddit.com/r/ai_agents/comments/1v8o562/
+  title: Four messaging providers in and my agent still can't reliably reach people
+  author: iamstanty
+  created: 2026-07-28T04:50:15.332000+0000
+  score: 3
+  num_comments: 16
+  status: Qualification pending review
+  op_text: |-
+    Built an agent that lives in group chats. Started on Sendblue for iMessage, hit their free-plan rule where recipients have to verify before the bot is allowed to message them, paid up to remove that for groups. Added Telegram and SMS as fallbacks, then Linq as a fourth because it does iMessage, RCS and SMS through one API.
+        
+          Is anyone reaching users reliably on a single channel, or is stacking providers just what this is?
+  tier: T2
+  reasoning: |
+    "hit their free-plan rule where recipients have to verify before the bot is allowed to message them, paid up to remove that... Added Telegram and SMS as fallbacks, then Linq as a fourth." Gated messaging APIs and provider stacking; WhatsApp-style logged-in surfaces are core for us, but his primary channel (iMessage) is not a browser flow - partial fit.
+- url: https://www.reddit.com/r/ai_agents/comments/1v9q68u/
+  title: Looking for guidance on a multi-channel AI reply system
+  author: Cuncirps
+  created: 2026-07-29T08:33:41.063000+0000
+  score: 3
+  num_comments: 7
+  status: Qualification pending review
+  op_text: |-
+    I'm currently working in a multi-tenant web app that needs automated AI replies across Email and SMS channels, which means that both channels need inbound and outbound messaging plus an outbound calls only.
+        
+          Here's what I found and did so far:Both normal web search and AI search suggests the following platforms/services:
+        
+            
+          
+          Email: Mailgun
+        
+        
+          
+          SMS: Twilio
+        
+        
+          
+          Voice Call: Vapi.ai
+        
+        
+          
+          AI Model: OpenAI
+        
+        
+          
+          So I tried a prototype with those services and here's what I got today
+        
+            
+          
+          Email + OpenAI: (for inbound then auto-replies from customers)
+        
+        
+          
+          SMS + Open AI: (also for inbound then auto-replies) but requires $120/mo number subscription. The dealbreaker especially for cases like low volume days, which I expect will happen alot)
+        
+        
+          
+          Vapi: Works great, setup is straightforward and can make calls using the number from Twilio
+        
+        
+          
+          Notes:
+        
+            
+          
+          The architecture is provider-agnostic (can switch from OpenAI to Gemini, etc.), but this may change if you guys have a better solution/architecture on this one
+        
+        
+          
+          SMS will Initially starts in a specific region (e.g. Singapore) but can accomodate other countries as well later (seems Twilio's Geopermissions seems to handle this well)
+        
+        
+          
+          I'm sure I'm missing some patterns or setups that would fit this better. I could just keep going with whatever an AI agent recommends, but I wanted to check with people here who've actually built AI automation systems like this.
+        
+          Is there a better stack or architecture for this use case, especially something that avoids Twilio's fixed SMS subscription cost?
+        
+          Thanks!
+  tier: T2
+  reasoning: |
+    "SMS + Open AI... but requires $120/mo number subscription. The dealbreaker especially for cases like low volume days." Expensive-API pain, but the honest fix is a cheaper telephony provider rather than browser automation - soft, genuinely-helpful angle only.
