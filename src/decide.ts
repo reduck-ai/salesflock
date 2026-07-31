@@ -10,7 +10,7 @@
 
 import { getStore } from "./stores/index.js";
 import type { AgentConfig, PromptSpec, Row, Store } from "./stores/index.js";
-import { idOf } from "./stores/notion.js";
+import { idOf, pageUrl } from "./stores/notion.js";
 import { reviewOf, feedbackOf, renderFeedback } from "./review.js";
 import * as llm from "./ai/llm.js";
 import { collectQuotes, findQuotes, inRange, quoteKey, type Statement } from "./anchor.js";
@@ -132,15 +132,48 @@ export const createReviewer = ({ config, renderEvidence, store: given }: Reviewe
 		return versions.reduce((a, b) => (Number(b.fields.Version ?? 0) > Number(a.fields.Version ?? 0) ? b : a));
 	};
 
+	// showPrompt(kind) — the live contract that governs a kind TODAY, shaped for reading: the
+	// versioned row, the authored body, both schemas parsed (loud — a malformed schema is a broken
+	// contract), and the fingerprint a Decision made now would pin. The read counterpart of
+	// showDecision; `sflock prompts` prints it, and the staleness check compares against its hash.
+	const showPrompt = async (kind: string) => {
+		const prompt = await livePrompt(kind);
+		const body = await store.body(prompt.id);
+		const [inputSchema, outputSchema] = (["Input schema", "Output schema"] as const).map((k) => {
+			if (!prompt.fields[k]) throw new Error(`prompt "${kind}" has no ${k}`);
+			try {
+				return JSON.parse(String(prompt.fields[k])) as Record<string, unknown>;
+			} catch (e) {
+				throw new Error(`prompt "${kind}" ${k} is not valid JSON: ${(e as Error).message}`);
+			}
+		});
+		return {
+			kind,
+			id: prompt.id,
+			url: pageUrl(prompt.id),
+			version: Number(prompt.fields.Version ?? 0),
+			hash: fingerprint(contractOf(body, prompt.fields)),
+			inputSchema,
+			outputSchema,
+			body
+		};
+	};
+
 	// instructionsHash(kind) — the fingerprint the live contract WOULD get now, so a caller can
 	// compare it to what a Decision pinned. Equal ⇒ that judgment's contract still reads the same;
 	// different ⇒ someone edited the body (or the shared page it syncs) or a schema column in place
-	// instead of adding a version. Its own call, not part of showDecision, so the few-shot builder
-	// never pays for it.
-	const instructionsHash = async (kind: string): Promise<string> => {
-		const prompt = await livePrompt(kind);
-		return fingerprint(contractOf(await store.body(prompt.id), prompt.fields));
-	};
+	// instead of adding a version.
+	const instructionsHash = async (kind: string): Promise<string> => (await showPrompt(kind)).hash;
+
+	// prompts() — every decision kind this agent declares, each with its live contract's version and
+	// fingerprint: the index `sflock prompts list` prints (`show` is one kind in full).
+	const prompts = async () =>
+		Promise.all(
+			Object.entries(config.prompts ?? {}).map(async ([key, spec]) => {
+				const { version, hash, url, id } = await showPrompt(spec.name);
+				return { key, kind: spec.name, pending: spec.pending, version, hash, id, url };
+			})
+		);
 
 	// showDecision(handle) — one Decision by the shared id, shaped for reading: the LLM's decision
 	// always (Output, Reasoning statements, and the Evidence RE-RENDERED from the frozen Input the way
@@ -196,7 +229,7 @@ export const createReviewer = ({ config, renderEvidence, store: given }: Reviewe
 		});
 	};
 
-	return { store, appLink, kindOf, livePrompt, instructionsHash, showDecision, list };
+	return { store, appLink, kindOf, livePrompt, showPrompt, prompts, instructionsHash, showDecision, list };
 };
 
 export interface DeciderDeps extends ReviewerDeps {
@@ -253,22 +286,14 @@ export const createDecider = (deps: DeciderDeps) => {
 		const subject = await resolveSubject(handle);
 		const f = subject.fields;
 
-		const prompt = await reviewer.livePrompt(spec.name);
-		// The instructions are the Prompt PAGE's BODY — persona and criteria as one authored markdown
-		// document, not a column (prose is written, not compiled). The columns hold only what a machine
-		// reads: the Input/Output schemas below, the Version above.
-		const system = await store.body(prompt.id);
+		// The live contract, via the ONE shaping (showPrompt): the instructions are the Prompt PAGE's
+		// BODY — persona and criteria as one authored markdown document, not a column (prose is
+		// written, not compiled) — plus the parsed Input/Output schemas and the fingerprint the
+		// Decision below pins.
+		const prompt = await reviewer.showPrompt(spec.name);
+		const { body: system, inputSchema, outputSchema } = prompt;
 		if (!system.trim())
 			throw new Error(`prompt "${spec.name}" has an empty body — the instructions live in the page body`);
-		// The contract's shape. Parse loud — a malformed schema is a broken contract, not a guess.
-		const [inputSchema, outputSchema] = (["Input schema", "Output schema"] as const).map((k) => {
-			if (!prompt.fields[k]) throw new Error(`prompt "${spec.name}" has no ${k}`);
-			try {
-				return JSON.parse(String(prompt.fields[k])) as Record<string, unknown>;
-			} catch (e) {
-				throw new Error(`prompt "${spec.name}" ${k} is not valid JSON: ${(e as Error).message}`);
-			}
-		});
 
 		// Project the Person onto the Input schema, then render it for the LLM. The app renders the
 		// same map from the frozen data, so improving `renderEvidence` reflows every Decision.
@@ -368,7 +393,7 @@ export const createDecider = (deps: DeciderDeps) => {
 				Reasoning: JSON.stringify(statements),
 				Input: JSON.stringify(ctx.input),
 				Model: llm.modelName(config.model),
-				"Instructions hash": fingerprint(contractOf(ctx.system, ctx.prompt.fields)),
+				"Instructions hash": ctx.prompt.hash,
 				Prompt: [ctx.prompt.id],
 				[config.entity]: [entityId],
 				...(dependsOn?.length ? { "Depends on": dependsOn } : {})

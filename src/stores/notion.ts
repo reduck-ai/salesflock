@@ -205,7 +205,7 @@ const serialize = (value: unknown, p: NotionProp): Record<string, unknown> => {
 // the page whose keyProp equals record[keyProp] is updated in place, else a new page is
 // created. The inverse of describe; model semantics stay with the caller. Returns the page
 // id, its url, and whether it was created.
-const pageUrl = (id: string): string => `https://www.notion.so/${id.replace(/-/g, "")}`;
+export const pageUrl = (id: string): string => `https://www.notion.so/${id.replace(/-/g, "")}`;
 
 // The shared lookup: resolve the model, load its live property map, and find the one
 // page whose keyProp equals value. upsert writes through it; read reads through it.

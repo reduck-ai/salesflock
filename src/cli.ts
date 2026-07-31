@@ -7,6 +7,8 @@
 //   sflock decisions list --agent <id>  the review queue (or --reviewed/--all), each flagged hasFeedback/overturned
 //   sflock decisions list --agent <id> --feedback   every decision I have given feedback on, with the feedback
 //   sflock decisions show --agent <id> <decision> [--feedback]   one decision, or just its feedback
+//   sflock prompts list --agent <id>    each decision kind's LIVE contract: version + fingerprint
+//   sflock prompts show --agent <id> <kind>   one live contract in full (body, schemas, hash)
 //
 // pull reads the agent's config.ts (destination + model→table map) and, per model, asks the
 // store to `describe` it (a JSON Schema) then compiles that to a TS type — no intermediate
@@ -112,6 +114,32 @@ decisions
 				? { pinned: shown.instructions, live, stale: shown.instructions !== live }
 				: { pinned: shown.instructions ?? null, live: live ?? null };
 		console.log(JSON.stringify({ ...shown, instructions }, null, 2));
+	});
+
+// prompts — the live Prompt contracts, same reviewer, read-only. `list` indexes every declared
+// kind (version + fingerprint — the `live` side of decisions show's staleness check); `show`
+// prints one contract in full: the authored body, both schemas, and the hash a Decision made now
+// would pin. Authoring stays in Notion's editor (prose is authored, not compiled).
+const prompts = program.command("prompts").description("Inspect an agent's live Prompt contracts (read-only).");
+
+prompts
+	.command("list")
+	.description("Every decision kind the agent declares → its live contract's version, fingerprint, and page.")
+	.requiredOption("--agent <id>", "agent under agents/ whose config.ts declares the prompts")
+	.action(async ({ agent }: { agent: string }) => {
+		const reviewer = createReviewer({ ...loadAgent(agent) });
+		console.log(JSON.stringify(await reviewer.prompts(), null, 2));
+	});
+
+prompts
+	.command("show")
+	.argument("<kind>", `prompt key in config.prompts (e.g. "qualify") or the Prompt's full Name`)
+	.description("One kind's live contract in full: body (the authored instructions), Input/Output schemas, version, fingerprint.")
+	.requiredOption("--agent <id>", "agent under agents/ whose config.ts declares the prompts")
+	.action(async (kind: string, { agent }: { agent: string }) => {
+		const { config } = loadAgent(agent);
+		const reviewer = createReviewer({ ...loadAgent(agent) });
+		console.log(JSON.stringify(await reviewer.showPrompt(config.prompts?.[kind]?.name ?? kind), null, 2));
 	});
 
 program.parseAsync().catch((e: unknown) => {
