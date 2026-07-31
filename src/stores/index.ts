@@ -18,10 +18,11 @@ export interface Store {
 	upsert(model: string, record: object, key: string): Promise<Ref>; // idempotent write, keyed by `key`
 	read(model: string, key: string, value: unknown): Promise<Row>; // the one row where key = value
 	query(model: string, filter: object): Promise<Row[]>; // every row matching a store-native filter
-	// ONE page of matches + whether more exist. The worklist primitive: a consumer that DRAINS
-	// (process a page, which moves rows out of the filter, then re-query) may see a partial set;
-	// one that reasons on absence must use `query`, which refuses truncation.
-	queryPage(model: string, filter: object): Promise<{ rows: Row[]; more: boolean }>;
+	// ONE page of matches + whether more exist (and the cursor to the next page when it does).
+	// The worklist primitive: a consumer that DRAINS (process a page, which moves rows out of the
+	// filter, then re-query) may see a partial set; one that reasons on absence must use `query`,
+	// which refuses truncation; one that wants the WHOLE set walks the cursor via `queryAll`.
+	queryPage(model: string, filter: object, cursor?: string): Promise<{ rows: Row[]; more: boolean; cursor?: string }>;
 	get(id: string): Promise<Row>; // the row with this id — model-agnostic (an id implies its model)
 	title(model: string, id: string): Promise<string>; // a record's name, by id (the join)
 	body(id: string): Promise<string>; // a page's CONTENT as markdown — where authored prose lives
@@ -37,6 +38,24 @@ import { hubspot } from "./hubspot.js";
 export const STORES = { notion, hubspot } as const;
 
 export const getStore = (name: keyof typeof STORES): Store => STORES[name];
+
+// queryAll(store, model, filter) — EVERY row matching the filter, however many pages it spans: the
+// full-read primitive (a dump, an export), walking queryPage's cursor to the end. The third way to
+// read a set, beside `query` (refuses truncation — absence-reasoning) and a drain (partial pages
+// are fine — processing empties the filter). Loud if a store reports more pages without a cursor
+// to reach them — a silent stop there would be `query`'s truncation bug reintroduced.
+export const queryAll = async (store: Store, model: string, filter: object): Promise<Row[]> => {
+	const rows: Row[] = [];
+	let cursor: string | undefined;
+	do {
+		const page = await store.queryPage(model, filter, cursor);
+		rows.push(...page.rows);
+		if (page.more && !page.cursor)
+			throw new Error(`queryAll: "${model}" has more rows but the store returned no cursor`);
+		cursor = page.more ? page.cursor : undefined;
+	} while (cursor);
+	return rows;
+};
 
 // A prompt row and its pipeline effect. `resolve` is the whole semantics: the committed
 // output IS the decision, so a single function of that output yields both where the Lead

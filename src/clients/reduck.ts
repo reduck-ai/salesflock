@@ -43,7 +43,10 @@ export const run = <T = unknown>(addr: string, args: Args): Promise<T> =>
 		// The args self-tag both lines, so concurrent runs stay paired across the interleaved output.
 		log("reduck", `${addr} ${pairs.join(" ")} …`);
 		const t0 = Date.now();
-		const { stdout, stderr } = await exec(cmd, [...pre, "run", "--script", addr, ...pairs]);
+		// 64MB stdout headroom: a busy subreddit's week of full post bodies overflows Node's 1MB default.
+		const { stdout, stderr } = await exec(cmd, [...pre, "run", "--script", addr, ...pairs], {
+			maxBuffer: 64 * 1024 * 1024
+		});
 		const runId = stderr.match(/run_id:\s*(\S+)/)?.[1] ?? "?";
 		log("reduck", `${addr} ${pairs.join(" ")} → ${runId} (${Date.now() - t0}ms)`);
 		return JSON.parse(stdout) as T;

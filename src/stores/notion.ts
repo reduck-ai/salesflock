@@ -289,16 +289,24 @@ export const read = async (model: string, keyProp: string, value: unknown): Prom
 // indistinguishable from a complete one.
 const PAGE = 100;
 
-// queryPage(model, filter) — ONE page of matches plus whether more exist: the worklist primitive.
-// A drain loop (process a page — which moves rows out of the filter — then re-query) is the one
-// legitimate consumer of a partial set; anything reasoning on absence goes through `query`.
-export const queryPage = async (model: string, filter: object): Promise<{ rows: Row[]; more: boolean }> => {
+// queryPage(model, filter, cursor?) — ONE page of matches, whether more exist, and the cursor to
+// the next page: the worklist primitive (a drain re-queries with no cursor — processing moved the
+// rows out) and, via the cursor, `queryAll`'s full read. Anything reasoning on absence goes
+// through `query`.
+export const queryPage = async (
+	model: string,
+	filter: object,
+	cursor?: string
+): Promise<{ rows: Row[]; more: boolean; cursor?: string }> => {
 	const dsId = await resolveDsId(model);
-	const { results, has_more } = await api<{
+	const { results, has_more, next_cursor } = await api<{
 		results: { id: string; properties: Record<string, NotionValue> }[];
 		has_more?: boolean;
-	}>(`/data_sources/${dsId}/query`, { body: { filter, page_size: PAGE } });
-	return { rows: results.map(rowOf), more: !!has_more };
+		next_cursor?: string | null;
+	}>(`/data_sources/${dsId}/query`, {
+		body: { filter, page_size: PAGE, ...(cursor ? { start_cursor: cursor } : {}) }
+	});
+	return { rows: results.map(rowOf), more: !!has_more, ...(next_cursor ? { cursor: next_cursor } : {}) };
 };
 
 export const query = async (model: string, filter: object): Promise<Row[]> => {
