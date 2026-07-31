@@ -94,6 +94,7 @@
 	let activeMi = $state<number | null>(null); // the cursor: one quote (a mark index)
 	let commenting = $state<number | null>(null); // the claim being annotated (distinct from the proof cursor, so Tab never opens a note)
 	let evEl = $state<HTMLElement>();
+	let bodyEl = $state<HTMLElement>(); // the dock's scroller (.dbody) — the claim-row park below
 
 	// every quote in claim order, tagged with its statement index — the flat list the cursor
 	// walks; a claim's marks are adjacent, so stepping reads claim by claim, proof by proof.
@@ -252,6 +253,16 @@
 		const m = evEl?.querySelector(`mark.hl[data-mi="${i}"]`);
 		if (m) window.scrollTo(0, window.scrollY + m.getBoundingClientRect().top - PARK);
 	};
+	// the dock twin of the evidence park: whenever the cursor lands on a claim, its row rises to
+	// the top of the dock's own scroller — Tab must never leave the active claim clipped behind
+	// the acts row. An effect (not part of goto) so it runs AFTER the pane has rendered, and
+	// covers every path that moves the cursor. Scrolls only the dock's scroller, never the window.
+	$effect(() => {
+		void activeSi;
+		const row = bodyEl?.querySelector(".claim.active");
+		if (row && bodyEl)
+			bodyEl.scrollTop += row.getBoundingClientRect().top - bodyEl.getBoundingClientRect().top - 8;
+	});
 	// focus a claim without disturbing the cursor when it already sits inside it: clicking a
 	// claim you're already reading keeps the exact quote Tab picked; only a different claim
 	// jumps to its first proof. The one "focus a claim" gesture the dock and the margin share.
@@ -612,7 +623,7 @@
 	<!-- 0fr → 1fr: the fold animates without measuring anything, so no height math and no flash -->
 	<div class="dstack">
 		<div class="dwrap">
-			<div class="dbody">
+			<div class="dbody" bind:this={bodyEl}>
 				{#if !reviewing}
 					<!-- PROPOSAL — the default pane: the agent's proposal, headed by the Prompt's framing,
 	     editable within its schema; committing it IS the decision. -->
