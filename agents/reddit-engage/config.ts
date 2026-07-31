@@ -33,13 +33,13 @@ export default {
 	ladder: ["To qualify", "Qualification pending review", "To engage", "Draft pending review", "Approved"],
 	prompts: {
 		// Is this thread worth answering? The one gate of the funnel (no deterministic pre-filter).
-		// Its committed output IS the decision: "Not interesting" is the terminal miss (non-advancing,
-		// so the review app archives any reply drafted against it); the other tiers advance.
+		// Its committed output IS the decision: tier "No" is the terminal miss (non-advancing, so the
+		// review app archives any reply drafted against it); T1/T2 advance.
 		qualify: {
 			name: "Reddit Thread Qualification",
 			pending: "Qualification pending review",
 			resolve: (o) =>
-				o.tier === "Not interesting"
+				o.tier === "No"
 					? { status: "Not qualified", advances: false }
 					: { status: "To engage", advances: true }
 		},

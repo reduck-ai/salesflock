@@ -11,6 +11,7 @@ import "../../src/env.js";
 import { Command } from "commander";
 import { renderError } from "../../src/errors.js";
 import { batch } from "../../src/concurrency.js";
+import { stringify as stringifyYaml } from "yaml";
 import { tools } from "./tools.js";
 
 const out = (v: unknown) => console.log(JSON.stringify(v, null, 2));
@@ -38,6 +39,18 @@ program
 	.option("--show", "print the judgment context (contract + evidence); writes nothing")
 	.description("Manually (re)draft a reply for a thread — standalone, no qualification dependency, on the frozen evidence. Batched.")
 	.action(async (threads: string[], { show }) => out(show ? await batch(threads, tools.context) : await batch(threads, tools.draft)));
+
+program
+	.command("dump")
+	.argument("<subreddit>", "subreddit whose stored threads to dump (r/ prefix optional)")
+	.option("--limit <n>", "keep only the newest <n> threads (the dump is newest-first)")
+	.description("Every stored thread of one subreddit as raw YAML on stdout — the frozen evidence (title + full post) plus current Status, newest first. Reads everything, writes nothing.")
+	.action(async (subreddit: string, { limit }: { limit?: string }) => {
+		const all = await tools.dump(subreddit);
+		const threads = limit ? all.slice(0, Number(limit)) : all;
+		console.error(`r/${subreddit.replace(/^r\//i, "")}: ${threads.length} of ${all.length} threads`);
+		console.log(stringifyYaml(threads, { lineWidth: 0 }));
+	});
 
 program
 	.command("list")

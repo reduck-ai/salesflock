@@ -5,6 +5,5 @@ export interface Prompts {
   "Input schema"?: string;
   Name: string;
   "Output schema"?: string;
-  Proposal?: string;
   Version?: number;
 }

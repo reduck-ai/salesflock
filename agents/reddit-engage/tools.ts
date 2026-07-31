@@ -3,21 +3,22 @@
 //   scan   → each watched subreddit's NEW threads (one listing run each — the listing's `body` is
 //            the post's FULL text, so discovery already carries the evidence; no per-thread fetch
 //            exists in this agent), queued as Reddit Threads at "To qualify". No LLM.
-//   engage → qualify (LLM, title + post) → if it scores well, a reply draft (LLM) held behind the
-//            qualification via dependsOn, so the review app reveals the draft only once a human
-//            approves the qualification (and archives it on "Not interesting"). No args ⇒ drain
-//            every thread at "To qualify"; either stage re-runs safely after a crash.
-//   [human gate] → confirming the reply draft moves it to "Approved" (sending is unwired).
+//   engage → qualify (LLM, title + post), AUTO-ACCEPTED by the tool (`accept` below — the prompt
+//            is calibrated; the Decision stays as the committed trace) → if it advances, a reply
+//            draft (LLM, dependsOn the committed gate) lands straight in the review queue. No
+//            args ⇒ drain every thread at "To qualify"; either stage re-runs safely after a crash.
+//   [human gate] → ONLY the reply drafts: confirming one moves the thread to "Approved" (sending
+//            is unwired); a "No" qualification terminally parks the thread at "Not qualified".
 // READ-ONLY: never posts to Reddit. Monotonic + idempotent on the canonical Thread URL.
 
 import { getSubredditThreads, threadUrl } from "../../src/clients/reddit/index.js";
-import { getStore } from "../../src/stores/index.js";
+import { getStore, queryAll } from "../../src/stores/index.js";
 import { createDecider } from "../../src/decide.js";
 import { renderEvidence } from "./evidence.js";
 import { projectInput } from "../../src/project.js";
 import { mapLimit } from "../../src/concurrency.js";
 import { drain } from "../../src/drain.js";
-import { stringify } from "yaml";
+import { parse, stringify } from "yaml";
 import config, { SUBREDDITS, OWNER } from "./config.js";
 import type { Subject } from "../../src/decide.js";
 import type { PromptSpec } from "../../src/stores/index.js";
@@ -69,7 +70,7 @@ const statusOf = async (u: string): Promise<string | null> => {
 // frozen straight from the listing (title + the FULL post body — all a qualification needs). Never
 // queues the owner (you don't reply to yourself). Monotonic: "To qualify" is written only when the
 // thread hasn't already advanced (or terminally missed), so a re-run converges, never moves backward.
-const queue = async (
+export const queue = async (
 	t: Threads["threads"][number],
 	subreddit: string,
 	ranAt: string
@@ -124,22 +125,41 @@ export const tools = {
 			return { subreddit, seen: threads.length, queued };
 		}),
 
-	// engage — the judgment chain for one thread: qualify, and — the moment it scores well — the
-	// reply draft, bound to the qualification via `dependsOn` so the review app keeps it hidden
-	// until a human approves (and drops it for good on "Not interesting"). Monotonic: no-ops once a
-	// qualification is pending or beyond (and on the terminal "Not qualified"), so a re-run — or
-	// engagePending — never double-drafts.
+	// engage — the judgment chain for one thread: qualify, accept, and — when it advances — the
+	// reply draft (dependsOn the committed gate, so the app shows it at once; the human gate is
+	// ONLY the drafts). Qualification is calibrated (eval_qualify.mjs green on every ground-truth
+	// digest), so the tool commits its own qualification instead of parking it at the human gate:
+	// "Final output" ≡ Output — exactly what the review app's Confirm writes, so the Decision stays
+	// as the trace and agreement derives as Accepted — the thread moves straight to
+	// resolve(output).status (forward, or the terminal "Not qualified"), and a page comment answers
+	// the audit question: no human reviewed this. Monotonic: no-ops once a qualification is pending
+	// or beyond (and on the terminal "Not qualified"), so a re-run — or engagePending — never
+	// double-drafts.
 	engage: async (url: string) => {
 		const u = threadUrl(url);
 		const status = await statusOf(u);
 		if (status === "Not qualified" || rank(status) >= rank("Qualification pending review"))
 			return { url: u, skipped: true, status };
 		const q = await decider.decide("qualify", u);
-		const good = config.prompts!.qualify.resolve(q.output).advances;
-		const draft = good ? await decider.decide("reply", u, { dependsOn: [q.id] }) : null;
+		const move = config.prompts!.qualify.resolve(q.output);
+		const tier = String((q.output as { tier?: unknown }).tier ?? "");
+		const name = String((await store.get(q.id)).fields.Name);
+		// The Tier lands on the THREAD row, not just inside the qualification's Output: the thread is
+		// the entity BOTH decisions resolve, so it is the one place the two can share data. That makes
+		// the tier available to the reply the same way everything else is — the reply prompt's Input
+		// schema names it, so it freezes into the draft's Input and renders as evidence (a reviewer
+		// sees what the reply is answering AND how hard a fit it was). It is also just a column, so
+		// the Notion table filters and sorts by it for free.
+		await Promise.all([
+			store.upsert(config.models.Decisions, { Name: name, "Final output": JSON.stringify(q.output) }, "Name"),
+			store.upsert(config.models.RedditThreads, { "Thread URL": u, Status: move.status, Tier: tier }, "Thread URL"),
+			store.comment(q.id, "auto-accepted by the funnel — qualification is calibrated; no human reviewed this decision")
+		]);
+		const draft = move.advances ? await decider.decide("reply", u, { dependsOn: [q.id] }) : null;
 		return {
 			url: u,
 			tier: String((q.output as { tier?: unknown }).tier ?? "?"),
+			status: move.status,
 			qualify: q.open ?? q.id,
 			...(draft ? { draft: draft.open ?? draft.id } : {})
 		};
@@ -152,9 +172,37 @@ export const tools = {
 			tools.engage(String(r.fields["Thread URL"]))
 		),
 
-	// draft — manually (re-)draft a reply for one thread as a STANDALONE Decision (no qualification
-	// dependency), on the frozen evidence. `context` prints the frozen judgment context, writes nothing.
-	draft: (url: string) => decider.decide("reply", threadUrl(url)),
+	// dump — every stored thread of one subreddit, raw: the frozen Thread seed (title + full post,
+	// exactly as `queue` froze it) plus the row's current Status. A full read, not a worklist — it
+	// walks the whole set via queryAll (a filter page can't prove the rest). Filtered on the
+	// canonical Thread URL, never the Subreddit column: threadUrl lowercases the sub, so the key
+	// matches however the scan was cased. Newest first. Reads everything, writes nothing.
+	dump: async (subreddit: string) => {
+		const sub = subreddit.replace(/^r\//i, "").toLowerCase();
+		const rows = await queryAll(store, config.models.RedditThreads, {
+			property: "Thread URL",
+			url: { contains: `/r/${sub}/comments/` }
+		});
+		return rows
+			.map((r) => ({
+				url: String(r.fields["Thread URL"] ?? ""),
+				...((parse(String(r.fields.Thread ?? "")) ?? {}) as object),
+				status: r.fields.Status ?? null
+			}))
+			.sort((a, b) =>
+				String((b as { created?: string }).created ?? "").localeCompare(
+					String((a as { created?: string }).created ?? "")
+				)
+			);
+	},
+
+	// draft — manually (re-)draft a reply for one thread on the frozen evidence. Standalone by
+	// default (no dependency, so it moves the thread to the draft gate); pass `dependsOn` to attach
+	// the redraft to the qualification it belongs behind, which is what keeps a replacement draft in
+	// its chain — same provenance, and the review order still sorts it at its gate's slot.
+	// `context` prints the frozen judgment context, writes nothing.
+	draft: (url: string, dependsOn?: string[]) =>
+		decider.decide("reply", threadUrl(url), dependsOn?.length ? { dependsOn } : {}),
 	context: (url: string) => decider.context("reply", threadUrl(url)),
 
 	// list / show — the review queue and one Decision, straight off the shared engine.

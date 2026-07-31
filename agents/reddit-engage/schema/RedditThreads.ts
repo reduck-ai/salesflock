@@ -23,4 +23,5 @@ export interface RedditThreads {
   Subreddit?: string;
   Thread?: string;
   "Thread URL"?: string;
+  Tier?: "T1" | "T2" | "No";
 }
