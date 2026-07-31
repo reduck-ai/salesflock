@@ -94,7 +94,6 @@
 	let activeMi = $state<number | null>(null); // the cursor: one quote (a mark index)
 	let commenting = $state<number | null>(null); // the claim being annotated (distinct from the proof cursor, so Tab never opens a note)
 	let evEl = $state<HTMLElement>();
-	let dockEl = $state<HTMLElement>();
 
 	// every quote in claim order, tagged with its statement index — the flat list the cursor
 	// walks; a claim's marks are adjacent, so stepping reads claim by claim, proof by proof.
@@ -111,9 +110,7 @@
 	let reviewing = $state(false);
 
 	// The dock's geometry is ONE number the reviewer owns: the body scroller's height, dragged via
-	// the head and remembered in localStorage. It rides as an inline --dock-body var and also sets
-	// the page's bottom padding, so the focus-line runway (goto parks a quote at dockTop/2) tracks
-	// whatever height was chosen — the two can't drift.
+	// the head, remembered in localStorage, riding as an inline --dock-body var.
 	const DOCK_KEY = "dock-body";
 	const clampBody = (h: number) => Math.round(Math.max(56, Math.min(h, window.innerHeight * 0.6)));
 	let dockBody = $state(
@@ -211,11 +208,11 @@
 			return;
 		}
 		const base = el.getBoundingClientRect().top;
-		// pin each claim beside the one of its quotes nearest the line goto() parks a focused
+		// pin each claim beside the one of its quotes nearest the PARK line goto() rests a focused
 		// quote at, so a claim with several proofs keeps its note beside the one in view — never
 		// stranded off-screen at the first, never doubled. In document order (claims and quotes
 		// are ordered independently).
-		const line = (dockEl ? dockEl.getBoundingClientRect().top / 2 : window.innerHeight / 2) - base;
+		const line = PARK - base;
 		anchors = statements
 			.flatMap((_, si) => {
 				const ms = [...el.querySelectorAll(`mark.hl[data-si="${si}"]`)].map((m) => ({
@@ -240,15 +237,20 @@
 		});
 	});
 
-	// center the proof in the band the dock leaves visible above it; focusing a proof is
-	// reading the reasoning, so it also opens the review pane
+	// THE PARK LINE — where a focused quote comes to rest: just under the sticky top band. One
+	// constant, three consumers (goto's scroll target, the margin pins' anchor line, the page's
+	// bottom runway), so they can't disagree.
+	const PARK = 96;
+	// park the proof at the line; focusing a proof is reading the reasoning, so it also opens the
+	// review pane. The jump is ABSOLUTE (scrollY + rect.top = the mark's document position) and
+	// INSTANT: a smooth glide gets cancelled by the scroll-tracking pin re-anchoring (and rapid
+	// Tab steps compound mid-animation positions), stranding the quote short of the line — a jump
+	// always lands, and the .current highlight says where you are.
 	const goto = (i: number) => {
 		reviewing = true;
 		activeMi = i;
 		const m = evEl?.querySelector(`mark.hl[data-mi="${i}"]`);
-		if (!m || !dockEl) return;
-		const band = dockEl.getBoundingClientRect().top;
-		window.scrollBy({ top: m.getBoundingClientRect().top - band / 2, behavior: "smooth" });
+		if (m) window.scrollTo(0, window.scrollY + m.getBoundingClientRect().top - PARK);
 	};
 	// focus a claim without disturbing the cursor when it already sits inside it: clicking a
 	// claim you're already reading keeps the exact quote Tab picked; only a different claim
@@ -411,7 +413,7 @@
 	}}
 />
 
-<div class="page" style={`padding-bottom: calc(50vh + ${Math.round(dockBody / 2) + 70}px)`}>
+<div class="page" style={`padding-bottom: calc(100vh - ${PARK}px)`}>
 	<div class="topmeta">
 		<div class="rail" title={pos ? `${pos} / ${total}` : undefined}>
 			<div class="fill" style={`width:${pos ? (pos / total) * 100 : 0}%`}></div>
@@ -551,7 +553,7 @@
      Confirm is reachable whatever the body is doing). The head is identical folded or not —
      it IS the dock when folded, so nothing moves under the pointer — and it carries what
      the top band used to duplicate. -->
-<div class="dock" class:open bind:this={dockEl} style={`--dock-body:${dockBody}px`}>
+<div class="dock" class:open style={`--dock-body:${dockBody}px`}>
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div
 		class="dhead"
@@ -725,10 +727,9 @@
 	.page {
 		max-width: 720px;
 		margin: 0 auto;
-		/* the deep bottom pad is inline — it tracks the dock's dragged height: goto() parks a
-		   focused quote at half the band above the dock, so a quote on the document's LAST line
-		   needs ~(50vh + dock/2) of runway below it to reach that line. Anything less strands
-		   bottom claims behind the dock. */
+		/* the deep bottom pad is inline (100vh − PARK): goto() rests a focused quote at the PARK
+		   line near the top, so a quote on the document's LAST line needs almost a full viewport
+		   of runway below it to get there. Anything less strands bottom claims behind the dock. */
 		padding: 0 4px;
 	}
 	/* the card's half of the top bar — the progress rail alone; where you are and how you step
