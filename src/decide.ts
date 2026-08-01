@@ -104,6 +104,19 @@ export interface ReviewerDeps {
 	store?: Store; // defaults to the config's destination store
 }
 
+// A kind's live contract, shaped once by showPrompt: the versioned Prompt row, the authored body,
+// both schemas parsed, and the fingerprint a Decision made now would pin.
+export interface Contract {
+	kind: string;
+	id: string;
+	url: string;
+	version: number;
+	hash: string;
+	inputSchema: Record<string, unknown>;
+	outputSchema: Record<string, unknown>;
+	body: string;
+}
+
 const SCOPE = {
 	pending: { property: "Final output", rich_text: { is_empty: true } },
 	reviewed: { property: "Final output", rich_text: { is_not_empty: true } }
@@ -136,7 +149,28 @@ export const createReviewer = ({ config, renderEvidence, store: given }: Reviewe
 	// versioned row, the authored body, both schemas parsed (loud — a malformed schema is a broken
 	// contract), and the fingerprint a Decision made now would pin. The read counterpart of
 	// showDecision; `sflock prompts` prints it, and the staleness check compares against its hash.
-	const showPrompt = async (kind: string) => {
+	//
+	// Resolved ONCE per reviewer (the `dsCache` idiom of stores/notion.ts, a promise per key so
+	// concurrent callers share one flight). A contract is invariant, so re-reading it per judged item
+	// was README #7's "shared context computed once" broken in the most expensive way available — the
+	// body is a paged, recursive block walk that dwarfs the per-item reads. And it is a CORRECTNESS
+	// fix: an edit landing mid-batch used to split the batch across two contracts (exactly what
+	// `fingerprint` above exists to catch); one reviewer is now one contract, so a run is atomic with
+	// respect to its instructions. Instance-scoped, never module-global: a CLI process is one run,
+	// and a long-lived consumer just makes a fresh reviewer.
+	const contracts = new Map<string, Promise<Contract>>();
+	const showPrompt = (kind: string): Promise<Contract> => {
+		const hit = contracts.get(kind);
+		if (hit) return hit;
+		// A failure is not cached — it would poison the process; fail loud, then let a retry re-read.
+		const flight = resolveContract(kind).catch((e: unknown) => {
+			contracts.delete(kind);
+			throw e;
+		});
+		contracts.set(kind, flight);
+		return flight;
+	};
+	const resolveContract = async (kind: string): Promise<Contract> => {
 		const prompt = await livePrompt(kind);
 		const body = await store.body(prompt.id);
 		const [inputSchema, outputSchema] = (["Input schema", "Output schema"] as const).map((k) => {
@@ -258,8 +292,25 @@ export const createDecider = (deps: DeciderDeps) => {
 
 	// examplesFor(key, excludeName) — the few-shot block: the Decisions a human flagged
 	// `Include as example` (and committed), of this prompt kind, minus the person being judged.
+	//
+	// Shared context, so fetched ONCE per kind per decider (same reason and same idiom as the
+	// contract above: the corpus doesn't change during a run, and it costs a table query plus a read
+	// per example). Only the exclusion is per-item, and it is a filter over what was already
+	// fetched — hence one more than the limit is kept, so excluding the subject can't shrink the
+	// block below EXAMPLE_LIMIT.
 	const EXAMPLE_LIMIT = 4;
-	const examplesFor = async (key: string, excludeName: string): Promise<string> => {
+	const corpora = new Map<string, Promise<{ name: string; block: string }[]>>();
+	const corpusFor = (key: string): Promise<{ name: string; block: string }[]> => {
+		const hit = corpora.get(key);
+		if (hit) return hit;
+		const flight = loadCorpus(key).catch((e: unknown) => {
+			corpora.delete(key);
+			throw e;
+		});
+		corpora.set(key, flight);
+		return flight;
+	};
+	const loadCorpus = async (key: string): Promise<{ name: string; block: string }[]> => {
 		const spec = config.prompts![key];
 		const rows = await store.query(config.models.Decisions, {
 			and: [
@@ -269,14 +320,22 @@ export const createDecider = (deps: DeciderDeps) => {
 		});
 		const mine = rows
 			.filter((r) => kindOf(String(r.fields.Name)) === spec.name)
-			.filter((r) => !String(r.fields.Name).startsWith(excludeName))
-			.slice(0, EXAMPLE_LIMIT);
+			.slice(0, EXAMPLE_LIMIT + 1);
 		const shown = await Promise.all(mine.map((r) => showDecision(r.id)));
-		const blocks = shown.map((s) => {
+		return shown.map((s) => {
 			const output = s.review?.human.output ?? s.output;
 			const response = JSON.stringify({ output, statements: s.statements }, null, 2);
-			return `<example>\n<evidence>\n${s.evidence}\n</evidence>\n<response>\n${response}\n</response>\n</example>`;
+			return {
+				name: s.name,
+				block: `<example>\n<evidence>\n${s.evidence}\n</evidence>\n<response>\n${response}\n</response>\n</example>`
+			};
 		});
+	};
+	const examplesFor = async (key: string, excludeName: string): Promise<string> => {
+		const blocks = (await corpusFor(key))
+			.filter((e) => !e.name.startsWith(excludeName))
+			.slice(0, EXAMPLE_LIMIT)
+			.map((e) => e.block);
 		return blocks.length ? `## Examples\n\n<examples>\n${blocks.join("\n")}\n</examples>` : "";
 	};
 
@@ -315,7 +374,18 @@ export const createDecider = (deps: DeciderDeps) => {
 	// Decision. dependsOn makes the Decision a DAG node: reviewable only once every upstream is
 	// Accepted (derived by the app). A dependency-free decision moves its Lead to the prompt's
 	// pending gate; a dependent one leaves Status alone.
-	const decide = async (key: string, publicId: string, { dependsOn }: { dependsOn?: string[] } = {}) => {
+	//
+	// `accept` writes "Final output" ≡ Output in the SAME create — a calibrated stage that commits its
+	// own judgment (the review app's Confirm, made by the funnel) is one write, not a create followed
+	// by a patch of the row we just made. The caller still owns the consequences (the entity's Status
+	// move, the audit comment): what belongs here is only that the Decision is born in the state it
+	// means. `name` comes back for the same reason — it is composed here, so nobody needs to re-read
+	// the page to learn it.
+	const decide = async (
+		key: string,
+		publicId: string,
+		{ dependsOn, accept }: { dependsOn?: string[]; accept?: boolean } = {}
+	) => {
 		const ctx = await judgmentContext(key, publicId);
 
 		let output: Record<string, unknown> | undefined;
@@ -385,11 +455,13 @@ export const createDecider = (deps: DeciderDeps) => {
 
 		const ranAt = new Date().toISOString();
 		const entityId = await linkEntity(ctx.subject, ctx.spec, { dependsOn });
+		const name = `${ctx.subject.name} - ${ctx.spec.name} — ${ranAt.slice(0, 19).replace("T", " ")}`;
 		const d = await store.upsert(
 			config.models.Decisions,
 			{
-				Name: `${ctx.subject.name} - ${ctx.spec.name} — ${ranAt.slice(0, 19).replace("T", " ")}`,
+				Name: name,
 				Output: JSON.stringify(output),
+				...(accept ? { "Final output": JSON.stringify(output) } : {}),
 				Reasoning: JSON.stringify(statements),
 				Input: JSON.stringify(ctx.input),
 				Model: llm.modelName(config.model),
@@ -402,6 +474,7 @@ export const createDecider = (deps: DeciderDeps) => {
 		);
 		return {
 			id: d.id,
+			name,
 			output,
 			claims: statements!.map((s) => s.claim),
 			where: d.url,

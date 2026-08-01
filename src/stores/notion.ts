@@ -14,7 +14,7 @@
 
 import { spawn } from "node:child_process";
 import { bodyOf, chunks, plain, type BlockPage, type NotionValue } from "./notion.codec.js";
-import { gate, NOTION_CONCURRENCY } from "../concurrency.js";
+import { pace, NOTION_RPS } from "../concurrency.js";
 import { log } from "../log.js";
 import type { Ref, Row, Store } from "./index.js";
 
@@ -47,17 +47,33 @@ const resolveToken = async (): Promise<string> => {
 	return m[1];
 };
 
-// One gate for the whole Notion backend (its own ceiling, so a tool can fan out wider than it), with
-// retry-on-429: the API rate-limits as a long-window average, so a burst draws 429s — honor its
-// Retry-After (fall back to exponential backoff) rather than fail the run. The retry is the sole
-// diagnostic here (a slow, exceptional event → the one log seam); normal calls stay quiet, so stdout
-// stays the answer and stderr only speaks when it matters.
+// One clock for the whole Notion backend. Notion limits a RATE (~3 rps per connection, plus a
+// workspace-wide limit shared with every other connection), so every request starts through the
+// pacer — and when Notion says stop, `hold` parks EVERY caller for exactly as long as its
+// Retry-After says, instead of each one discovering the same ban privately and failing alone.
+// 429 (rate_limited) and 529 (service_overload) are the same event and handled identically, per
+// Notion's docs. Nothing is capped at "a ban too long to wait for": parking costs nothing now that
+// callers park together, so the run waits it out and keeps its work — bounded only by MAX_WAIT so
+// it can never hang forever. The park is the sole diagnostic here (an exceptional, slow event → the
+// one log seam); normal calls stay quiet, so stdout stays the answer.
 const API = "https://api.notion.com/v1";
-const slot = gate(NOTION_CONCURRENCY);
-const api = <T>(path: string, init?: { method?: string; body?: object }): Promise<T> =>
-	slot(async () => {
-		for (let attempt = 0; ; attempt++) {
-			const res = await fetch(API + path, {
+const slot = pace(NOTION_RPS);
+const MAX_WAIT = Number(process.env.NOTION_MAX_WAIT) || 900_000; // total parked time one call accepts
+// Notion names which limit was hit (`public_api_request_rate_limit` — this connection — vs
+// `public_api_space_request_rate_limit` — the whole workspace, i.e. someone else's traffic too).
+// Worth saying out loud: it is the difference between "slow down" and "you are not alone in here".
+const reasonOf = (text: string): string => {
+	try {
+		return (JSON.parse(text) as { additional_data?: { rate_limit_reason?: string } })?.additional_data
+			?.rate_limit_reason ?? "rate_limited";
+	} catch {
+		return "rate_limited";
+	}
+};
+const api = async <T>(path: string, init?: { method?: string; body?: object }): Promise<T> => {
+	for (let attempt = 0, waited = 0; ; attempt++) {
+		const res = await slot(async () =>
+			fetch(API + path, {
 				method: init?.method ?? (init?.body ? "POST" : "GET"),
 				headers: {
 					Authorization: `Bearer ${await token()}`,
@@ -65,21 +81,24 @@ const api = <T>(path: string, init?: { method?: string; body?: object }): Promis
 					"Content-Type": "application/json"
 				},
 				body: init?.body ? JSON.stringify(init.body) : undefined
-			});
-			if (res.ok) return (await res.json()) as T;
-			const text = await res.text();
-			if (res.status !== 429 || attempt >= 4)
-				throw new Error(`notion ${res.status} ${init?.method ?? "GET"} ${path}: ${text}`);
-			const wait = Number(res.headers.get("retry-after")) * 1000 || 500 * 2 ** attempt;
-			// A short throttle is retried; a long ban is surfaced. Notion's Retry-After can say minutes
-			// (measured: 424s after a sustained burst) — sleeping that long turns a CLI into a silent
-			// hang, so past the cap we fail loud with the ban's own duration instead.
-			if (wait > 60_000)
-				throw new Error(`notion 429 ${path}: rate-limited for ${Math.round(wait / 1000)}s — try again later`);
-			log("notion", `rate-limited, retry ${attempt + 1}/4 in ${wait}ms`);
-			await new Promise((r) => setTimeout(r, wait));
-		}
-	});
+			})
+		);
+		if (res.ok) return (await res.json()) as T;
+		const text = await res.text();
+		if (res.status !== 429 && res.status !== 529)
+			throw new Error(`notion ${res.status} ${init?.method ?? "GET"} ${path}: ${text}`);
+		// Retry-After is authoritative when present (integer seconds); exponential backoff otherwise.
+		const wait = Number(res.headers.get("retry-after")) * 1000 || 500 * 2 ** attempt;
+		if (waited + wait > MAX_WAIT)
+			throw new Error(
+				`notion ${res.status} ${path}: rate-limited for ${Math.round(wait / 1000)}s, past the ` +
+					`${Math.round(MAX_WAIT / 1000)}s wait budget (NOTION_MAX_WAIT) — try again later`
+			);
+		slot.hold(wait); // every caller, in flight and future, now waits behind this
+		waited += wait;
+		log("notion", `${res.status} ${reasonOf(text)} — all calls parked ${Math.round(wait / 1000)}s …`);
+	}
+};
 
 // A Notion data source, as the API returns it — only the fields we read.
 interface DataSource {

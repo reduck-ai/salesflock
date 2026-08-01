@@ -44,8 +44,9 @@ const config: AgentConfig = {
 	prompts: { q: { name: "Q", pending: "pending", resolve: () => ({ status: "s", advances: true }) } }
 };
 
-const reviewer = createReviewer({ config, renderEvidence: () => "", store });
-const hash = () => reviewer.instructionsHash("Q");
+// A FRESH reviewer per read: a reviewer resolves a kind's contract once and holds it (one run = one
+// contract, asserted below), so re-reading the live contract is what a new process does.
+const hash = () => createReviewer({ config, renderEvidence: () => "", store }).instructionsHash("Q");
 
 test("the hash pins body AND schema columns — any in-place edit reads as a different contract", async () => {
 	const pinned = await hash();
@@ -65,4 +66,20 @@ test("the hash pins body AND schema columns — any in-place edit reads as a dif
 
 	prompt.input = `{"type":"object","required":["Thread"]}`; // the third column, same rule
 	assert.notEqual(await hash(), pinned);
+	prompt.input = edited.input;
+});
+
+// The other half of the pin: ONE reviewer resolves a kind's contract once, so every item it judges
+// is judged under the same wording — an edit landing mid-batch can no longer split a batch across two
+// contracts (the failure the hash was added to detect; this is it prevented rather than detected).
+// It is also what keeps the per-item cost off the paged, recursive body read.
+test("one reviewer is one contract — an edit mid-run does not change what it judges under", async () => {
+	const reviewer = createReviewer({ config, renderEvidence: () => "", store });
+	const pinned = await reviewer.instructionsHash("Q");
+	const before = { ...prompt };
+	prompt.body = "rewritten mid-batch";
+	prompt.output = `{"type":"object","required":["tier","reasoning"]}`;
+	assert.equal(await reviewer.instructionsHash("Q"), pinned); // held, not re-read
+	assert.notEqual(await hash(), pinned); // a fresh reviewer sees the edit
+	Object.assign(prompt, before);
 });
