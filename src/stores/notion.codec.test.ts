@@ -58,7 +58,26 @@ test("renders the block kinds a prompt body uses", async () => {
 	});
 	assert.equal(
 		await bodyOf("root", page),
-		'## Who we are\n\nplain prose\n\n- first\n- second\n- [x] done\n\n---\n\n```json\n{"a":1}\n```'
+		'## Who we are\n\nplain prose\n\n- first\n- second\n\n- [x] done\n\n---\n\n```json\n{"a":1}\n```'
+	);
+});
+
+// A blank line is not a block: Notion stores a list of blocks, so the ONLY thing that can preserve the
+// space an author left between two lists is this join. Items of one list are one list; a bullet list
+// and a numbered list are two, and gluing them reflows prose nobody asked to reflow.
+test("two lists of different kinds keep the blank line between them; one list stays one list", async () => {
+	const { page } = transport({
+		root: [
+			bullet("b1", "first"),
+			bullet("b2", "second"),
+			b("n1", "numbered_list_item", { rich_text: [rt("step one")] }),
+			b("n2", "numbered_list_item", { rich_text: [rt("step two")] }),
+			b("t1", "to_do", { checked: false, rich_text: [rt("todo")] })
+		]
+	});
+	assert.equal(
+		await bodyOf("root", page),
+		"- first\n- second\n\n1. step one\n1. step two\n\n- [ ] todo"
 	);
 });
 

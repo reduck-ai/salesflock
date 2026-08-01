@@ -5,12 +5,13 @@
 //
 // Reuses the review app's own wire seam (server/notion.ts exports API/headers/page/patch) and the
 // shared codec ($core/stores/notion.codec: bodyOf to read, chunks to write) rather than restating
-// either. What is genuinely new is only the WRITE DIRECTION: Notion has no "replace body" call, so a
-// save wipes the page's children and appends the draft again. The Writer owns the body.
+// either. What is genuinely new is only the WRITE DIRECTION: Notion has no "replace body" call we can
+// use (see `save` for the one that exists and why it is refused), so a save wipes the page's children
+// and appends the draft again. The Writer owns the body.
 //
 // Both directions are the codec's: `bodyOf` renders a page to markdown, `blocksOf` turns the edited
 // markdown back into blocks. Neither lives here, so a read and a write can never disagree about what
-// a heading or a list is.
+// a heading or a list is — and both are OURS, so a save writes back the author's exact words.
 
 import { env } from "$env/dynamic/private";
 import { API, headers, page, patch } from "./notion";
@@ -155,6 +156,15 @@ const childIds = async (id: string): Promise<string[]> => {
 //
 // Appends go in ≤100 batches, sequentially: Notion appends at the end, so a later batch must land
 // after an earlier one. The title write is independent and rides along with the deletes.
+//
+// NOT `PATCH /v1/pages/{id}/markdown` (`{type:"replace_content"}`), which would make this ONE atomic
+// request instead of ~2n and delete the ordering rule above. Rejected on measurement, and the reason is
+// specific: Notion's markdown PARSER autoformats, so it does not write back what the author wrote. A
+// bare domain in the prose returns as a link — "reduck.ai" → "[reduck.ai](http://reduck.ai/)", three
+// times in one real draft — so every autosave would silently rewrite the writer's own words, and the
+// set of other autoformats is unknown. `blocksOf` builds exactly the blocks it is given. (The
+// endpoint's READ direction is faithful and its write is byte-identical to `blocksOf` on markdown with
+// no bare domains — which is why a synthetic sample passes and real prose does not.)
 export const save = async (id: string, { title, markdown }: { title?: string; markdown: string }): Promise<void> => {
 	const stale = await childIds(id);
 	const blocks = blocksOf(markdown);

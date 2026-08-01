@@ -102,8 +102,12 @@ const MARKER: Record<string, string> = {
 	quote: "> ",
 	callout: "> "
 };
-// The types that read as one list, so consecutive items join by a single newline.
+// The item types that make up a list. Consecutive items of the SAME type are one list, so they join
+// by a single newline; two DIFFERENT types are two lists, and the blank line an author left between
+// them is theirs (a blank line is not a block, so this join is the only thing that can preserve it —
+// measured: a bullet list followed by a numbered list came back glued, silently reflowing the prose).
 const LIST = new Set(["bulleted_list_item", "numbered_list_item", "to_do"]);
+const sameList = (a: string, b: string): boolean => LIST.has(a) && a === b;
 
 // Containers that carry NO text of their own — a synced block is a transclusion (the one authored
 // copy of a generic section, reused by every Prompt that syncs it) and a column is layout. Their
@@ -211,7 +215,7 @@ const walk = async (
 		if (text.trim()) parts.push({ type: b.type, text }); // an empty paragraph IS the blank line below
 	}
 	return parts.reduce(
-		(md, p, i) => (i ? md + (LIST.has(p.type) && LIST.has(parts[i - 1].type) ? "\n" : "\n\n") + p.text : p.text),
+		(md, p, i) => (i ? md + (sameList(p.type, parts[i - 1].type) ? "\n" : "\n\n") + p.text : p.text),
 		""
 	);
 };
