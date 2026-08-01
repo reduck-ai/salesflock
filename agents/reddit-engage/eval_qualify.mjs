@@ -14,6 +14,11 @@
 // `prompts push` would publish — a candidate cannot drift from the artifact it is qualifying.
 //
 // The tuning loop this drives:
+//   0. BASELINE first — run with no arg, before changing anything. Without it a red row is ambiguous
+//      ("did I break this, or was it already red?"), and a green run on a ground truth you just
+//      relabelled proves nothing about the prompt. Measured: relabelling four threads and re-running
+//      showed exactly those four failing, which is what confirmed the old body really did score them
+//      the old way rather than the labels being noise.
 //   1. `sflock prompts edit --agent reddit-engage qualify > candidate.md`, edit your OWN prose (the
 //      delimited regions are authored on their own pages — the CLI prints which), then iterate here
 //      until green — run it TWICE: gemini-3.5-flash at temp 0 is not run-stable on borderline

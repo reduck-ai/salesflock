@@ -16,6 +16,10 @@
 	// coloured and subtle, with its claim pinned in the right margin like a doc comment. One
 	// cursor: click a claim, a dot, or a margin note — or press Tab/Shift+Tab — to focus a quote
 	// and scroll it into view. ⏎ confirms, ←/→ navigate.
+	// Esc is ONE ladder, a rung per press — the field you're typing in, the selection popover, the
+	// proof cursor, then the dock itself — and `e` brings the dock back; the two are asymmetric on
+	// purpose (only Esc hides, so no bare letter can fold the dock by accident). The counterweight
+	// is that the dock unfolds itself whenever it has something to show.
 	// The human can also talk back at the reasoning: a comment on any claim, and a Notion-style
 	// selection menu over the evidence to add a new claim (✓/✕) or attach the quote to an
 	// existing one — all edits to a local copy of the statements; the judge's stay canonical and
@@ -214,7 +218,12 @@
 		const line = PARK - base;
 		anchors = statements
 			.flatMap((_, si) => {
-				const ms = [...el.querySelectorAll(`mark.hl[data-si="${si}"]`)].map((m) => ({
+				const ms = [...el.querySelectorAll(`mark.hl[data-si="${si}"]`)]
+					// a mark inside a CLOSED disclosure (an agent's folded section) has no box at all — skip
+					// it rather than pin its claim at the top of the gutter beside nothing. goto() opens the
+					// fold before it scrolls, and that scroll re-runs this effect.
+					.filter((m) => m.getClientRects().length)
+					.map((m) => ({
 					si,
 					mi: Number(m.getAttribute("data-mi")),
 					top: m.getBoundingClientRect().top - base
@@ -249,6 +258,9 @@
 		reviewing = true;
 		activeMi = i;
 		const m = evEl?.querySelector(`mark.hl[data-mi="${i}"]`);
+		// a fold is a default, never a lock: a proof inside a closed disclosure reveals itself when the
+		// cursor lands on it (measuring first would read a zero box and scroll nowhere).
+		m?.closest("details")?.setAttribute("open", "");
 		if (m) window.scrollTo(0, window.scrollY + m.getBoundingClientRect().top - PARK);
 	};
 	// the dock twin of the evidence park: whenever the cursor lands on a claim, its row rises to
@@ -362,25 +374,54 @@
 	// the window scroll is shared chrome — each card starts at the top of its evidence
 	$effect(() => window.scrollTo(0, 0));
 
-	// ←/→ navigate, Tab / Shift+Tab step through proofs, ⌫ removes a focused user quote —
-	// ignored while typing. (⌘⏎ confirm is page-level, beside ⌘S.)
+	// THE DOCK IS OPEN WHENEVER IT HAS SOMETHING TO SAY. One rule, no call sites: whatever puts
+	// content in the dock — Tab or a quote click (reviewing), ⌘E (noting) — unfolds it, so a gesture
+	// can never land invisibly on a folded dock. It cannot fight Esc: the ladder clears the pane
+	// BEFORE it folds, and this reads neither `open` nor anything Esc's last rung touches.
+	$effect(() => {
+		if (reviewing || noting) open = true;
+	});
+
+	// a form control has the keys while it is focused — a bare key there is text, not a command.
+	// `select` and contenteditable count: ←/→ inside a <select> changes its value, and must not
+	// also step the deck.
+	const typing = (t: EventTarget | null): t is HTMLElement =>
+		t instanceof HTMLElement && (t.isContentEditable || /^(input|textarea|select)$/i.test(t.tagName));
+
+	// ESC — the whole back-out model, ONE rung per press, deepest layer first: the field you are
+	// typing in, the selection popover, the proof cursor, then the dock itself. A deeper layer that
+	// already consumed the press (the ghost autocomplete, the note field, the claim input) says so
+	// with preventDefault, and the handler below never calls this — which is exactly what keeps one
+	// press from peeling two layers.
+	const escape = (e: KeyboardEvent) => {
+		if (typing(e.target)) return e.target.blur();
+		if (menu) return closeMenu();
+		if (reviewing || activeMi !== null) return ((reviewing = false), (activeMi = null));
+		open = false;
+	};
+
+	// Esc peels a layer (and finally folds the dock), `e` brings the dock back; ←/→ navigate,
+	// Tab / Shift+Tab step through proofs, ⌫ removes a focused user quote. (⌘S/⌘E/⌘⏎ are the page's,
+	// so a chord fires even mid-note and no bare key ever commits.)
 	$effect(() => {
 		const onkey = (e: KeyboardEvent) => {
-			if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-			// the popover owns the keys while open — Esc closes it; over a user quote ⌫ still removes
+			if (e.defaultPrevented) return; // a deeper layer already answered this press
+			if (e.key === "Escape") return escape(e); // the one key that also acts while typing
+			if (typing(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
+			// the popover owns the keys while open — over a user quote ⌫ still removes
 			if (menu) {
-				if (e.key === "Escape") closeMenu();
-				else if (menu.kind === "remove" && (e.key === "Backspace" || e.key === "Delete")) {
+				if (menu.kind === "remove" && (e.key === "Backspace" || e.key === "Delete")) {
 					e.preventDefault();
 					removeFocused();
 					menu = null;
 				}
 				return;
 			}
+			// the keyboard twin of the head click, and the counterweight to Esc: `e` only ever
+			// REVEALS. A bare letter that could hide the dock would fire by accident; this cannot.
+			if (e.key === "e") return void (open = true);
 			if (e.key === "ArrowRight") onnav?.(1);
 			else if (e.key === "ArrowLeft") onnav?.(-1);
-			else if (e.key === "Escape")
-				((reviewing = false), (activeMi = null)); // back to the proposal
 			else if ((e.key === "Backspace" || e.key === "Delete") && canRemove(activeMi)) {
 				e.preventDefault();
 				removeFocused();
@@ -541,7 +582,12 @@
 				bind:value={claimText}
 				placeholder={stance ? "The claim this supports…" : "The claim this cuts against…"}
 				{@attach (el: HTMLInputElement) => el.focus()}
-				onkeydown={(e) => (e.key === "Enter" ? addClaim() : e.key === "Escape" && closeMenu())}
+				onkeydown={(e) => {
+					// preventDefault says "this press is spent" — the card's Esc ladder skips a handled
+					// press, so closing the popover never also drops the proof cursor behind it
+					if (e.key === "Enter") (e.preventDefault(), addClaim());
+					else if (e.key === "Escape") (e.preventDefault(), closeMenu());
+				}}
 			/>
 		{:else}
 			<div class="attach">
@@ -566,6 +612,8 @@
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div
 		class="dhead"
+		title={open ? "Collapse (Esc)" : "Open (E)"}
+		aria-expanded={open}
 		onpointerdown={dragStart}
 		onpointermove={dragMove}
 		onpointerup={dragEnd}
@@ -620,7 +668,9 @@
 
 	<!-- 0fr → 1fr: the fold animates without measuring anything, so no height math and no flash -->
 	<div class="dstack">
-		<div class="dwrap">
+		<!-- inert while folded: what you cannot see, you cannot Tab into or type in — the other half
+		     of "the dock is open whenever it has something to say" -->
+		<div class="dwrap" inert={!open}>
 			<div class="dbody" bind:this={bodyEl}>
 				{#if !reviewing}
 					<!-- PROPOSAL — the default pane: the agent's proposal, headed by the Prompt's framing,
@@ -724,7 +774,7 @@
 						class="note"
 						placeholder="Optional note — why you (dis)agree"
 						{@attach (el) => el.focus()}
-						onkeydown={(e) => e.key === "Escape" && (noting = false)}
+						onkeydown={(e) => e.key === "Escape" && (e.preventDefault(), (noting = false))}
 					/>
 				{/if}
 			</div>
@@ -768,7 +818,11 @@
 		padding: 0 12px;
 		overflow-wrap: anywhere;
 	}
-	.doc :global(.evidence h3) {
+	/* a section head — either an `### field` heading or the <summary> of a folded section (an
+	   agent's disclosure, closed by default). One voice, so folding a field changes what it costs
+	   to read, never what it looks like. */
+	.doc :global(.evidence h3),
+	.doc :global(.evidence summary) {
 		font-family: ui-monospace, monospace;
 		font-size: 10.5px;
 		letter-spacing: 0.08em;
@@ -776,12 +830,21 @@
 		color: var(--muted-foreground);
 		margin: 18px 0 6px;
 	}
-	.doc :global(.evidence h3:first-child) {
+	.doc :global(.evidence h3:first-child),
+	.doc :global(.evidence details:first-child summary) {
 		margin-top: 6px;
 	}
-	/* generic YAML/code blocks wrap instead of bleeding off the column; the agent's tweet card
-	   (pre.tw) owns its own whitespace in x-engage's evidence.css, so exclude it here (no cascade tie) */
-	.doc :global(pre:not(.tw)) {
+	/* the fold's only added chrome is the marker the browser draws — the affordance IS the head */
+	.doc :global(.evidence summary) {
+		width: fit-content;
+		cursor: pointer;
+		user-select: none;
+	}
+	.doc :global(.evidence summary:hover) {
+		color: var(--foreground);
+	}
+	/* generic YAML/code blocks wrap instead of bleeding off the column */
+	.doc :global(pre) {
 		white-space: pre-wrap;
 		overflow-wrap: anywhere;
 	}

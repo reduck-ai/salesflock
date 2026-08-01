@@ -125,9 +125,14 @@ decisions
 		const shown = await reviewer.showDecision(decision);
 		if (feedback) return void console.log(shown.feedback ? renderFeedback(shown.feedback) : "(no human feedback)");
 		// Was this judged under the instructions that are live now? The Decision pinned their
-		// fingerprint; re-fingerprint the current body and say so. `stale` means someone edited a prompt
-		// body in place (or the shared page it syncs) rather than adding a version — so this judgment
-		// no longer stands on the criteria the prompt claims today. Unknown kind / pre-pin row ⇒ omitted.
+		// fingerprint; re-fingerprint the live contract and say so. Read `stale` for exactly what it
+		// says: this judgment was NOT made under the contract that governs today. It does not say why,
+		// and there are two causes with opposite meanings — `instructionsHash` resolves the
+		// HIGHEST-Version row, so a perfectly sound judgment made under v11 reads stale the moment v12
+		// is published (benign, and the append-only norm), while the case worth catching is a live
+		// version mutated in place: its body, a shared page it transcludes, or a schema column.
+		// Telling them apart means reading the Decision's own Prompt relation for the version it cites,
+		// which this shaping does not carry. Unknown kind / pre-pin row ⇒ omitted.
 		const live = shown.kind ? await reviewer.instructionsHash(shown.kind).catch(() => undefined) : undefined;
 		const instructions =
 			shown.instructions && live

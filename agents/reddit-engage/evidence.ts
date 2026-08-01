@@ -1,6 +1,6 @@
 // reddit-engage's evidence renderer — the agent OWNS its rendering (one file, imported by BOTH
 // consumers: the runtime judge in tools.ts and the review app via $agent/evidence, so they can
-// never render differently). The Reddit sibling of lk-engage/evidence.ts: the generic seam
+// never render differently): the generic seam
 // (renderEvidence + fieldSpan) plus the one display decision — the frozen Thread YAML rendered as
 // a Reddit-style thread: title + meta header, the OP's body verbatim and prefix-free so a judge's
 // quote anchors on it, then the comments as blockquoted cards nested by depth (the
@@ -75,32 +75,51 @@ const renderers: Record<string, (v: string) => string> = {
 const render = (k: string, v: string): string => (renderers[k] ?? markdown)(v);
 
 // A field's section heading. The Thread heading IS the link to the thread (its canonical URL rides
-// in the seed). One helper, used by renderEvidence AND fieldSpan, so their offset math can't drift.
+// in the seed).
 const heading = (k: string, v: string): string => {
 	const url = k === "Thread" ? threadOf(v)?.url : undefined;
 	return url ? `### [${k}](${url})` : `### ${k}`;
 };
 
-// The lossless input map → one Markdown document, a `### field` section each — verbatim values, so
-// a quote resolves against it. The judge reads this as its prompt; the app renders the same from
-// the frozen map. One renderer, every caller. (The Reddit twin of lk-engage's renderEvidence.)
+// Fields that ship FOLDED — reference the judgment must obey but a reviewer reads once: shown as a
+// disclosure, closed by default, so the thread stays the document and the rules stay one click away.
+const FOLDED = new Set(["Subreddit rules"]);
+
+// A section, as its three parts: everything before the content, the content, everything after. The
+// ONE declaration of a section's shape — renderEvidence joins the parts, fieldSpan measures them,
+// so the text and the offsets into it cannot drift.
+//
+// A folded field is plain `<details>`, which costs the anchoring layer nothing: `canonicalize`
+// (src/anchor.ts) strips HTML tags, so a quote resolves through a disclosure exactly as through a
+// heading, and `highlight.ts` never lets a <mark> cross a tag. The blank line after `<summary>` is
+// load-bearing — it closes the HTML block, so `marked` renders the rules as a real markdown list
+// inside the disclosure rather than as raw text.
+const section = (k: string, v: string): [open: string, body: string, close: string] =>
+	FOLDED.has(k)
+		? [`<details class="fold">\n<summary>${k}</summary>\n\n`, render(k, v), `\n\n</details>`]
+		: [`${heading(k, v)}\n\n`, render(k, v), ""];
+
+// The lossless input map → one Markdown document, a section per field — verbatim values, so a quote
+// resolves against it. The judge reads this as its prompt; the app renders the same from the frozen
+// map. One renderer, every caller.
 export const renderEvidence = (input: Record<string, string>): string =>
 	Object.entries(input)
-		.map(([k, v]) => `${heading(k, v)}\n\n${render(k, v)}`)
+		.map(([k, v]) => section(k, v).join(""))
 		.join("\n\n");
 
 // fieldSpan(input, key) — the [start,end) of `key`'s rendered CONTENT within renderEvidence(input),
-// derived from the very sections renderEvidence joins (same `render`, same `\n\n` join — they can't
-// drift). How CODE, never the LLM, gives the composer its anchor: the span of the field the reply
-// answers (the "Thread"). null when the field isn't present.
+// derived from the very sections renderEvidence joins. How CODE, never the LLM, gives the composer
+// its anchor: the span of the field the reply answers (the "Thread"). null when the field isn't
+// present.
 export const fieldSpan = (input: Record<string, string>, key: string): Quote | null => {
 	const entries = Object.entries(input);
 	const i = entries.findIndex(([k]) => k === key);
 	if (i < 0) return null;
 	const pre = entries
 		.slice(0, i)
-		.map(([k, v]) => `${heading(k, v)}\n\n${render(k, v)}`)
+		.map(([k, v]) => section(k, v).join(""))
 		.join("\n\n");
-	const start = (i ? pre.length + 2 : 0) + `${heading(key, input[key])}\n\n`.length;
-	return { start, end: start + render(key, input[key]).length };
+	const [open, body] = section(key, input[key]);
+	const start = (i ? pre.length + 2 : 0) + open.length;
+	return { start, end: start + body.length };
 };
