@@ -12,5 +12,12 @@ export const scripts = {
 	// Not called by the funnel: a community's rules are fetched BY HAND (`reduck run`) and written into
 	// the agent's config, so nothing at runtime re-reads them. Listed here because this is where
 	// addresses live, and `bind` compiles its output type — what that manual run returns.
-	info: "reduck/reddit.com/get_subreddit_info"
+	info: "reduck/reddit.com/get_subreddit_info",
+	// The ONLY two writes this agent makes, and the only place it stops being read-only. Which of them
+	// applies is not a choice anyone declares — it is where the conversation already is: nothing of
+	// ours under the post yet ⇒ a top-level comment; the OP has answered us ⇒ a reply to what they
+	// said. Both return the created comment's permalink, which is the identity the outreach is then
+	// keyed on (and the anchor the next reply hangs off).
+	comment: "reduck/reddit.com/post_comment",
+	reply: "reduck/reddit.com/reply_comment"
 } as const;

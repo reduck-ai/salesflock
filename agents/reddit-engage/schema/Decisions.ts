@@ -5,6 +5,7 @@ export interface Decisions {
    * relation → eddcfaaf-e6f1-4cea-a112-2b9d98426eb4
    */
   "Depends on"?: string[];
+  "Draft output"?: string;
   Feedback?: string;
   "Final output"?: string;
   "Final reasoning"?: string;
@@ -27,6 +28,10 @@ export interface Decisions {
    */
   Prompt?: string[];
   Reasoning?: string;
+  /**
+   * relation → ba8786a2-afd6-4b12-8416-df2a85440f58
+   */
+  "Reddit Backlog"?: string[];
   /**
    * relation → 287eec98-859f-4a64-a50d-75da2e965488
    */

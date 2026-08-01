@@ -76,15 +76,48 @@ npm install
 npm run dev
 ```
 
-The write-back needs the Notion integration's "Update content" capability plus these
-properties on the Decisions database — `Feedback` (rich text), `Final reasoning` (rich
-text) and `Final output` (rich text, the output as the human committed it). The committed
-output IS the decision: `Final output` is the sole record of a review (its presence means
-reviewed, and drops the row from the queue), and agreement is *derived* (`Final output ≡
-Output`) — there is no stored verdict column. Since a decision also moves the linked Lead,
-"Update content" on the Leads database is needed too. Which Status each committed output
-moves the Lead to is the agent's config (`config.prompts`, imported via the `$agent`
-alias), not app code.
+The write-back needs the Notion integration's "Update content" capability plus four
+properties on the Decisions database. Three are the human's WORKING COPY — `Draft output`,
+`Feedback`, `Final reasoning` (all rich text) — written together by a Save, so a row reopens
+exactly as it was left. The fourth, `Final output`, is the decision. The committed output IS
+the decision: `Final output` is the sole record of a review (its presence means reviewed, and
+drops the row from the queue), and agreement is *derived* (`Final output ≡ Output`) — there is
+no stored verdict column. A commit writes `Final output` and CLEARS `Draft output`: the working
+copy has become the decision, and two columns must never both claim to be the human's last word.
+Since a decision also moves the linked pipeline entity, "Update content" on that database is needed
+too. Which Status each committed output moves it to is the agent's config (`config.prompts`,
+imported via the `$agents` alias), not app code.
+
+Those four columns are one precedence, resolved once in `cards/decision.ts`, and it is what a card
+opens on: **`Final output ?? Draft output ?? Output`** — the human's latest word if they have one,
+else the judge's. Each rung earns its place. Without the first, reopening a decided row shows the
+model's proposal rather than what was committed, so a re-confirm would silently post text the human
+had already replaced. Without the second, a Save kept the note and the reasoning but threw away the
+words — which made committing the only way to keep an edit. `proposed` carries the judge's own
+Output alongside, because an overturn is precisely the two differing.
+
+## A Confirm can also DO the thing
+
+An agent may declare `act` beside `resolve` (`PromptSpec`, `$core/stores`): what committing
+this decision performs in the world — post the reply, send the message. `record` runs it
+after every gate and before any write, and merges its result (a permalink, a timestamp) into
+the same patch as the status it earns.
+
+That placement is the whole design. Approving in one pass and performing in another gives a
+decision two truths — approved, and done — and a window between them that something else has
+to model, watch and reconcile. Here there is no window: a failure throws (surfaced to the
+reviewer with its reason, as a 502, because SvelteKit hides internal messages in production),
+persists nothing, and leaves the row in the queue to confirm again. That retry is safe because
+the act guards on its own evidence in the world — reddit-engage's returns null when the
+outreach already has a `Comment URL` — never on a status. Its result lands even when the
+ladder refuses the status move: a permalink is a fact that already happened.
+
+An act reaches a browser through `$core/clients/reduck`, which runs over the MCP server's REST
+API here (the CLI it shells locally does not exist in a serverless function): set
+**`REDUCK_API_KEY`**, and **`REDUCK_DEVICE_ID`** when more than one browser is paired — the
+server refuses to guess between them, rightly, since they are different signed-in identities.
+A browser run takes tens of seconds, so `api/decide` sets `maxDuration` and the card shows its
+existing committing skeleton for the whole round-trip.
 
 ## The Writer's voice (`/write` autocomplete)
 

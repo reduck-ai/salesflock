@@ -20,7 +20,17 @@ says what it does. If a fact can drift, it belongs in code, not here.
    behind a reload — and `sflock prompts push` publishes the next version of a judgment's
    instructions. Text a person will edit is the only thing `sflock` writes; pipeline state stays the
    runtime's. The per-agent runtime binary is *action* (compose scripts, persist, advance the
-   funnel). Setup describes, review inspects, runtime does.
+   funnel). Setup describes, the operator CLI inspects, runtime does.
+
+   The review *app* is the exception, and it is the one place a human's click is itself an act:
+   confirming a decision may perform it (`PromptSpec.act` — post the reply, send the message)
+   in the same request that records it. The alternative is worse than the coupling: approving
+   in one pass and performing in another gives a decision two truths — approved, and done — and
+   a window between them that some third thing has to model, watch and reconcile. So the act
+   runs after every gate and before any write, its result rides into the same patch as the
+   status it earns, and a failure persists nothing and leaves the row in the queue. The act
+   guards on its own evidence in the world (a permalink already recorded), never on a status,
+   so confirming twice cannot do it twice.
 
 3. **`reduck` is a runner, not a schema source.** One base-script call → run it with
    `reduck run` directly. Wrap it in a tool **only** for what `reduck` can't do: compose
@@ -92,9 +102,13 @@ says what it does. If a fact can drift, it belongs in code, not here.
 
 ## Applied
 
-`agents/reddit-engage/` is the worked example, and today the only agent: one pipeline entity
-(the thread, keyed on its canonical URL), no tool `reduck run` can already express, and a
-funnel that judges then drafts. Its identity lives in the CRM, as its Prompt bodies (with the
-generic part — who we are — a synced block from one shared page, per #5). The roster
-(`$agents`) still resolves each Decision's agent per row, because that is what makes adding
-the next agent a registration rather than a refactor (#10).
+`agents/reddit-engage/` is the worked example, and today the only agent: a funnel that judges
+then drafts, and a human gate whose click posts. Its two tables are #4 taken literally — the
+thread (what Reddit says, plus how we judged it) and the outreach (our conversation on it, one
+row per thread we chose to engage), both keyed on the same canonical URL. What is owed is
+*derived* from that data, never a rung anyone wrote down: no Tier ⇒ judge it, a good Tier and no
+outreach ⇒ draft it. So a run that dies mid-funnel leaves the state its own data describes, with
+nothing to reconcile. Its identity lives in the CRM, as its Prompt bodies (with the generic
+part — who we are — a synced block from one shared page, per #5). The roster (`$agents`) still
+resolves each Decision's agent per row, because that is what makes adding the next agent a
+registration rather than a refactor (#10).

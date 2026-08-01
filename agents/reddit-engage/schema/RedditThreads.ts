@@ -2,6 +2,10 @@
 
 export interface RedditThreads {
   Author?: string;
+  /**
+   * relation → ba8786a2-afd6-4b12-8416-df2a85440f58
+   */
+  Backlog?: string[];
   Comments?: number;
   /**
    * ISO 8601 date or date-time
@@ -18,8 +22,6 @@ export interface RedditThreads {
    */
   "Scanned at"?: string;
   Score?: number;
-  Status?:
-    "To qualify" | "Qualification pending review" | "To engage" | "Draft pending review" | "Approved" | "Not qualified";
   Subreddit?: string;
   Thread?: string;
   "Thread URL"?: string;

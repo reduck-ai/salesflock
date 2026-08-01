@@ -1,12 +1,18 @@
 #!/usr/bin/env node
-// reddit-engage as CLI subcommands — JSON on stdout. The READ-ONLY funnel, two stages joined by
-// the store (the "To qualify" status is the worklist between them):
-//   scan → new threads of the watched subreddits (the listing carries the full post text), queued
-//   at "To qualify" — then engage → [ qualify as a judgment, kept as the thread's Tier + a comment
-//   on its page → (if good) a reply draft, the one Decision ] → [human gate]; plus draft (manual
-//   redraft) and list/show for the shared review queue. Each stage is idempotent and monotonic on
-//   the canonical Thread URL, and the thread's rung says what is still owed, so either re-runs
-//   safely after a crash; sending is unwired.
+// reddit-engage as CLI subcommands — JSON on stdout. Two stages joined by the store, and what marks
+// a thread's place between them is DATA, not a rung:
+//   scan → the watched subreddits' new threads (the listing carries the full post text), recorded as
+//   the thread's seed and nothing else — then engage → [ qualify as a judgment, kept as its Tier + a
+//   comment on its page → (if good) a reply draft, the one Decision, opening an outreach at "Pending
+//   approval" ] → [human gate, in the review app, which POSTS the reply and lands the outreach at
+//   "Waiting for OP"]; plus draft, a manual redraft.
+// TWO nouns to look at, one per table this agent owns: `threads` (what Reddit says, how we judged it)
+// and `backlog` (our outreaches — where each conversation stands, what we posted). Each has its own
+// filters. The third table, Decisions, is the ENGINE's and has an agent-agnostic reader of its own:
+// `sflock decisions list/show --agent reddit-engage` — what a human must rule on, with the evidence.
+// Every stage is idempotent on the canonical Thread URL and reads what it owes off the thread's own
+// data (no Tier ⇒ judge it; a good Tier and no outreach ⇒ draft it), so any of them re-runs safely
+// after a crash with nothing to reconcile.
 
 import "../../src/env.js";
 import { Command } from "commander";
@@ -17,58 +23,99 @@ import { tools } from "./tools.js";
 
 const out = (v: unknown) => console.log(JSON.stringify(v, null, 2));
 
+// TWO vocabularies, one per noun, because there are two tables and they carry different facts: a
+// THREAD is what Reddit says and how we judged it; an OUTREACH is where our conversation stands and
+// what we posted. Only the identity flags are shared (both tables key on the canonical Thread URL,
+// which is what lets you ask either about the same thread). Each is declared ONCE and attached to
+// every command that selects with it, so two commands can never drift about what the words mean;
+// the tools compile them through `filterOf` / `backlogFilterOf` (tools.ts).
+type Ident = { url?: string[]; subreddit?: string[]; limit?: string };
+const withIdent = (c: Command): Command =>
+	c
+		.option("--url <urls...>", "only these threads, by URL (any Reddit shape; canonicalized)")
+		.option("--subreddit <names...>", "only these subreddits (r/ prefix optional); omit for all")
+		.option("--limit <n>", "keep only the newest <n>");
+
+type ThreadFlags = Ident & { tier?: string; since?: string };
+const withThreadFilters = (c: Command): Command =>
+	withIdent(c)
+		.option("--tier <tier>", "only threads judged T1, T2 or No (omit for every thread)")
+		.option("--since <window>", `only threads created since — ISO date or shorthand ("48h", "7d")`);
+
+// The Backlog's own flags. `--status` names that table's own column, which is the only place the
+// word means anything; `--since` reads `Posted at`, because a different table keeps a different clock.
+type BacklogFlags = Ident & { status?: string; since?: string };
+const withBacklogFilters = (c: Command): Command =>
+	withIdent(c)
+		.option("--status <state>", `only outreaches at this state ("Pending approval", "Waiting for OP", "Dropped")`)
+		.option("--since <window>", `only outreaches posted since — ISO date or shorthand ("48h", "7d")`);
+
+// Commander hands every option back as a string; the tools take a number. One conversion, here.
+const selectOf = <T extends { limit?: string }>(f: T) => ({ ...f, limit: f.limit ? Number(f.limit) : undefined });
+
 const program = new Command()
 	.name("rdt")
-	.description("Reddit engagement (read-only): scan the watched subreddits' new threads → qualify (title + post) → draft replies, all as Decisions for review.");
+	.description("Reddit engagement: scan the watched subreddits' new threads → qualify (title + post) → draft replies as Decisions. Confirming a draft in the review app POSTS it.");
 
 program
 	.command("scan")
 	.argument("[subreddits...]", "subreddits to scan; omit for the config watchlist")
 	.option("--since <window>", `how far back — ISO date or shorthand ("48h", "7d")`, "48h")
-	.description("Discovery: each subreddit's threads newer than --since → new ones queued with evidence (title + full post) at 'To qualify'. Deduped on Thread URL. No LLM — judge with `engage`.")
+	.description("Discovery: each subreddit's threads newer than --since, recorded with their seed (title + full post). The seed only — no funnel state, no LLM, so re-scanning a thread already deep in the funnel cannot disturb it. Deduped on Thread URL. Judge with `engage`.")
 	.action(async (subreddits: string[], { since }) => out(await tools.scan(since, subreddits.length ? subreddits : undefined)));
 
 program
 	.command("engage")
-	.argument("[threads...]", "thread URLs to engage; omit to drain the backlog ('To qualify' + 'To engage')")
-	.description("Qualify (a judgment: Tier on the thread, claims as a page comment — no Decision) — the post alone first, then the full thread with its comments for anything that survives → if it still scores well, a reply draft for review. Batched; no args drains the whole backlog, page by page.")
+	.argument("[threads...]", "thread URLs to engage; omit to drain everything owed (unjudged, plus judged-good but never drafted)")
+	.description("Qualify (a judgment: Tier on the thread, claims as a page comment — no Decision) — the post alone first, then the full thread with its comments for anything that survives → if it still scores well, a reply draft opens an outreach at 'Pending approval'. Batched; no args drains everything owed, page by page.")
 	.action(async (threads: string[]) => out(threads.length ? await batch(threads, tools.engage) : await tools.engagePending()));
+
+// threads — one selector, two projections. The action names what you do with the set (read it /
+// save it); the flags name the set, and they are the same flags either way.
+const threads = program
+	.command("threads")
+	.description("The stored Reddit threads: select with the thread filters, then read them (get) or save them (dump).");
+
+withThreadFilters(
+	threads
+		.command("get")
+		.description("The INDEX: one line per thread — url, subreddit, title, author, created, score, comments, tier. Newest first, JSON on stdout. The post's own text is `dump`'s job.")
+).action(async (f: ThreadFlags) => out(await tools.threads.get(selectOf(f))));
+
+withThreadFilters(
+	threads
+		.command("dump")
+		.description("The CORPUS: each thread's seed (title + full post, and the comment tree once fetched) plus how it was judged, as YAML on stdout — the raw material to hand-label into a ground truth. Newest first.")
+).action(async (f: ThreadFlags) => {
+	const rows = await tools.threads.dump(selectOf(f));
+	console.error(`${rows.length} threads`);
+	console.log(stringifyYaml(rows, { lineWidth: 0 }));
+});
+
+// backlog — the outreaches: one row per thread we chose to engage. The peer of `threads`, with its
+// own flags, because the two tables carry different facts. One projection: an outreach is scalars.
+const backlog = program
+	.command("backlog")
+	.description("Our outreaches — one per engaged thread: where the conversation stands and what we posted.");
+
+withBacklogFilters(
+	backlog
+		.command("get")
+		.description("One line per outreach — url, subreddit, name, status, commentUrl, postedAt. Unposted first, then newest, JSON on stdout. The only path to what we actually posted, and the only way to see a 'Waiting for OP' conversation (it has no open Decision, so `sflock decisions list` cannot show it).")
+).action(async (f: BacklogFlags) => out(await tools.backlog.get(selectOf(f))));
 
 program
 	.command("refresh")
 	.argument("<threads...>", "thread URLs to re-pull from their own page")
-	.description("Re-read a thread from its page and re-freeze its evidence (post + full comment tree, score, count). Evidence only — never touches Status or Tier, so it is safe at any point in the funnel. Batched.")
+	.description("Re-read a thread from its own page and update what we store about it: the seed (post + full comment tree), score, comment count. Those three columns only — never the Tier, never the outreach, and never a Decision already made (a judgment froze its own copy). Safe wherever a thread stands. Batched.")
 	.action(async (threads: string[]) => out(await batch(threads, tools.refresh)));
 
 program
 	.command("draft")
 	.argument("[threads...]", "thread URLs to (re)draft as a standalone reply Decision")
 	.option("--show", "print the judgment context (contract + evidence); writes nothing")
-	.description("Manually (re)draft a reply for a thread, on the frozen evidence. Batched.")
+	.description("Manually (re)draft a reply for a thread, on its stored seed — opening (or re-opening) its outreach at 'Pending approval'. The Decision freezes its own copy as it judges. Batched.")
 	.action(async (threads: string[], { show }) => out(show ? await batch(threads, tools.context) : await batch(threads, tools.draft)));
-
-program
-	.command("dump")
-	.argument("<subreddit>", "subreddit whose stored threads to dump (r/ prefix optional)")
-	.option("--limit <n>", "keep only the newest <n> threads (the dump is newest-first)")
-	.description("Every stored thread of one subreddit as raw YAML on stdout — the frozen evidence (title + full post) plus current Status, newest first. Reads everything, writes nothing.")
-	.action(async (subreddit: string, { limit }: { limit?: string }) => {
-		const all = await tools.dump(subreddit);
-		const threads = limit ? all.slice(0, Number(limit)) : all;
-		console.error(`r/${subreddit.replace(/^r\//i, "")}: ${threads.length} of ${all.length} threads`);
-		console.log(stringifyYaml(threads, { lineWidth: 0 }));
-	});
-
-program
-	.command("list")
-	.description("Decisions awaiting a human verdict (the shared review queue): id, name, kind, app link.")
-	.action(async () => out(await tools.list()));
-
-program
-	.command("show")
-	.argument("<decision>", "Decision id, Notion URL, or app URL")
-	.description("One decision: the judgment (output, statements, evidence), plus the human diff once reviewed.")
-	.action(async (decision: string) => out(await tools.show(decision)));
 
 program.parseAsync().catch((e: unknown) => {
 	console.error(renderError(e));

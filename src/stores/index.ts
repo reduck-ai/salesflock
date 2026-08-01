@@ -98,6 +98,24 @@ export interface PromptSpec {
 	// is nothing to park the entity at, and the stage resolves its Status itself.
 	pending?: string;
 	resolve: (output: Record<string, unknown>) => { status: string; advances: boolean };
+	// What committing this decision DOES — the outside-world effect, beside `resolve`'s inside-the-CRM
+	// one. Declared here for the same reason `resolve` is: it is a business rule, not derivable from
+	// the output, and the human's click is where it belongs — a decision a person approves and a
+	// machine then performs in a separate pass has two truths (approved, done) and a window between
+	// them that something must model. So the act runs INSIDE the commit: after every gate, before any
+	// write, so a failure persists nothing and the row simply stays in the queue.
+	//
+	// It returns the fields its result adds to the pipeline entity (a permalink, a timestamp), merged
+	// into the SAME patch that writes `resolve`'s Status — one write, so the deed and its record
+	// cannot disagree. Absent ⇒ the decision only moves state, which is every prompt that judges.
+	//
+	// Guarding is the act's own, and it guards on the DATUM, never on a rung (the rule `hasCommentTree`
+	// obeys): it receives the entity's current fields and no-ops when its effect is already recorded,
+	// so re-confirming a decision cannot perform it twice.
+	act?: (
+		output: Record<string, unknown>,
+		entity: Record<string, string>
+	) => Promise<Record<string, unknown> | null>;
 }
 
 // The one thing an agent needs to run (besides secrets): which store, which table each

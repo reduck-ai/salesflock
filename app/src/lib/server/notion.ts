@@ -133,6 +133,58 @@ const statusOf = async (id: string): Promise<string | null> => {
 	return v ? (plain(v) as string | null) : null;
 };
 
+// The pipeline entity's own row, read ONCE and used twice: flattened to plain scalars for the
+// agent's `act` to read (has my effect already happened? where do I aim it?), and kept as live
+// property types so whatever the act hands back can be written without anyone declaring a shape.
+// The flattening is the runtime store's, so both sides see one row the same way.
+const entityOf = async (
+	id: string
+): Promise<{ fields: Record<string, string>; types: Record<string, string> }> => {
+	const { properties } = await page(id);
+	const fields: Record<string, string> = {};
+	const types: Record<string, string> = {};
+	for (const [name, v] of Object.entries(properties)) {
+		types[name] = v.type;
+		const s = plain(v);
+		if (s != null && s !== "") fields[name] = String(s);
+	}
+	return { fields, types };
+};
+
+// An act's plain result → the API's write payload, against the row's OWN live property types. The
+// agent returns values, never Notion shapes: `act` is a business rule (post this, and here is the
+// permalink), and a config that had to spell `{ url: … }` would be declaring the store's dialect
+// instead. Loud on a property the entity does not have, or one this cannot write — a silently
+// dropped record of a deed already done is the one outcome worth refusing.
+const propertiesOf = (
+	done: Record<string, unknown>,
+	types: Record<string, string>
+): Record<string, unknown> =>
+	Object.fromEntries(
+		Object.entries(done).map(([name, value]) => {
+			const type = types[name];
+			if (!type) throw new Error(`act returned "${name}", which the entity has no property for`);
+			switch (type) {
+				case "url":
+				case "email":
+				case "phone_number":
+				case "number":
+				case "checkbox":
+					return [name, { [type]: value }];
+				case "date":
+					return [name, { date: { start: String(value) } }];
+				case "select":
+				case "status":
+					return [name, { [type]: { name: String(value) } }];
+				case "rich_text":
+				case "title":
+					return [name, { [type]: chunks(String(value)) }];
+				default:
+					throw new Error(`act returned "${name}", a "${type}" this cannot write`);
+			}
+		})
+	);
+
 export const page = async (
 	id: string
 ): Promise<{
@@ -313,17 +365,27 @@ const archive = async (pageId: string) => {
 	if (!res.ok) throw new Error(`Notion ${res.status}: ${await res.text()}`);
 };
 
-// record(pageId, { committedOutput?, feedback, finalReasoning }) — a review writes the
-// human-owned columns. The learning channel ("Feedback" + "Final reasoning", the statements
-// as the human has them — comments and added claims included; "Reasoning" stays the judge's,
-// verbatim) is always persisted. Absent `committedOutput` it is a Save: only that channel
-// lands, no "Final output", so the row stays in the queue. Present, it is the decision: the
-// committed output IS the decision — "Final output" lands (always, whether the human edited
-// it or confirmed verbatim), which both drops the row from the queue and lets `reviewOf`
-// derive agreement (committed ≡ Output). The pipeline move is the Prompt's to declare, not
-// ours — its `resolve(committed)` names the Lead's next Status; an unknown prompt writes the
-// output but moves nothing (loud, so a config gap can't silently strand a Lead). Idempotent:
-// re-deciding overwrites. Needs "Update content" on BOTH the Decisions and Leads databases.
+// record(pageId, { output, feedback, finalReasoning, commit }) — a review writes the human-owned
+// columns. There is ONE thing to write and one bit that says what it means: the human's WORKING
+// COPY — the output as they have it, their note, their statements ("Reasoning" stays the judge's,
+// verbatim) — and whether they are deciding.
+//
+//   commit: false  a Save. The working copy lands in the three DRAFT columns and nothing else, so
+//                  the row keeps its place in the queue and reopens exactly as they left it.
+//   commit: true   the decision. The same output lands in "Final output" — the sole marker of a
+//                  review (its presence drops the row from the queue and lets `reviewOf` derive
+//                  agreement, committed ≡ Output) — and the draft output is CLEARED, because the
+//                  working copy has become the decision and two columns must never both claim to be
+//                  the human's latest word.
+//
+// All of it is a full snapshot, never a sparse patch: every column lands as exactly what the human
+// has, EMPTY INCLUDED, which clears it (a rich_text stays stale unless you write it). So reverting a
+// note to nothing persists, where omitting the key would leave the old value untouched.
+//
+// The pipeline move is the Prompt's to declare, not ours — its `resolve(committed)` names the
+// entity's next Status, and its `act` performs the deed; an unknown prompt writes the output but
+// moves nothing (loud, so a config gap can't silently strand a row). Idempotent: re-deciding
+// overwrites. Needs "Update content" on BOTH the Decisions and the entity databases.
 //
 // A NON-advancing outcome also archives the unreviewed dependents this decision holds back (read
 // off "Unlocks", Notion's synced inverse of "Depends on"): they were drafted eagerly against a
@@ -334,22 +396,25 @@ const archive = async (pageId: string) => {
 export const record = async (
 	pageId: string,
 	{
-		committedOutput,
+		output,
 		feedback,
-		finalReasoning
-	}: { committedOutput?: unknown; feedback: string; finalReasoning?: string }
+		finalReasoning,
+		commit
+	}: { output: unknown; feedback: string; finalReasoning?: string; commit: boolean }
 ): Promise<void> => {
-	// The learning channel is a full snapshot of the human's live draft, not a sparse patch:
-	// both columns always land as exactly what the human has — empty included, which CLEARS the
-	// column (a rich_text stays stale unless you write it). So reverting a note to nothing
-	// persists, where omitting the key would leave the old value untouched.
-	const learning = {
+	const working = {
 		Feedback: { rich_text: chunks(feedback) },
-		"Final reasoning": { rich_text: chunks(finalReasoning ?? "") }
+		"Final reasoning": { rich_text: chunks(finalReasoning ?? "") },
+		// The third draft channel, and the reason it exists: without it a Save kept the human's note
+		// and their reasoning edits but silently discarded the words they had actually rewritten — so
+		// the only way to preserve an edited output was to COMMIT it, which is to say the only way to
+		// keep your work was to decide. Now the three parts of a working copy are saved together.
+		"Draft output": { rich_text: chunks(commit ? "" : JSON.stringify(output)) }
 	};
-	if (committedOutput === undefined) {
-		return void (await patch(pageId, learning)); // a Save — decision withheld, draft snapshotted
+	if (!commit) {
+		return void (await patch(pageId, working)); // a Save — decision withheld, working copy kept
 	}
+	const committedOutput = output;
 
 	// The write runs in three waves — the calls were always independent, only the awaits serialized
 	// them. Wave 1: the decision page (everything below hangs off its properties).
@@ -376,14 +441,40 @@ export const record = async (
 	const owner = agentFor(name);
 	const move = owner?.spec.resolve(committedOutput as Record<string, unknown>);
 
+	// Wave 2b — the ACT: what committing this decision DOES outside the CRM (post the reply, send the
+	// message), declared by the agent beside `resolve` because it is the same kind of business rule.
+	// It runs HERE, between the last gate and the first write, for one reason: a decision a human
+	// approves and a machine performs in a later pass has two truths and a window between them that
+	// something has to model. Failing here throws, so nothing is persisted and the row simply stays
+	// in the queue to be confirmed again — and the act's own idempotence (it reads the entity's
+	// current fields) is what makes that retry safe.
+	//
+	// Its result is not a side note: it is the record of the deed (a permalink, a timestamp), and it
+	// rides into the SAME patch as `resolve`'s Status below, so the doing and the saying-so cannot
+	// come apart. One entity, so the act runs once even if the relation somehow held several.
+	//
+	// Its failure is re-raised as an HttpError, and that is not decoration: an ordinary throw reaches
+	// the reviewer as "Internal Error" (SvelteKit hides internal messages in production), and the one
+	// thing they need is WHY — the device was asleep, the subreddit refused the post. So the reason
+	// travels, and the card comes back with the judgment untaken.
+	const entityIds = owner ? relation(properties[owner.config.entity]) : [];
+	const entity = owner?.spec.act && entityIds.length ? await entityOf(entityIds[0]) : undefined;
+	const done = entity
+		? await owner!.spec.act!(committedOutput as Record<string, unknown>, entity.fields).catch(
+				(e: unknown) => {
+					throw error(502, `not committed — the action failed: ${(e as Error).message}`);
+				}
+			)
+		: null;
+
 	// Wave 3: the writes, one flight — the commit itself, the rejecting gate's dependent archiving,
 	// and the entity moves are mutually independent once the gates above have ruled.
-	const commit = patch(pageId, {
-		...learning,
+	const decided = patch(pageId, {
+		...working,
 		"Final output": { rich_text: chunks(JSON.stringify(committedOutput)) }
 	});
 	if (move === undefined || owner === undefined) {
-		await commit;
+		await decided;
 		return void console.error(
 			`record: no agent declares kind "${name}" (prompt ${promptId}) — Final output written, entity not moved`
 		);
@@ -395,19 +486,26 @@ export const record = async (
 				if (!plain((await page(depId)).properties["Final output"])) await archive(depId);
 			});
 	// Move whichever pipeline entity the OWNING agent binds a Decision to — the relation its config
-	// names (entity: "Lead" | "X Engagement" | "Lk Engagement"), not a hardcoded one. Two decisions
-	// can be tied to ONE entity (a qualification and the draft held behind it), so an unconditional
-	// write is "last confirm wins" — enough to drag the entity BACKWARD (confirm the draft, then its
-	// qualification, and Approved becomes To engage). An ADVANCING outcome may only move the entity
-	// forward along the ladder that agent declares — the same ladder its runtime stages obey. A
-	// non-advancing one is the human's terminal reject and always lands: the one move legitimately
+	// names (entity: "Lead" | "Reddit Backlog"), not a hardcoded one. Two decisions can be tied to
+	// ONE entity (a qualification and the draft held behind it), so an unconditional write is "last
+	// confirm wins" — enough to drag the entity BACKWARD. An ADVANCING outcome may only move the
+	// entity forward along the ladder that agent declares — the same ladder its runtime stages obey.
+	// A non-advancing one is the human's terminal reject and always lands: the one move legitimately
 	// not forward.
-	const entityIds = relation(properties[owner.config.entity]);
+	//
+	// The act's record rides in this same patch, and it is NOT subject to that guard: the Status is a
+	// claim about where the row stands and may be refused, but a permalink is a fact about the world
+	// that already happened. Refusing to write it would leave the deed done and unrecorded — so it
+	// lands whether or not the move does, and it lands in ONE write, so they cannot come apart.
 	const moves = entityIds.map(async (id) => {
-		if (move.advances && !ahead(move.status, await statusOf(id), owner.config.ladder)) return;
-		await patch(id, { Status: { select: { name: move.status } } });
+		const stay = move.advances && !ahead(move.status, await statusOf(id), owner.config.ladder);
+		const record = {
+			...(done && entity ? propertiesOf(done, entity.types) : {}),
+			...(stay ? {} : { Status: { select: { name: move.status } } })
+		};
+		if (Object.keys(record).length) await patch(id, record);
 	});
-	await Promise.all([commit, ...archives, ...moves]);
+	await Promise.all([decided, ...archives, ...moves]);
 	// A committed decision with no entity relation is an anomaly — surfaced loud, never swallowed.
 	if (!entityIds.length)
 		console.error(

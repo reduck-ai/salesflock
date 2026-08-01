@@ -35,7 +35,7 @@
 	import { Badge } from "$lib/components/ui/badge";
 	import { quoteAt, canonNormalize, quoteKey } from "$core/anchor";
 	import { schemaError } from "$core/output";
-	import type { EvidencedJudgment, Quote, Statement } from "./types";
+	import type { EvidencedJudgment, Judgment, Quote, Statement } from "./types";
 
 	let {
 		judgment,
@@ -47,11 +47,7 @@
 		judgment: EvidencedJudgment;
 		pos?: number; // the card's place in the rail — absent when it isn't in the current set (a deep link)
 		total: number;
-		onjudge?: (
-			committedOutput: Record<string, unknown> | undefined,
-			feedback: string,
-			reasoning?: Statement[]
-		) => void;
+		onjudge?: (working: Omit<Judgment, "id">) => void;
 		onnav?: (dir: -1 | 1) => void;
 	} = $props();
 
@@ -306,14 +302,21 @@
 	// the human is a judge too: the committed output is held to the same Prompt Output schema the
 	// LLM's was (the shared gate). Confirm is inert while it violates — derived, no effect.
 	const outputError = $derived(judgment.outputSchema ? schemaError(judgment.outputSchema, output) : null);
-	// commit = the committed output (the decision), which advances the deck; save (no output) =
-	// the same judgment with the decision withheld. The parent persists either way.
+	// Both hand back the SAME working copy — the output as it stands, the note, the edited
+	// statements — and differ only in `commit`: true is the decision (and advances the deck), false
+	// is the decision withheld (the row keeps its place and reopens exactly here). One payload, one
+	// bit, so saving can never quietly carry less than confirming does; the parent persists either.
+	const working = () => ({
+		output: $state.snapshot(output),
+		feedback: feedback.trim(),
+		reasoning: reasoningEdit()
+	});
 	const commit = () => {
 		if (outputError) return;
-		onjudge?.($state.snapshot(output), feedback.trim(), reasoningEdit());
+		onjudge?.({ ...working(), commit: true });
 	};
 	export function save() {
-		onjudge?.(undefined, feedback.trim(), reasoningEdit());
+		onjudge?.({ ...working(), commit: false });
 	}
 	// ⌘⏎ confirm — driven page-level (the twin of ⌘S), so it fires even mid-note. Inert while
 	// the selection popover is open (a commit would drop the in-progress claim); commit() owns

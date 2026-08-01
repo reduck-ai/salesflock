@@ -88,3 +88,31 @@ export interface Info {
   weekly_active_users?: number | null;
   weekly_contributions?: number | null;
 }
+
+export interface Comment {
+  score?: number | null;
+  author: string;
+  created?: string | null;
+  /**
+   * Fullname of the created comment, e.g. t1_xxxxx
+   */
+  commentId: string;
+  permalink: string;
+}
+
+export interface Reply {
+  /**
+   * Nesting depth of the created reply (0 = top-level)
+   */
+  depth?: number | null;
+  author?: string | null;
+  /**
+   * Fullname of the comment replied to
+   */
+  parentId: string;
+  /**
+   * Fullname of the created reply, e.g. t1_xxxxx
+   */
+  commentId: string;
+  permalink: string;
+}

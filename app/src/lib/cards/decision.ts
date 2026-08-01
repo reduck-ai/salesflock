@@ -48,13 +48,27 @@ export const decisionToJudgment = (d: Decision): EvidencedJudgment => {
 		renderEvidence: genericEvidence,
 		fieldSpan: genericSpan
 	};
-	const output = JSON.parse(d.fields.Output) as Record<string, unknown>;
 	const input = JSON.parse(d.fields.Input) as Record<string, string>;
 	const evidence = renderEvidence(input);
 	const order = (ss: Statement[]): Statement[] => ss.map((s) => ({ ...s, quotes: byStart(s.quotes) }));
+	// The output the card OPENS ON: the human's latest word if they have one, else the judge's. One
+	// precedence chain, in order of how recent a claim to being their answer each column has —
+	// `Final output` (they decided), `Draft output` (they saved), `Output` (nobody has touched it).
+	//
+	// It replaces three separate cases with one, and each rung earns its place: without the first,
+	// reopening a decided row shows the model's proposal rather than what was committed — so a
+	// re-confirm would silently post the text the human had replaced. Without the second, a Save
+	// keeps the note and the reasoning but throws away the words, which is what made committing the
+	// only way to keep an edit.
+	const latest = d.fields["Final output"] || d.fields["Draft output"] || d.fields.Output;
+	const output = JSON.parse(latest) as Record<string, unknown>;
+	// The judge's own proposal, always — the baseline the card diffs against to know whether the
+	// human changed anything. Never the chain above: `Output` is what the model said, and the whole
+	// notion of an overturn is that the two can differ.
+	const proposed = JSON.parse(d.fields.Output) as Record<string, unknown>;
 	// a saved-but-undecided draft, when the human has already checkpointed work on this row:
-	// their edited statements ("Final reasoning") and note ("Feedback"). Only present until a
-	// decision is committed (a decided row leaves the queue). Quotes ordered like the judge's.
+	// their edited statements ("Final reasoning") and note ("Feedback"). Quotes ordered like the
+	// judge's. The output is not repeated here — it is already the `output` above.
 	const feedback = d.fields.Feedback ?? "";
 	const draftReasoning = d.fields["Final reasoning"];
 	const draft =
@@ -71,6 +85,7 @@ export const decisionToJudgment = (d: Decision): EvidencedJudgment => {
 		statements: order(JSON.parse(d.fields.Reasoning) as Statement[]),
 		evidence,
 		output,
+		proposed,
 		outputSchema: d.outputSchema,
 		// placement is code-computed, never the LLM's: the prompt names the Input field the output
 		// answers (`anchorField`), and its rendered span attaches the composer below it. Unset ⇒ the

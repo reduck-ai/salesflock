@@ -1,13 +1,24 @@
-// reddit-engage — subreddit-driven Reddit engagement, the Reddit sibling of lk-engage:
+// reddit-engage — subreddit-driven Reddit engagement:
 //   scan the watched subreddits' new threads → qualify (LLM, title + post; a judgment, NOT a
-//   Decision — nobody reviews it, so its whole record is the thread's Tier + Status and a comment on
-//   the thread page) → reply draft (LLM) → [human gate]. READ-ONLY — nothing is ever posted to Reddit.
-// One pipeline table (Reddit Threads, the peer of Lk Engagements) + the two universal tables every
-// agent shares (Decisions, Prompts). No People table: the thread IS the unit, its author a flat
-// column. `sflock pull --agent reddit-engage` reads this to regenerate schema/*.ts; the runtime
-// reads it to address each table.
+//   Decision — nobody reviews it, so its whole record is the thread's Tier and a comment on the
+//   thread page) → reply draft (LLM) → [human gate, which POSTS].
+//
+// TWO tables, split by who writes them, because they change for unrelated reasons (README #4 —
+// pipeline state is a join, not a column):
+//   Reddit Threads   what Reddit says + what we concluded about the thread (Tier). Mutable only
+//                    because we re-read Reddit. No funnel state at all.
+//   Reddit Backlog   our outreach on one thread: its state, the comment we posted, when. One row
+//                    per thread we chose to engage — a hundredth of the threads we have seen.
+// Both keyed on the canonical Thread URL (the ONE identity, src/clients/reddit/index.ts), plus the
+// two universal tables every agent shares (Decisions, Prompts). No People table: the thread IS the
+// unit, its author a flat column. `sflock pull --agent reddit-engage` reads this to regenerate
+// schema/*.ts; the runtime reads it to address each table.
+//
+// The agent is no longer read-only, and the one place it writes to Reddit is `reply.act` below —
+// inside the human's Confirm, never in a background pass.
 
 import type { AgentConfig } from "../../src/stores/index.js";
+import { say, threadUrl } from "../../src/clients/reddit/index.js";
 
 // The watchlist AND each community's own rules — ONE declaration: which subreddits `scan` watches,
 // keyed by canonical name (lowercase, bare), each mapped to the rules a reply posted there must obey.
@@ -69,46 +80,102 @@ export const subKey = (subreddit: string): string => subreddit.replace(/^r\//i, 
 
 // Our own Reddit username: `queue` never backlogs our own threads (you don't reply to yourself).
 // Empty ⇒ the check is off until filled in.
-export const OWNER: string = "";
+export const OWNER: string = "Separate-Still3770";
 
 export default {
 	destination: "notion",
 	models: {
 		RedditThreads: "287eec98-859f-4a64-a50d-75da2e965488",
+		RedditBacklog: "ba8786a2-afd6-4b12-8416-df2a85440f58",
 		Decisions: "eddcfaaf-e6f1-4cea-a112-2b9d98426eb4",
 		Prompts: "942c4138-c9db-404c-9ae0-472f8edb0712"
 	},
-	entity: "Reddit Thread",
+	// The Backlog, not the Thread: a Decision binds to the OUTREACH it advances, and the thread is
+	// merely what that outreach is about. A thread we have never engaged has no row here at all.
+	entity: "Reddit Backlog",
 	// Flash, not Sonnet: the judgments here are cheap relevance gates ahead of a human review, the
 	// fan-out is wide, and this account's Bedrock TPS throttles at even 2 concurrent (measured).
 	model: "google/gemini-3.5-flash",
-	// The forward ladder — declared once here, obeyed by the runtime's stages (tools.ts) AND by the
-	// review app's commit, so neither can move a thread backward. It is also the funnel's RESUME
-	// point: every rung is a worklist ("To qualify" = scanned, "To engage" = qualified but not yet
-	// drafted), so `engage` reads the rung and picks up exactly where a crashed run stopped. "Not
-	// qualified" is off it: terminal, only reachable through a non-advancing qualification.
-	ladder: ["To qualify", "To engage", "Draft pending review", "Approved"],
+	// The Backlog's ladder — the OUTREACH's states, and there are only two live ones because
+	// approving a reply and posting it are one act (`reply.act`), not an intent and a later deed.
+	// A thread's own progress is not here and never was a ladder: it is the Tier column, which is
+	// empty until it is judged.
+	//
+	// It reads as a cycle, and the two directions have different owners. FORWARD is the review app's
+	// commit, which this list governs — `ahead()` refuses to regress a row, so a stale re-confirm
+	// cannot undo a move that already happened. BACKWARD, to "Pending approval", is the RUNTIME
+	// minting the next Decision once the OP has answered (`linkEntity`), which `ahead` does not
+	// govern — deliberately: at most one Decision is ever open on a Backlog row, so there is no
+	// second writer to race. "Dropped" is off the ladder: terminal, the sweep's verdict.
+	ladder: ["Pending approval", "Waiting for OP"],
 	prompts: {
 		// Is this thread worth answering? The one filter of the funnel (no deterministic pre-filter),
 		// and NOT a human gate: it is calibrated against reddit_qualified_threads.yaml, so the funnel
-		// judges it and keeps only the verdict (Tier + Status + a comment on the thread page). No
-		// `pending` for the same reason — there is no gate to park the thread at. tier "No" is the
-		// terminal miss (non-advancing, nothing is drafted); T1/T2 advance to the draft.
+		// judges it and keeps only the verdict (the Tier column and a comment on the thread page). No
+		// `pending` for the same reason — there is no gate to park anything at, and there is no
+		// Backlog row yet either: a thread that fails here never becomes an outreach.
+		//
+		// Only `advances` is read (tools.ts writes the Tier itself), so `status` carries the Tier
+		// rather than a rung name — naming a rung that no table has would be fiction.
 		qualify: {
 			name: "Reddit Thread Qualification",
-			resolve: (o) =>
-				o.tier === "No"
-					? { status: "Not qualified", advances: false }
-					: { status: "To engage", advances: true }
+			resolve: (o) => ({ status: String(o.tier ?? ""), advances: o.tier !== "No" })
 		},
-		// The reply draft — the ONE Decision this agent creates, because it is the one thing a human
-		// rules on. The committed output IS the decision: `resolve` advances to "Approved" (the
-		// terminal gate — posting is unwired). No negative branch: declining to engage is simply not
-		// confirming.
+		// The reply — the ONE Decision this agent creates, because it is the one thing a human rules
+		// on. The committed output IS the decision, and here it is also the DEED: `act` posts it, then
+		// `resolve` lands the row at "Waiting for OP" — one click, one write, no state in between for
+		// something else to have to drain. No negative branch: declining to engage is not confirming.
 		reply: {
 			name: "Reddit Reply",
-			pending: "Draft pending review",
-			resolve: (_output) => ({ status: "Approved", advances: true })
+			pending: "Pending approval",
+			resolve: (_output) => ({ status: "Waiting for OP", advances: true }),
+			// Post the approved reply, and hand back what proves it happened.
+			//
+			// Idempotent on the DATUM, never on a rung: `Comment URL` holds what we posted, so a
+			// re-confirm of a decision already acted on returns null and writes nothing. That check is
+			// what makes the review app's Confirm safe to click twice — and it is a fact about the
+			// world, not a bookkeeping flag, so it stays true however the row got where it is.
+			//
+			// One branch today, because there is one conversation shape today: nothing of ours under
+			// the post yet ⇒ a top-level comment. Continuing a conversation the OP has answered is
+			// `answer(permalink, …)`, and it lands here — with the permalink it replies to — the day
+			// the follow-up sweep exists to notice that they answered.
+			act: async (output, entity) => {
+				// Already posted ⇒ nothing to do, and nothing to validate either: the guards below judge
+				// text we are ABOUT to send, and this text is already on Reddit. Ordering matters — put a
+				// content rule first and a re-confirm of a posted reply would fail on words the world has
+				// long since accepted.
+				if (entity["Comment URL"]) return null;
+				const text = String(output.reply ?? "").trim();
+				if (!text) throw new Error("the committed reply is empty — nothing to post");
+				const url = entity["Thread URL"];
+				if (!url) throw new Error("this outreach has no Thread URL — cannot post");
+				// NO LINKS. Measured, on this very reply: r/automation's composer never enables its
+				// Comment button while the body carries a URL, so the run types the text and then waits
+				// out its timeout with nothing submitted — a failure that costs a browser minute and
+				// reports itself as a timeout rather than as the rule it hit. (The identical text posted
+				// fine in r/test, so this is the COMMUNITY's restriction — r/automation bans link posts
+				// outright — not Reddit's, and not something the page tells us before we try.)
+				//
+				// So refuse here, where the reviewer is still looking at the draft and one edit fixes it.
+				// It is deliberately blunt — any URL, every subreddit — because the alternative is
+				// guessing per community which links are tolerated, and being wrong costs a ban rather
+				// than a retry. A link that genuinely belongs (r/AI_Agents asks for them in comments) is
+				// a reason to scope this per subreddit against SUBREDDITS above, not to drop it.
+				const link = text.match(/\b(?:https?:\/\/|www\.)\S+/i);
+				if (link)
+					throw new Error(
+						`the reply carries a link (${link[0]}) — Reddit will not let it be submitted here. ` +
+							`Edit the draft to say it in words, or point them at the name and let them search.`
+					);
+				const { permalink } = await say(threadUrl(url), text);
+				return {
+					"Comment URL": permalink.startsWith("http")
+						? permalink
+						: `https://www.reddit.com${permalink}`,
+					"Posted at": new Date().toISOString()
+				};
+			}
 		}
 	}
 } as const satisfies AgentConfig;

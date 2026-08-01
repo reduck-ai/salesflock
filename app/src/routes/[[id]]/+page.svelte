@@ -11,7 +11,7 @@
 	import { toast } from "$lib/cards/toast.svelte";
 	import { dropCard } from "$lib/cards/cache";
 	import { filterQuery } from "$lib/filter";
-	import type { Statement } from "$lib/cards/types";
+	import type { Judgment } from "$lib/cards/types";
 
 	let { data } = $props();
 
@@ -69,25 +69,24 @@
 	// now sits at this index. Exactly ONE router mutation, after the refresh, so a navigation is
 	// never superseded; the skeleton (`committing`) covers the refresh. No committedOutput is a
 	// Save — the row stays put.
-	const judge = async (
-		committedOutput: Record<string, unknown> | undefined,
-		feedback: string,
-		reasoning?: Statement[]
-	) => {
+	const judge = async ({ output, feedback, reasoning, commit }: Omit<Judgment, "id">) => {
 		if (!data.current || committing) return;
 		const j = data.current;
 		const at = index; // the slot to re-open once the refreshed rail shifts into it
 		// the wait state arms AT the click, not after the write returns — the decided card swaps to
-		// the skeleton for the whole round-trip (a Save keeps the card: you're still editing it)
-		committing = !!committedOutput;
+		// the skeleton for the whole round-trip (a Save keeps the card: you're still editing it).
+		// A commit can now also PERFORM the decision (an agent's `act` — a browser run behind the
+		// request), so this covers tens of seconds, not a Notion write.
+		committing = commit;
 		const res = await fetch("/api/decide", {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({
 				id: j.id,
-				committedOutput,
+				output,
 				feedback,
-				finalReasoning: reasoning ? JSON.stringify(reasoning) : undefined
+				finalReasoning: reasoning ? JSON.stringify(reasoning) : undefined,
+				commit
 			})
 		}).catch(() => undefined);
 		dropCard(j.id); // the card was written to — a re-view must refetch the persisted state
@@ -98,10 +97,13 @@
 			committing = false; // the card comes back — the judgment wasn't taken
 			return toast({ message: body?.message ?? "Not saved", tone: "error" });
 		}
-		if (!committedOutput) return toast({ message: "Saved", tone: "ok" });
+		if (!commit) return toast({ message: "Saved", tone: "ok" });
 
-		// the toast IS the receipt: what happened, to whom, and a way back to the written row.
-		const edited = JSON.stringify(committedOutput) !== JSON.stringify(j.output);
+		// the toast IS the receipt: what happened, to whom, and a way back to the written row. "Edited"
+		// is measured against the JUDGE's proposal, never against what the card opened on — reopening a
+		// row seeds from the human's own latest word, so comparing with that would call every overturn
+		// a plain confirmation the moment it was saved once.
+		const edited = JSON.stringify(output) !== JSON.stringify(j.proposed);
 		toast({
 			message: edited ? "Edited" : "Confirmed",
 			tone: edited ? "edit" : "ok",

@@ -1,25 +1,31 @@
-// reddit-engage tools — the funnel, the lk-engage shape (fetch and judge are separate stages;
-// the store IS the queue between them — "To qualify" is the worklist, not an in-memory list):
+// reddit-engage tools — the funnel. Fetch and judge are separate stages and the STORE is the queue
+// between them, but what marks a thread's place is now DATA, not a rung:
 //   scan   → each watched subreddit's NEW threads (one listing run each — the listing's `body` is
-//            the post's FULL text, so discovery already carries the evidence; no per-thread fetch
-//            exists in this agent), queued as Reddit Threads at "To qualify". No LLM.
+//            the post's FULL text, so discovery already carries everything a qualification needs; no
+//            per-thread fetch exists in this agent), upserted as Reddit Threads. The seed only, no
+//            funnel state, no LLM — so a re-scan of a thread deep in the funnel cannot disturb it.
 //   engage → qualify (LLM) as a JUDGMENT, not a Decision — the prompt is calibrated against
 //            reddit_qualified_threads.yaml, so nobody rules on it and minting a Decision would only
-//            be noise in the human's queue. Its whole record is the thread's Tier + Status plus a
-//            comment on the thread page. It reads TWICE on growing evidence, one prompt both times:
-//            the post alone (cheap, drops most threads with no fetch), then — only for a survivor —
-//            the thread's own page via `refresh`, because an OP volunteers under their post what
-//            the post never says ("I'm a broke student"). → if it still advances, a reply draft
-//            (the one Decision) lands in the review queue. No args ⇒ drain the backlog.
-//   [human gate] → ONLY the reply drafts: confirming one moves the thread to "Approved" (sending
-//            is unwired); a "No" qualification terminally parks the thread at "Not qualified".
-// The LADDER IS THE RESUME POINT: "To qualify" = scanned, "To engage" = qualified but not drafted,
-// so `engage` reads the rung and does only what is left. That rung is persisted deliberately —
-// flash is not run-stable on borderline threads, so re-judging after a crash could flip a T2 to
-// "No" and, because the ladder is monotonic, freeze that false negative forever.
-// READ-ONLY: never posts to Reddit. Monotonic + idempotent on the canonical Thread URL.
+//            be noise in the human's queue. Its whole record is the thread's Tier plus a comment on
+//            the thread page. It reads TWICE on growing evidence, one prompt both times: the post
+//            alone (cheap, drops most threads with no fetch), then — only for a survivor — the
+//            thread's own page via `refresh`, because an OP volunteers under their post what the
+//            post never says ("I'm a broke student"). → if it still advances, a reply draft (the one
+//            Decision) opens a Reddit Backlog row at "Pending approval". No args ⇒ drain everything owed.
+//   [human gate] → confirming a draft POSTS it (config.ts `reply.act`) and lands the outreach at
+//            "Waiting for OP". Approving and posting are one act, so there is no state between them.
+//
+// WHAT IS OWED IS DERIVED, never stored — the two facts that place a thread are both data a stage
+// already had to write, so there is no third thing to keep in sync and nothing to drag backward:
+//   Tier empty                      → not judged yet          (qualify owes it)
+//   Tier T1/T2 + no Backlog row     → judged, never drafted   (draft owes it — a crashed run resumes here)
+//   Tier "No"                       → terminal, judged out
+// The Tier is persisted deliberately: flash is not run-stable on borderline threads, so re-judging
+// after a crash could flip a T2 to "No" and freeze that false negative forever.
+//
+// Monotonic + idempotent on the canonical Thread URL, which keys BOTH tables.
 
-import { getSubredditThreads, getThread, threadUrl } from "../../src/clients/reddit/index.js";
+import { getSubredditThreads, getThread, sinceIso, subOf, threadUrl } from "../../src/clients/reddit/index.js";
 import { getStore, queryAll } from "../../src/stores/index.js";
 import { createDecider } from "../../src/decide.js";
 import { renderEvidence } from "./evidence.js";
@@ -42,9 +48,10 @@ const label = (text: string, n = 60): string =>
 
 const nameOf = (subreddit: string, title: string): string => `r/${subreddit} — ${label(title)}`;
 
-// The Reddit entity bridge (this agent's own wiring): the Reddit Thread row IS the subject — it
-// carries the frozen Thread evidence projectInput reads — AND the pipeline entity the Decision
-// binds to.
+// The Reddit entity bridge (this agent's own wiring), and the two halves are two tables: the Reddit
+// THREAD row is the subject — it carries the seed projectInput reads — while the Reddit
+// BACKLOG row is the pipeline entity the Decision binds to and the review app moves. A thread we
+// never engage has no Backlog row, which is exactly why the two are apart.
 //
 // One field is JOINED rather than read: the community's rules (config.ts), which belong to the
 // subreddit, not the thread. Joining them here — instead of storing a copy on every thread row —
@@ -55,7 +62,10 @@ const nameOf = (subreddit: string, title: string): string => `r/${subreddit} —
 // caller that already holds the row (engage, for its funnel guard) never pays to read it twice —
 // `decide` takes either a key or a Subject.
 const subjectOf = (url: string, row: Row): Subject => {
-	const rules = SUBREDDITS[subKey(String(row.fields.Subreddit ?? ""))];
+	// The community off the canonical URL, never the Subreddit column — the one source `subOf` and
+	// both filters already use. It matters most here: this join decides which rules a reply must obey,
+	// so a spelling the column happens to carry must not be able to change what we are allowed to say.
+	const rules = SUBREDDITS[subOf(url)];
 	return {
 		key: url,
 		name: String(row.fields.Name ?? url),
@@ -66,7 +76,7 @@ const subjectOf = (url: string, row: Row): Subject => {
 const readThread = (url: string): Promise<Row> =>
 	store.read(config.models.RedditThreads, "Thread URL", threadUrl(url));
 
-// The frozen Thread seed, parsed. null when the field is absent or not the shape `queue` writes —
+// The Thread seed, parsed. null when the field is absent or not the shape `queue` writes —
 // the same tolerance evidence.ts's renderer has. Exported because a caller that wants to know what
 // CHANGED across a `refresh` (did the OP answer us?) diffs two of these; the store holds the
 // before, refresh returns the after.
@@ -99,19 +109,33 @@ const tierOf = (v: Verdict): string => String((v.output as { tier?: unknown }).t
 const resolveSubject = async (url: string): Promise<Subject> =>
 	subjectOf(url, await readThread(url));
 
+// linkEntity — open (or re-open) the OUTREACH this decision advances, and hand back its row id for
+// the Decision to bind to. Keyed on the same canonical Thread URL as the thread itself, so a row
+// converges however often a draft is re-cut, and related to the Thread so each can be reached from
+// the other. `subject.ref` is the thread's id — the relation target, not the return value.
+//
+// This is also where the cycle closes: a follow-up drafted after the OP answers upserts the SAME
+// row back to "Pending approval". Deliberately unguarded — the ladder governs the review app, whose
+// risk is a stale confirm regressing a row; here there is exactly one open Decision at a time, so
+// the write is the only writer and the newest draft is by definition where the outreach stands.
 const linkEntity = async (
 	subject: Subject,
 	spec: PromptSpec,
 	{ dependsOn }: { dependsOn?: string[] }
 ): Promise<string> => {
-	// A held dependent leaves Status alone — its gate has not been ruled on yet.
-	if (!dependsOn?.length)
-		await store.upsert(
-			config.models.RedditThreads,
-			{ Name: subject.name, "Thread URL": threadUrl(subject.key), Status: spec.pending },
-			"Thread URL"
-		);
-	return subject.ref as string;
+	const url = threadUrl(subject.key);
+	const ref = await store.upsert(
+		config.models.RedditBacklog,
+		{
+			Name: subject.name,
+			"Thread URL": url,
+			Thread: [subject.ref],
+			// A held dependent leaves Status alone — its gate has not been ruled on yet.
+			...(dependsOn?.length ? {} : { Status: spec.pending })
+		},
+		"Thread URL"
+	);
+	return ref.id;
 };
 
 const decider = createDecider({
@@ -123,51 +147,158 @@ const decider = createDecider({
 	linkEntity
 });
 
-// The funnel's forward order; a stage never drags a thread backward. "Not qualified" is the
-// terminal miss, off the ladder. "Approved" is terminal (nothing posts).
-const LADDER: readonly string[] = config.ladder;
-const rank = (s: string | null): number => (s ? LADDER.indexOf(s) : -1);
-
-const statusOf = async (u: string): Promise<string | null> => {
-	const [r] = await store.query(config.models.RedditThreads, {
-		property: "Thread URL",
-		url: { equals: u }
-	});
-	return r ? String(r.fields.Status ?? "") : null;
+// WHAT IS OWED — the drain's worklist, and it is pure DATA about the thread rather than a rung
+// someone remembered to write: the Tier is what qualification produced, the Backlog relation is what
+// drafting produced. That is what makes it self-healing — a run that dies between the two leaves the
+// thread in exactly the state its own data describes, and the next pass picks it up with nothing to
+// reconcile.
+//
+// ONE filter, not one per stage, because nothing reads it but the drain: what is owed is the
+// machine's queue, never a human's. A person's worklist is the Decisions table (the engine's, read
+// through `sflock decisions`) and, in this agent's own business terms, the Backlog at "Pending
+// approval". Neither is a fact about a thread, so no thread filter offers it — `threads` is the
+// corpus, and asking it "what should I do?" was asking the wrong table.
+//
+// Flat by necessity: Notion caps a filter at TWO levels of nesting, and the previous shape
+// (`{or:[…,{and:[{or:[…]},…]}]}`) was three deep, so the drain over everything owed 400'd on every
+// run — measured against the live table. `and → or → leaf` is two, and it says the same thing.
+//
+// It reads as one sentence: not judged out, and no outreach yet. The second half is why the stages
+// need no separate rules — a thread that HAS an outreach owes nothing, because whatever work it was
+// due already produced a draft and a human is holding it.
+const UNJUDGED = { property: "Tier", select: { is_empty: true } };
+const tierIs = (t: string) => ({ property: "Tier", select: { equals: t } });
+const PENDING = {
+	and: [
+		{ or: [UNJUDGED, tierIs("T1"), tierIs("T2")] },
+		{ property: "Backlog", relation: { is_empty: true } }
+	]
 };
 
-// queue(t) — make (or refresh) the backlog candidate from one listing hit, its Thread evidence
-// frozen straight from the listing (title + the FULL post body — all a qualification needs). Never
-// queues the owner (you don't reply to yourself). Monotonic: "To qualify" is written only when the
-// thread hasn't already advanced (or terminally missed), so a re-run converges, never moves backward.
+// WHICH threads — the one filter vocabulary, spoken by both projections (`threads get`, `threads
+// dump`), so reading them and saving them can never disagree about the set they describe.
+//
+// It selects THREADS, and a thread's own facts are all it offers: which one, which community, how it
+// was judged, when it was posted. Neither what is still OWED on it nor where an OUTREACH stands is
+// among them — the first is the drain's business (PENDING above), the second the Backlog's, and both
+// would be asking this table about something it does not carry.
+// How you name a SET, in the words both tables share — because both key on the canonical Thread URL,
+// so either can be asked about the same threads. Each vocabulary below is this plus its own table's
+// columns, which is exactly the real difference between them.
+export interface Ident {
+	url?: string[];
+	subreddit?: string[];
+	limit?: number;
+}
+export interface Select extends Ident {
+	tier?: string;
+	since?: string;
+}
+
+// urlClause / subClause — the two ways to name threads by identity, shared by both vocabularies
+// because both tables carry the same canonical Thread URL. Subreddits key on that URL, never on a
+// Subreddit column: the URL was lowercased when it was minted, so no spelling of a community can
+// fork it — the same choice `subOf` makes. An exact URL goes through `threadUrl`, so any shape
+// Reddit renders finds the row and a non-thread string fails loud instead of matching nothing.
+const anyOf = (clauses: object[]): object[] =>
+	clauses.length ? [clauses.length === 1 ? clauses[0] : { or: clauses }] : [];
+// The identity half of both vocabularies, in one place: "every row of this table" plus whichever of
+// the two ways to narrow it were asked for. The base clause is the identity's own presence, which is
+// exactly what "every thread" means here; each clause is a leaf or one `or` of leaves, so a filter
+// built on it stays inside Notion's two-level nesting cap however many options are combined.
+const identityClauses = ({ url, subreddit }: Ident): object[] => [
+	{ property: "Thread URL", url: { is_not_empty: true } },
+	...anyOf((url ?? []).map((u) => ({ property: "Thread URL", url: { equals: threadUrl(u) } }))),
+	...anyOf(
+		(subreddit ?? []).map((s) => ({
+			property: "Thread URL",
+			url: { contains: `/r/${subKey(s)}/comments/` }
+		}))
+	)
+];
+
+// newest(rows, key, limit) — the tail both readers share: newest first, then trim. `limit` trims the
+// ANSWER, never the work (every read walks all pages — one page cannot prove the rest), so it is how
+// many rows you want to look at, not a way to pay less.
+const newest = <T>(rows: T[], key: (t: T) => string, limit?: number): T[] => {
+	const all = [...rows].sort((a, b) => key(b).localeCompare(key(a)));
+	return limit ? all.slice(0, limit) : all;
+};
+
+// filterOf(opts) — the thread vocabulary compiled to a store filter: the shared identity clauses
+// plus this table's own two columns, each ANDed on, so no option ever widens the set.
+const filterOf = (opts: Select): object => ({
+	and: [
+		...identityClauses(opts),
+		...(opts.tier ? [{ property: "Tier", select: { equals: opts.tier } }] : []),
+		...(opts.since ? [{ property: "Created", date: { on_or_after: sinceIso(opts.since) } }] : [])
+	]
+});
+
+// WHICH outreaches — the Backlog's OWN vocabulary, and it is separate for the reason the tables are:
+// an outreach's facts are where the conversation stands and what we posted, none of which a thread
+// has. Only the identity flags are shared (both tables key on the canonical Thread URL, which is
+// what lets you ask either one about the same thread). `--since` here reads `Posted at`, not
+// `Created`: a different table keeps a different clock, and fusing them would silently answer a
+// question nobody asked.
+export interface BacklogSelect extends Ident {
+	status?: string;
+	since?: string;
+}
+const backlogFilterOf = (opts: BacklogSelect): object => ({
+	and: [
+		...identityClauses(opts),
+		...(opts.status ? [{ property: "Status", select: { equals: opts.status } }] : []),
+		...(opts.since ? [{ property: "Posted at", date: { on_or_after: sinceIso(opts.since) } }] : [])
+	]
+});
+
+// select(opts) — the core engine both thread projections read: the matching rows with their seeds
+// parsed once, newest first, then `--limit`. Ordered on the seed's own `created` rather than the
+// column, so the order is the thread's, whatever a re-scan wrote.
+const select = async (opts: Select): Promise<{ row: Row; seed: Seed | null }[]> =>
+	newest(
+		(await queryAll(store, config.models.RedditThreads, filterOf(opts))).map((row) => ({
+			row,
+			seed: seedOf(row)
+		})),
+		({ seed }) => String(seed?.created ?? ""),
+		opts.limit
+	);
+
+// queue(t) — record one listing hit, its seed written straight from the listing (title + the FULL
+// post body — all a qualification needs). Never records the owner (you don't reply to yourself).
+//
+// A PURE UPSERT: it writes what Reddit says and nothing about where the thread stands, so it cannot
+// move one — forward or backward — however many times it runs. That is not a guard, it is the
+// absence of anything to guard. (It used to write a rung, which needed a read of the current one to
+// avoid regressing it; the read was a round-trip per scanned thread, and the guard leaked anyway on
+// any status outside the ladder.) Score and comment count are refreshed while we are here: they
+// moved since the last scan, and they are the two numbers the card shows.
 export const queue = async (
 	t: Threads["threads"][number],
 	subreddit: string,
 	ranAt: string
-): Promise<{
-	url: string;
-	queued: boolean;
-	status: string | null;
-	reason?: string;
-	thread?: string;
-}> => {
+): Promise<{ url: string; queued: boolean; reason?: string; thread?: string }> => {
 	const u = threadUrl(t.url);
 	if (OWNER && t.author?.toLowerCase() === OWNER.toLowerCase())
-		return { url: u, queued: false, status: null, reason: "owner" };
-	const current = await statusOf(u);
-	const advanced = current === "Not qualified" || rank(current) >= rank("To qualify");
+		return { url: u, queued: false, reason: "owner" };
 	const row: RedditThreads = {
 		Name: nameOf(subreddit, t.title),
 		"Thread URL": u,
 		Subreddit: subreddit,
 		Author: t.author ?? undefined,
-		Preview: t.body ?? undefined,
+		// No `Preview`: it was the post body a second time, written here and nowhere else — so a
+		// `refresh` moved the seed and left the copy behind, and nothing ever read it back (neither
+		// prompt's Input schema names it). One writer, no reader, guaranteed to drift.
 		Created: t.created,
 		Score: t.score,
 		Comments: t.num_comments,
-		// The evidence field: the thread as the listing gave it (title + full post), rendered by
-		// evidence.ts as a Reddit card. The flat columns stay for the Notion table view; this is
-		// what the judge and the review app render. Link/image posts have no text — title-only card.
+		// The SEED: the thread as the listing gave it (title + full post), and the field a judgment
+		// projects its Input from — evidence.ts then renders that Input as a Reddit card. It is not
+		// itself evidence: evidence is the snapshot a Decision freezes, and this is the live state the
+		// snapshot is taken OF. The flat columns stay for the Notion table view. Link/image posts have
+		// no text — title-only card.
 		Thread: stringify(
 			{
 				subreddit,
@@ -187,11 +318,10 @@ export const queue = async (
 			},
 			{ lineWidth: 0 }
 		),
-		"Scanned at": ranAt,
-		...(advanced ? {} : { Status: "To qualify" })
+		"Scanned at": ranAt
 	};
 	const r = await store.upsert(config.models.RedditThreads, row, "Thread URL");
-	return { url: u, queued: !advanced, status: advanced ? current : "To qualify", thread: r.url };
+	return { url: u, queued: r.created, thread: r.url };
 };
 
 // refresh(url) — re-read ONE thread from its own page and re-freeze it, returning the stored row.
@@ -201,10 +331,15 @@ export const queue = async (
 // exactly the shape `queue` froze, so the renderer and every quote offset stay in one space.
 //
 // It is a PRIMITIVE, not a funnel step, and what makes it reusable is what it refuses to touch: the
-// evidence columns only (Thread, Score, Comments) — never Status, Tier or Name. So it is safe at
-// any rung, any number of times, and the funnel's second read is only its first caller. A later one
-// ("did the OP answer the reply we posted?") reads the row, calls this, and diffs the two seeds'
-// `comments` — no change here.
+// thread's own state, three columns of it (Thread, Score, Comments) — never Tier, never Name, and
+// nothing on the Backlog. So it is safe wherever a thread stands, any number of times, and the
+// funnel's second read is only its first caller. A later one ("did the OP answer the reply we
+// posted?") reads the row, calls this, and diffs the two seeds' `comments` — no change here.
+//
+// It does not touch EVIDENCE, and cannot: evidence is what a Decision froze — its own copy of the
+// Input, rendered at read time — so it is a snapshot of this seed at the instant of a judgment, not
+// a view of it. Re-reading Reddit moves the live state that the NEXT judgment will project from, and
+// reaches nothing already judged. (Which is also why every committed quote's offsets stay valid.)
 //
 // `comments` is written ALWAYS, even as `[]`: its presence is what tells a re-run the fetch already
 // happened (see `hasCommentTree`). Score and the comment count are refreshed while we are here —
@@ -256,11 +391,12 @@ export const refresh = async (url: string): Promise<Row> => {
 
 export const tools = {
 	// scan — discovery only: each watched subreddit's threads newer than `since` (the script's own
-	// chronological window), queued with their evidence at "To qualify". No LLM — judging is
-	// `engage`'s job, reading that status back as its worklist. Dedup across subreddits and re-runs
-	// is structural — Thread URL + the monotonic guard.
+	// chronological window), recorded with their evidence. No funnel state and no LLM — judging is
+	// `engage`'s job, and it reads what is owed off the Tier rather than off anything written here.
+	// Dedup across subreddits and re-runs is structural: one canonical Thread URL, one row, and a
+	// write that says nothing about progress cannot undo any.
 	// One reduck run per subreddit — the rules a reply must obey are declared in config.ts, so
-	// discovery has nothing to refresh (`rules` below derives them, as a setup step).
+	// discovery has nothing to refresh (they are fetched by hand, as a setup step).
 	scan: async (since = "48h", subreddits: readonly string[] = Object.keys(SUBREDDITS)) =>
 		mapLimit([...subreddits], async (subreddit) => {
 			const ranAt = new Date().toISOString();
@@ -271,36 +407,35 @@ export const tools = {
 			return { subreddit, seen: threads.length, queued };
 		}),
 
-	// engage — everything still owed on one thread, read off its rung: qualify it if that hasn't
-	// happened, then draft the reply if it earned one. Monotonic — it no-ops at or past the draft
-	// gate and on the terminal "Not qualified", so a re-run (or engagePending, or a second scan)
-	// never double-judges and never double-drafts.
+	// engage — everything still owed on one thread, read off the thread's own DATA: qualify it if no
+	// Tier says it was, then draft the reply if it earned one and no outreach was ever opened. Both
+	// guards are facts a previous stage produced, so a re-run (or engagePending, or a second scan)
+	// never double-judges and never double-drafts — and a run that died between the two resumes with
+	// nothing to reconcile.
 	//
 	// Qualification is a JUDGMENT, not a Decision: it is calibrated (eval_qualify.mjs green on the
 	// ground truth), so no human will ever rule on it, and a Decision born already-committed is
 	// noise in the queue a human actually reads. What survives is what a later reader needs — the
-	// Tier and Status columns, plus the claims as a comment ON THE THREAD PAGE, so "why was this
-	// even qualified?" is answered where you are already looking. When the answer is "it shouldn't
-	// have been", the fix is a line in reddit_qualified_threads.yaml and a re-run of the eval; no
-	// Decision was ever involved in that loop.
+	// Tier column, plus the claims as a comment ON THE THREAD PAGE, so "why was this even
+	// qualified?" is answered where you are already looking. When the answer is "it shouldn't have
+	// been", the fix is a line in reddit_qualified_threads.yaml and a re-run of the eval; no Decision
+	// was ever involved in that loop.
 	engage: async (url: string) => {
 		const u = threadUrl(url);
-		// ONE read of the thread row serves both the funnel guard and the judgment: the guard needs the
-		// Status, the judgment needs the frozen evidence, and they are the same row.
+		// ONE read of the thread row serves both the funnel guards and the judgment: the guards need
+		// the Tier and the Backlog link, the judgment needs the frozen evidence, and they are one row.
 		let row = await readThread(u);
-		const status = String(row.fields.Status ?? "");
-		if (status === "Not qualified" || rank(status) >= rank("Draft pending review"))
-			return { url: u, skipped: true, status };
 		let tier = String(row.fields.Tier ?? "");
+		if (tier === "No") return { url: u, skipped: true, tier };
 		let screened: string | undefined;
-		if (rank(status) < rank("To engage")) {
+		if (!tier) {
 			// ONE question, asked twice as the evidence grows — not two prompts. The criteria, the
 			// Output schema and the Prompt row are the same both times; all that differs is that the
 			// second read can see what was said under the post. So there is nothing to keep in sync,
 			// and the guard on the fetch is DATA, not a flag or a rung: a seed that already carries a
 			// comment tree is read once, definitively, which is also what makes a crashed run resumable.
 			let v = await decider.judge("qualify", subjectOf(u, row));
-			if (config.prompts!.qualify.resolve(v.output).advances && !hasCommentTree(row)) {
+			if (config.prompts.qualify.resolve(v.output).advances && !hasCommentTree(row)) {
 				// The pre-screen's only power is to spend a browser run, or not. Most threads never get
 				// here, which is the whole reason the read is split (README #9): the listing already
 				// carries the post, so this fetch buys the comments and nothing else.
@@ -308,19 +443,16 @@ export const tools = {
 				row = await refresh(u);
 				v = await decider.judge("qualify", subjectOf(u, row));
 			}
-			const move = config.prompts!.qualify.resolve(v.output);
+			const move = config.prompts.qualify.resolve(v.output);
 			tier = tierOf(v);
-			// The Tier lands on the THREAD row, not only inside the verdict: the thread is the entity
-			// both stages resolve, so it is the one place they share data. That is how the reply sees it
-			// — the reply prompt's Input schema names Tier, so it freezes into the draft's Input and
-			// renders as evidence (a reviewer sees what the reply answers AND how hard a fit it was).
-			// It is also just a column, so the Notion table filters and sorts by it for free.
+			// The Tier lands on the THREAD row, not only inside the verdict, and it is the whole record
+			// of this judgment: it is what says the thread HAS been judged (so a re-run skips it), what
+			// says it was judged OUT when it reads "No", and what the reply then sees — the reply
+			// prompt's Input schema names Tier, so it freezes into the draft's Input and renders as
+			// evidence (a reviewer sees what the reply answers AND how hard a fit it was). Being just a
+			// column, the Notion table filters and sorts by it for free.
 			await Promise.all([
-				store.upsert(
-					config.models.RedditThreads,
-					{ "Thread URL": u, Status: move.status, Tier: tier },
-					"Thread URL"
-				),
+				store.upsert(config.models.RedditThreads, { "Thread URL": u, Tier: tier }, "Thread URL"),
 				store.comment(
 					row.id,
 					[
@@ -332,8 +464,7 @@ export const tools = {
 					].join("\n")
 				)
 			]);
-			if (!move.advances)
-				return { url: u, tier, ...(screened ? { screened } : {}), status: move.status };
+			if (!move.advances) return { url: u, tier, ...(screened ? { screened } : {}) };
 		}
 		// By KEY, not the Subject in hand: the draft's evidence must include the Tier just written, so
 		// this stage reads the row back rather than judging a copy that predates its own gate.
@@ -342,67 +473,97 @@ export const tools = {
 			url: u,
 			tier,
 			...(screened ? { screened } : {}),
-			status: config.prompts!.reply.pending,
+			status: config.prompts.reply.pending,
 			draft: draft.open ?? draft.id
 		};
 	},
 
-	// engagePending — drain `engage` over the whole backlog: BOTH unfinished rungs, "To qualify"
-	// (scan's output) and "To engage" (qualified, drafting never happened — a crashed run leaves
-	// threads exactly there, and a filter on the first rung alone would strand them forever).
-	// Engaging a thread advances it past both, so the drain pages the backlog with no cursor.
+	// engagePending — drain `engage` over everything owed: never judged, plus judged-worth-answering
+	// but never drafted (a crashed run leaves threads exactly there, and a filter on the first alone
+	// would strand them forever). PENDING above is that set, said once. Engaging a thread leaves it,
+	// so the drain pages the queue with no cursor to carry.
 	engagePending: () =>
-		drain(
-			store,
-			config.models.RedditThreads,
-			{
-				or: [
-					{ property: "Status", select: { equals: "To qualify" } },
-					{ property: "Status", select: { equals: "To engage" } }
-				]
-			},
-			(r) => tools.engage(String(r.fields["Thread URL"]))
+		drain(store, config.models.RedditThreads, PENDING, (r) =>
+			tools.engage(String(r.fields["Thread URL"]))
 		),
 
-	// dump — every stored thread of one subreddit, raw: the frozen Thread seed (title + full post,
-	// exactly as `queue` froze it) plus the row's current Status. A full read, not a worklist — it
-	// walks the whole set via queryAll (a filter page can't prove the rest). Filtered on the
-	// canonical Thread URL, never the Subreddit column: threadUrl lowercases the sub, so the key
-	// matches however the scan was cased. Newest first. Reads everything, writes nothing.
-	dump: async (subreddit: string) => {
-		const sub = subreddit.replace(/^r\//i, "").toLowerCase();
-		const rows = await queryAll(store, config.models.RedditThreads, {
-			property: "Thread URL",
-			url: { contains: `/r/${sub}/comments/` }
-		});
-		return rows
-			.map((r) => ({
-				url: String(r.fields["Thread URL"] ?? ""),
-				...((parse(String(r.fields.Thread ?? "")) ?? {}) as object),
-				status: r.fields.Status ?? null
+	// threads — the stored threads themselves, in the two shapes anyone ever wants them. ONE selector
+	// behind both (`select`), so they can only ever differ in how much of a row they show — the same
+	// two-readers rule the prompt codec obeys (src/stores/notion.codec.ts): one traversal, two
+	// projections, no way for them to disagree about what the set is.
+	threads: {
+		// get — the INDEX: the line you scan a list by. Columns and seed scalars only; the post's own
+		// words are `dump`'s job, and shipping them here would make "show me the T1 hits" a megabyte.
+		get: async (opts: Select = {}) =>
+			(await select(opts)).map(({ row, seed }) => ({
+				url: String(row.fields["Thread URL"] ?? ""),
+				subreddit: subOf(String(row.fields["Thread URL"])),
+				// The seed's real title; `Name` is the truncated display label, so it is the fallback,
+				// not the source — the same tolerance seedOf and evidence.ts have for an old seed.
+				title: seed?.title ?? row.fields.Name ?? null,
+				author: row.fields.Author ?? null,
+				created: seed?.created ?? row.fields.Created ?? null,
+				score: row.fields.Score ?? null,
+				comments: row.fields.Comments ?? null,
+				tier: row.fields.Tier ?? null
+			})),
+
+		// dump — the CORPUS: each thread's seed exactly as `queue`/`refresh` last wrote it, plus how it
+		// was judged. The raw material a human labels into a ground truth (*_qualified_threads.yaml,
+		// which eval_qualify.mjs reads), so the record shape is the one those files were cut from and
+		// stays byte-comparable with them.
+		dump: async (opts: Select = {}) =>
+			(await select(opts)).map(({ row, seed }) => ({
+				url: String(row.fields["Thread URL"] ?? ""),
+				...(seed ?? {}),
+				tier: row.fields.Tier ?? null
 			}))
-			.sort((a, b) =>
-				String((b as { created?: string }).created ?? "").localeCompare(
-					String((a as { created?: string }).created ?? "")
-				)
-			);
 	},
 
-	// refresh — the primitive above, exposed: re-pull one thread's page and re-freeze it. Evidence
-	// only, so it never disturbs where a thread sits in the funnel.
+	// backlog — the outreaches themselves: one row per thread we chose to engage, which is where the
+	// conversation stands and what we actually posted. The peer of `threads`, and separate for the
+	// reason the tables are (README #4): a thread is what Reddit says, an outreach is what WE did.
+	//
+	// One projection, not two — a thread carries a document (hence `dump`), an outreach carries
+	// scalars, so there is nothing a second shape would add. It is also the only path to `Comment URL`
+	// and `Posted at`: a conversation at "Waiting for OP" has no open Decision, so the review queue
+	// cannot show it and this is the one place it exists.
+	backlog: {
+		// Newest conversation first, and an unposted one sorts to the TOP: it is the row still waiting
+		// on a human, so it is the one you came here to see. (Hence the high sentinel for a null
+		// `Posted at` — it has not happened yet, which sorts later than any instant that has.)
+		get: async (opts: BacklogSelect = {}) =>
+			newest(
+				(await queryAll(store, config.models.RedditBacklog, backlogFilterOf(opts))).map((r) => ({
+					url: String(r.fields["Thread URL"] ?? ""),
+					subreddit: subOf(String(r.fields["Thread URL"])),
+					name: r.fields.Name ?? null,
+					status: r.fields.Status ?? null,
+					commentUrl: r.fields["Comment URL"] ?? null,
+					postedAt: r.fields["Posted at"] ?? null
+				})),
+				(r) => String(r.postedAt ?? "￿"),
+				opts.limit
+			)
+	},
+
+	// refresh — the primitive above, exposed: re-pull one thread's page and update its seed. The
+	// thread's own state only, so it never disturbs where a thread stands or anything already judged.
 	refresh: (url: string) =>
 		refresh(url).then((r) => ({
 			url: threadUrl(url),
 			comments: seedOf(r)?.comments?.length ?? 0
 		})),
 
-	// draft — manually (re-)draft a reply for one thread on the frozen evidence, moving it to the
-	// draft gate. No dependency to carry: the qualification is a judgment, not a Decision, so there
-	// is no gate for a draft to sit behind. `context` prints the frozen judgment context, writes nothing.
+	// draft — manually (re-)draft a reply for one thread on its stored seed, opening (or re-opening)
+	// its outreach at "Pending approval". The Decision freezes its own copy of that seed as it judges,
+	// which is what makes the judgment reviewable later. No dependency to carry: the qualification is
+	// a judgment, not a Decision, so there is no gate for a draft to sit behind. `context` prints what
+	// the model would read and writes nothing.
 	draft: (url: string) => decider.decide("reply", threadUrl(url)),
-	context: (url: string) => decider.context("reply", threadUrl(url)),
-
-	// list / show — the review queue and one Decision, straight off the shared engine.
-	list: () => decider.list(),
-	show: (handle: string) => decider.showDecision(handle)
+	context: (url: string) => decider.context("reply", threadUrl(url))
+	// No list/show here: the Decisions table is the ENGINE's, not this agent's, so it has one
+	// agent-agnostic reader — `sflock decisions list/show --agent reddit-engage`. The runtime binary
+	// acts and reads its own two tables (threads, backlog); review belongs to the operator CLI
+	// (README #2). Re-exposing it here was the same queue under a second name.
 };

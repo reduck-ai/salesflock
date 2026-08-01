@@ -4,16 +4,16 @@
 
 import type { Quote } from "$core/anchor";
 
-// The output of reviewing one card: the committed output plus optional free-text. The committed
-// output IS the decision (schema-valid, seeded from the judge's and edited in place); `reasoning`
-// is the human's edited statements (comments and added claims/quotes), present only when it differs
-// from the judge's. `committedOutput` is absent for a Save — a judgment with the decision withheld:
-// the edits persist, the row stays at the gate.
+// What one card hands back: the human's WORKING COPY — the output as they have it, their note,
+// their edited statements — and whether they are deciding. One payload, one bit, so a Save and a
+// Confirm differ in what they MEAN, never in what they carry. `commit: false` keeps the working
+// copy and leaves the row at the gate; `commit: true` makes that same output the decision.
 export interface Judgment {
 	id: string;
-	committedOutput?: Record<string, unknown>;
+	output: Record<string, unknown>;
 	feedback: string;
 	reasoning?: Statement[];
+	commit: boolean;
 }
 
 // A quote is a [start,end) char range into the evidence (see salesflock/src/anchor.ts) — its
@@ -40,13 +40,20 @@ export interface EvidencedJudgment {
 	href?: string; // the source record (the Notion Decision page)
 	statements: Statement[];
 	evidence: string; // markdown — rendered live from the Input data map; quotes anchor into it
-	output: Record<string, unknown>; // the judge's Output — the editable seed
+	// What the card opens on and edits: the human's latest word if they have one (a decision, else a
+	// saved draft), otherwise the judge's proposal. The adapter resolves that precedence — the card
+	// only ever sees "the output", which is why it needs no notion of review state.
+	output: Record<string, unknown>;
+	// The judge's own proposal, always — the baseline that says whether the human changed anything.
+	// Distinct from `output` precisely because the two may differ; that difference IS an overturn.
+	proposed: Record<string, unknown>;
 	outputSchema?: Record<string, unknown>; // the Prompt's Output JSON Schema — the edit contract
 	anchor?: Quote; // the evidence span the composer attaches BELOW (a writing prompt supplies it);
 	// absent ⇒ the composer floats in the dock (a verdict about the whole subject, not one span)
 	hasFeedback: boolean; // does this decision already carry a human delta (any channel, any state)
-	// a saved-but-undecided draft, when one exists: the human's note and edited statements
-	// (Feedback / Final reasoning). The card seeds from this; `statements` stays the judge's
-	// canonical copy, so provenance (which claim is whose) is still read off it.
+	// the other two parts of a saved working copy, when one exists: the human's note and edited
+	// statements (Feedback / Final reasoning). The card seeds from this; `statements` stays the
+	// judge's canonical copy, so provenance (which claim is whose) is still read off it. The saved
+	// OUTPUT is not repeated here — it is already `output` above, by the precedence that field names.
 	draft?: { feedback: string; reasoning?: Statement[] };
 }
