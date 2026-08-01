@@ -15,6 +15,12 @@
 //   sflock prompts push --agent <id> <kind> [file]     publish the NEXT version: a new Prompt row,
 //                                       schemas copied verbatim, shared regions written back as
 //                                       references (refused if the candidate changed one)
+//   sflock eval cases --agent <id>      refresh agents/<id>/<prompt>_ground_truth.yaml from your reviews
+//                                       (additive — hand edits, comments and `skip:` reasons survive)
+//   sflock eval judge --agent <id> [candidate.md]   does the SCORER agree with you — the output you
+//                                       committed must pass, the draft you overturned must fail
+//   sflock eval reply --agent <id> [candidate.md] [--tier T1 --limit n]   does the DRAFTER satisfy
+//                                       the scorer — over the reviewed corpus, or any threads at all
 //   sflock docs list                    the Writer's documents (agent-agnostic — one shared table)
 //   sflock docs show <doc>              one document, its body as markdown
 //   sflock docs push <doc> [file]       a new version of one document — saved AND applied live in the
@@ -27,6 +33,13 @@
 // createReviewer (no entity bridge); docs reads the Writer's table through the Store seam
 // (src/docs.ts) — no --agent, because the writing table belongs to no one agent — and pushes through
 // the app's own save sink, so a revision reaches the open editor. sflock holds no per-store semantics.
+//
+// eval is the CALIBRATION half of `prompts edit/push` — authoring writes the next version of a
+// judgment's instructions, eval says whether it is better. Grading free text needs a model, so the
+// scorer is itself a Prompt (the agent's `judge` spec), improved through the same three verbs as the
+// prompt it grades. Its ground truth is the review history — a query, never a file: every review
+// already froze the evidence, the model's attempt and the human's word, so a checked-in corpus would
+// be a second copy of rows the CRM owns (src/eval.ts).
 //
 // Review is read-only with TWO exceptions, and both are prose exceptions (README #2): `docs push`
 // hands back a document, and `prompts push` a new version of a judgment's instructions. Text a person
@@ -44,6 +57,7 @@ import { bind } from "./scripts.js";
 import { renderError } from "./errors.js";
 import { STORES } from "./stores/index.js";
 import { createReviewer } from "./decide.js";
+import { pullCases, evalJudge, evalReply } from "./eval.js";
 import * as writer from "./docs.js";
 import { renderFeedback } from "./review.js";
 import { AGENTS, type Agent } from "../agents/index.js";
@@ -237,6 +251,83 @@ docs
 	.action(async (doc: string, file: string | undefined, { title }: { title?: string }) => {
 		const markdown = file && file !== "-" ? await readFile(file, "utf8") : await text(process.stdin);
 		console.log(JSON.stringify(await writer.push(doc, { markdown, title }), null, 2));
+	});
+
+// eval — the calibration half of `prompts edit/push`: authoring writes the next version of a
+// judgment's instructions, this says whether it is better. Read-only, agent-agnostic, and asked in
+// a fixed order — first whether the SCORER agrees with you, then whether the DRAFTER satisfies the
+// scorer. Grading free text needs a model, so the scorer is itself a Prompt (the agent's `judge`
+// spec), improved through the very same three verbs as the prompt it grades.
+//
+// The corpus is a QUERY, not a file (src/eval.ts): every review already froze the whole example, so
+// a ground-truth file would be a second copy of rows the CRM owns. `cases` prints it — redirect it
+// for a snapshot. Report goes to stdout because for an eval the report IS the answer.
+const evaluate = program
+	.command("eval")
+	.description("Calibrate an agent's prompts: does the judge agree with you, does the drafter satisfy the judge.");
+
+evaluate
+	.command("cases")
+	.description("Refresh the ground-truth YAML beside the agent from your reviews. ADDITIVE: an entry already in the file is left untouched — your edits, your comments and your `skip:` reasons all survive, which is why this is a file and not a query. Only unseen decisions are appended.")
+	.requiredOption("--agent <id>", "agent under agents/ whose Decisions carry the reviews")
+	.option("--prompt <key>", "the graded prompt's key in config.prompts", "reply")
+	.action(async ({ agent, prompt }: { agent: string; prompt: string }) => {
+		const { path, added, kept, total } = await pullCases(agent, prompt);
+		console.log(`${path}: ${added} added, ${kept} kept, ${total} total`);
+	});
+
+evaluate
+	.command("judge")
+	.argument("[candidate]", `markdown from \`prompts edit <judge>\`; omit to score the LIVE judge body`)
+	.description("Does the SCORER agree with you? Each reviewed decision is one or two assertions: the output you committed MUST pass, the draft you overturned MUST fail. Nothing is re-generated — these are the texts you actually ruled on.")
+	.requiredOption("--agent <id>", "agent under agents/ whose config.ts declares a `judge` prompt")
+	.option("--prompt <key>", "the graded prompt's key in config.prompts", "reply")
+	.action(async (candidate: string | undefined, { agent, prompt }: { agent: string; prompt: string }) => {
+		const { label, positives, negatives, errored, rows } = await evalJudge(agent, prompt, candidate);
+		const ok = (g: { valid: boolean; expect: boolean }) => g.valid === g.expect;
+		const tally = (g: { valid: boolean; expect: boolean }[]) => `${g.filter(ok).length}/${g.length}`;
+		console.log(`\n=== judge ${label} — agrees ${tally([...positives, ...negatives])}${errored ? `, ${errored} unscoreable` : ""}`);
+		console.log(`    committed  ${tally(positives)}  (must pass)`);
+		console.log(`    overturned ${tally(negatives)}  (must fail)`);
+		for (const r of rows)
+			for (const g of r.got) {
+				// An unscoreable case is neither agreement nor disagreement — flagged apart, never tallied.
+				if (!("valid" in g)) {
+					console.log(`! ${g.text.padEnd(10)} ${"—".padEnd(7)}  ${r.c.name}\n      ${g.error}`);
+					continue;
+				}
+				console.log(`${ok(g) ? "  " : "✗ "}${g.text.padEnd(10)} ${g.valid ? "valid  " : "invalid"}  ${r.c.name}`);
+				if (!ok(g)) for (const w of g.why) console.log(`      ${w}`);
+			}
+	});
+
+evaluate
+	.command("reply")
+	.argument("[candidate]", `markdown from \`prompts edit <prompt>\`; omit to score the LIVE body`)
+	.description("Does the DRAFTER satisfy the judge? Re-drafts each thread under the candidate instructions and rules on the result. With no filters it uses the reviewed corpus (frozen evidence, so runs compare); --tier/--limit grade any threads at all — that is what having a judge buys.")
+	.requiredOption("--agent <id>", "agent under agents/ whose prompt is being graded")
+	.option("--prompt <key>", "the graded prompt's key in config.prompts", "reply")
+	.option("--tier <tier>", "grade stored threads at this tier instead of the reviewed corpus")
+	.option("--subreddit <names...>", "narrow those threads to these subreddits")
+	.option("--limit <n>", "keep only the newest <n>")
+	.action(async (candidate: string | undefined, f: { agent: string; prompt: string; tier?: string; subreddit?: string[]; limit?: string }) => {
+		const select = f.tier || f.subreddit || f.limit ? { tier: f.tier, subreddit: f.subreddit, limit: f.limit ? Number(f.limit) : undefined } : undefined;
+		const { label, judge, rows } = await evalReply(f.agent, f.prompt, candidate, select);
+		const scored = rows.filter((r) => "valid" in r);
+		const bad = rows.length - scored.length;
+		console.log(`\n=== ${f.prompt} ${label}, judged by ${judge} — valid ${scored.filter((r) => r.valid).length}/${scored.length}${bad ? `, ${bad} unscoreable` : ""}`);
+		for (const r of rows) {
+			if (!("valid" in r)) {
+				console.log(`! ${r.name}\n      ${r.error}`);
+				continue;
+			}
+			console.log(`${r.valid ? "  " : "✗ "}${r.name}`);
+			if (!r.valid) {
+				for (const w of r.why) console.log(`      ${w}`);
+				console.log(`      drafted: ${JSON.stringify(r.drafted).slice(0, 160)}`);
+				if (r.mine) console.log(`      yours:   ${JSON.stringify(r.mine).slice(0, 160)}`);
+			}
+		}
 	});
 
 program.parseAsync().catch((e: unknown) => {

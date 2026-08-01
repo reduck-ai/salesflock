@@ -112,7 +112,9 @@ const advanced = async (id: string): Promise<{ advances: boolean; created: strin
 	const spec = agentFor((await promptInfo(promptId)).name)?.spec;
 	try {
 		return {
-			advances: !!spec && spec.resolve(JSON.parse(String(fo)) as Record<string, unknown>).advances,
+			// No `resolve` ⇒ the prompt moves no pipeline (an offline scorer), so it advances nothing —
+			// the same answer as an unknown prompt, and for the same reason: there is no rule to read.
+			advances: !!spec?.resolve?.(JSON.parse(String(fo)) as Record<string, unknown>).advances,
 			created
 		};
 	} catch {
@@ -439,7 +441,10 @@ export const record = async (
 	// The row's own agent — its spec drives the move; its entity/ladder say what moves and which
 	// way is forward. Resolve BEFORE the write so a malformed output fails loud, persisting nothing.
 	const owner = agentFor(name);
-	const move = owner?.spec.resolve(committedOutput as Record<string, unknown>);
+	// `resolve?.` — a prompt may declare no pipeline effect at all (an offline scorer, which mints no
+	// Decision and so should never reach here). Undefined lands in the same branch as an unknown
+	// kind below: the output is still recorded, nothing is moved, and the anomaly is logged.
+	const move = owner?.spec.resolve?.(committedOutput as Record<string, unknown>);
 
 	// Wave 2b — the ACT: what committing this decision DOES outside the CRM (post the reply, send the
 	// message), declared by the agent beside `resolve` because it is the same kind of business rule.
@@ -476,7 +481,7 @@ export const record = async (
 	if (move === undefined || owner === undefined) {
 		await decided;
 		return void console.error(
-			`record: no agent declares kind "${name}" (prompt ${promptId}) — Final output written, entity not moved`
+			`record: ${owner ? `kind "${name}" declares no \`resolve\` — it moves no pipeline and should not be reviewable` : `no agent declares kind "${name}"`} (prompt ${promptId}) — Final output written, entity not moved`
 		);
 	}
 	// A rejecting gate deletes the eager work it held back — each unreviewed dependent is archived.

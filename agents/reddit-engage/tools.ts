@@ -138,7 +138,13 @@ const linkEntity = async (
 	return ref.id;
 };
 
-const decider = createDecider({
+// Exported for ONE consumer beyond this file: `sflock eval` (src/eval.ts), which re-judges a stored
+// thread under candidate instructions. It goes through the decider rather than rebuilding the
+// context so the eval is faithful BY CONSTRUCTION — `judgmentContext` resolves the subject, joins
+// the subreddit rules, projects the Input, renders the evidence and builds the few-shot block with
+// the case under test excluded. An eval that re-derives any of that is measuring a copy of the code
+// that runs, not the code that runs. Read-only: only `decide` writes, and the eval never calls it.
+export const decider = createDecider({
 	config,
 	store,
 	renderEvidence,

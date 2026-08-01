@@ -55,5 +55,9 @@ for (const a of Object.values(AGENTS))
 export const agentFor = (kind?: string): (Agent & { spec: PromptSpec }) | undefined =>
 	kind ? kinds.get(kind) : undefined;
 
-// Every declared kind — the review app's per-Prompt filter options, stable whatever is queued.
-export const KINDS: string[] = [...kinds.keys()];
+// Every REVIEWABLE kind — the review app's per-Prompt filter options, stable whatever is queued.
+// A spec with no `resolve` moves no pipeline, so it mints no Decision and no row can ever carry its
+// kind: offering it as a filter would be a phantom option. That is the one test, and it is the
+// spec's own declaration rather than a second list to keep in sync — `agentFor` still resolves
+// every kind, so such a prompt stays fully authorable through `sflock prompts`.
+export const KINDS: string[] = [...kinds.entries()].filter(([, a]) => a.spec.resolve).map(([k]) => k);

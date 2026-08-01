@@ -97,7 +97,15 @@ export interface PromptSpec {
 	// a calibrated funnel stage that judges without minting a Decision (`judge`, not `decide`): there
 	// is nothing to park the entity at, and the stage resolves its Status itself.
 	pending?: string;
-	resolve: (output: Record<string, unknown>) => { status: string; advances: boolean };
+	// Where the committed output leaves the pipeline entity. ABSENT when this prompt moves no
+	// pipeline at all — an offline scorer (the reply judge), which mints no Decision, binds to no
+	// entity and is never confirmed. The interface used to assert every prompt advances something;
+	// that stopped being true the day a prompt existed only to grade another one's output, and
+	// declaring the semantics a prompt HAS beats declaring fiction for the ones it hasn't.
+	// Its absence is the ONE test of "is this a reviewable kind" — read by agents/index.ts's KINDS
+	// (so the app's filter offers no phantom option) and by the review app's commit, which throws
+	// rather than silently persisting a decision it cannot resolve.
+	resolve?: (output: Record<string, unknown>) => { status: string; advances: boolean };
 	// What committing this decision DOES — the outside-world effect, beside `resolve`'s inside-the-CRM
 	// one. Declared here for the same reason `resolve` is: it is a business rule, not derivable from
 	// the output, and the human's click is where it belongs — a decision a person approves and a

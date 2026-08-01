@@ -200,6 +200,20 @@ export default {
 					"Posted at": new Date().toISOString()
 				};
 			}
-		}
+		},
+		// The SCORER — the only prompt here that judges nothing about Reddit and everything about us:
+		// its Input is `reply`'s Input PLUS `reply`'s Output, and it rules whether that draft obeys
+		// the rules the reply prompt states. Free text cannot be scored by `===`, and the alternative
+		// to a prompt is a hand-written checker that drifts from the instructions it checks; a Prompt
+		// row is versioned, fingerprinted and authored in the same loop as the thing it grades.
+		//
+		// No `pending`, no `resolve`, no `act`: it moves no pipeline, mints no Decision and is never
+		// confirmed. It exists only for `sflock eval`. That absence is load-bearing — it is what keeps
+		// this kind out of the review app's filter (agents/index.ts `KINDS`).
+		//
+		// Its ground truth is the review history itself: a Decision that was overturned yields a PAIR
+		// on one thread — the committed text is a positive, the draft it replaced a negative — same
+		// evidence, opposite verdict, which is the sharpest case a binary judge can be held to.
+		judge: { name: "Reddit Reply Judge" }
 	}
 } as const satisfies AgentConfig;

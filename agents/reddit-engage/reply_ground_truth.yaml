@@ -1,0 +1,67 @@
+# Ground truth for the reply judge — one entry per REVIEWED decision, refreshed by
+#   sflock eval cases --agent <agent> --prompt <prompt>
+# which UPSERTS on `id` and never touches an entry that is already here: your edits and comments
+# survive every re-pull, which is the whole reason this is a file and not a query.
+#
+# `good` is the output you committed (the judge must pass it); `bad` is the draft you replaced
+# (it must fail). The EVIDENCE is not copied here — it is read from the Decision itself, so a case
+# is scored against the row, exactly as the qualification eval does.
+#
+# A case that is not ground truth gets a `skip:` naming why, rather than being deleted — a
+# deletion is silently undone by the next pull, and the reason is worth keeping.
+# Not ground truth for the REPLY: the note is a qualification objection ("no specific Integration
+# need"), so what it records is that the thread should not have been engaged — qualify's business,
+# not the drafter's. Scored as a reply positive it teaches that a bare question answers anything.
+- id: 3af4d7b7-884c-81e9-bd12-ff548888ef64
+  skip: the correction is about the TIER, not the reply
+  name: r/ClaudeAI — How can I make Chrome give Claude for Chrome permissions for - Reddit Reply — 2026-08-01 09:07:58
+  good:
+    reply: "What do you need to do in Chrome? "
+  bad:
+    reply: If you want a truly autonomous browser for Claude, running it via an MCP server that controls a browser programmatically is much cleaner than fighting extension permissions. Controlling the browser via CDP or an automation framework bypasses origin and port-level prompts entirely. I'm actually building an MCP server that does exactly this—feel free to DM if you want to chat.
+  note: Not obvious he has a specific Integration need, he might happy with generic slow Agent
+- id: 3af4d7b7-884c-8162-9f6d-d23531dc6327
+  name: r/automation — Need help with first timer here - Reddit Reply — 2026-08-01 09:05:44
+  good:
+    reply: |-
+      What takes you the most time? Generating the content or posting? From what you say it seems to be about pasting to each blog and I checked quickly, there seems to be no API for this exact need.
+
+      In that case, best thing you can do is to reproduce what you do: automate the browser steps you perform yourself, aka navigate through the site, paste content and voila.
+
+      If you want, I have an MCP you can plug to your AI Agent (e.g. Claude) exactly for this! You would need to create your custom script for Presta shop though but I can have a look and help you if needed. You can try it at Reduck AI.
+  bad:
+    reply: I feel your pain, click-based recorders like UI.Vision are incredibly brittle because they break the moment a page loads slowly or a selector shifts. Since you don't code and PrestaShop blog modules rarely have a clean API, you're stuck with browser automation. I'm building a tool that makes this kind of browser automation reliable and easy to set up—feel free to DM me if you want to chat!
+# Not ground truth: the committed reply opens with the pitch and offers no help, which breaks the
+# first rule of the law itself. Holding the drafter to it would teach the opposite of the law.
+- id: 3af4d7b7-884c-8151-b718-f9683bc32eac
+  skip: pitch-first, no substance — contradicts "be of service first"
+  name: r/AI_Agents — Automating posts - Reddit Reply — 2026-08-01 09:02:55
+  good:
+    reply: I have built an MCP connected to a Chrome extension that allows to do this easily and quickly. Is this still an issue you face? If so, don't hesitate to DM and I can share it with you. We have a Public Beta that works well!
+  bad:
+    reply: That's a classic hurdle with hosted agents—their safety filters will block flagged sites, and writing raw Playwright scripts is tough if you aren't technical. A better approach is running browser automation locally via an MCP tool, which lets you drive your own browser session to bypass those blocks. I'm actually building a platform that does exactly this, feel free to DM me!
+- id: 3af4d7b7-884c-8156-b436-ea73f0d26047
+  name: r/ClaudeAI — Why are recorded skills so slow. - Reddit Reply — 2026-08-01 09:00:38
+  good:
+    reply: |-
+      That's because Claude is thinking every time it needs to perform actions and does not cache the code to replay it faster. 
+
+      Anytime you need Claude to do things, even if it has a skill it still has to compute every time where to act. On the opposite you can use Claude to understand the structure of the website by writing a script and re use that time so it's much faster, like a macro.
+
+      If you are interested, I have released a free MCP that allows Claude to create scripts and execute them over a Chrome extension so you only have it learn once the key actions to do, then it's super fast! It works already with some flows like LinkedIn outreach or Twitter but also Amazon. 
+      If relevant, don't hesitate to DM and happy to share access to Public Beta.
+  bad:
+    reply: That's the classic agent bottleneck! Relying entirely on visual AI to analyze screenshots for every single click adds massive latency. For a repetitive flow like Etsy to WordPress, you want deterministic scripts for the standard navigation, only calling the LLM for dynamic parts like captchas. I'm building a platform that does exactly this hybrid automation, feel free to DM if you want to chat!
+- id: 3af4d7b7-884c-811f-90e9-ee068a4f809e
+  name: r/ClaudeAI — What's the best way to create a good automated daily news br - Reddit Reply — 2026-08-01 09:00:37
+  good:
+    reply: |-
+      I would say start with APIs / programmatic access wherever possible as they are the most reliable. 
+
+      However, if sometimes they never intended to provide programmatic access, then it gets tricky. You can try to have Claude fetch it for you but it's super slow. 
+      You can try using a custom Playwright setup but you are likely to be detected easily as a bot and it does not handle login naturally. 
+
+      But if you are interested, I built an MCP just for this: it enables Claude, connected through an extension, to write scripts that it can call afterwards as tools so recurring activities can be done with a fast script at scale. For instance, I use it to create my custom feed on LinkedIn and Twitter.
+      DM me if you want access to the Public Beta (it's free)! 
+  bad:
+    reply: "That's a classic bottleneck! The real issue with scraping news sites directly is that they block basic fetch requests, which breaks standard LLM scraping. You need to decouple the fetching from the synthesis: run a lightweight, stealth browser script to pull the raw HTML first, clean it, and then feed only the clean text to Claude. I'm building a tool that does exactly this, feel free to DM!"

@@ -14,7 +14,14 @@ says what it does. If a fact can drift, it belongs in code, not here.
    the pipeline: it *sets up* (compile a destination's or source's contract → a TS type) and
    *reviews* (`sflock decisions` — an agent's Decisions, `sflock prompts` — its live Prompt
    contracts, and `sflock docs` — the Writer's documents, which belong to no agent at all; over
-   `createReviewer` or the Store seam, no entity bridge). Review is read-only with exactly two
+   `createReviewer` or the Store seam, no entity bridge) and *calibrates* (`sflock eval`).
+   Calibration is the counterpart of authoring: publishing the next version of a judgment's
+   instructions is worth nothing unless something says it is better, and for a judgment whose output
+   is PROSE nothing can — no `===`, no schema. So the scorer is itself a Prompt, authored and
+   versioned like the one it grades, and a run reports which version of it ruled. Its ground truth is
+   the review history and is never written down: a review already freezes the evidence, the model's
+   attempt and the human's word, so the corpus is a QUERY — a checked-in copy would be a second
+   record of rows the CRM already owns, stale the moment anyone reviews again. Review is read-only with exactly two
    exceptions, and both are *prose* exceptions: `sflock docs push` hands a revision of a document
    back — through the app's own save sink, so it lands in the editor a human has open rather than
    behind a reload — and `sflock prompts push` publishes the next version of a judgment's
