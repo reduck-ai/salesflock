@@ -65,9 +65,9 @@ const renderThread = (yaml: string): string => {
 	return [`**${t.title}**`, meta, t.op_text || "(no text)", ...comments].filter(Boolean).join("\n\n");
 };
 
-// Per-field renderer: Thread mirrors Reddit; the community's rules arrive as markdown already
-// (subreddits.ts renders them), so they pass through verbatim rather than round-tripping through the
-// generic YAML pass — which would only leave them intact by accident. Everything else is generic.
+// Per-field renderer: Thread mirrors Reddit; the community's rules are authored as markdown in
+// config.ts, so they pass through verbatim rather than round-tripping through the generic YAML
+// pass — which would only leave them intact by accident. Everything else is generic.
 const renderers: Record<string, (v: string) => string> = {
 	Thread: renderThread,
 	"Subreddit rules": (v) => v

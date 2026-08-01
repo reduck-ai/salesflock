@@ -24,11 +24,9 @@
 	// output; meaning is the caller's.
 	import Markdown from "$lib/components/Markdown.svelte";
 	import OutputForm from "./OutputForm.svelte";
-	// Each agent owns its evidence's skin; the queue is mixed, so every skin loads (classes are
-	// namespaced per agent — x-engage's tw-*; the card the row renders decides which ones fire).
-	// The runtime CLI imports only evidence.ts, never these.
-	import "$agents/x-engage/evidence.css";
-	import "$agents/lk-engage/evidence.css";
+	// An agent may ship an evidence.css — the skin for the classes its evidence.ts emits. The queue
+	// is mixed, so every skin loads here, one import per agent (classes are namespaced per agent, and
+	// the card the row renders decides which ones fire). No agent ships one today, hence none listed.
 	import { Badge } from "$lib/components/ui/badge";
 	import { quoteAt, canonNormalize, quoteKey } from "$core/anchor";
 	import { schemaError } from "$core/output";

@@ -20,14 +20,6 @@
 
 import type { AgentConfig, PromptSpec } from "../src/stores/index.js";
 import type { Quote } from "../src/anchor.js";
-import linkedinLeads from "./linkedin-leads/config.js";
-import * as linkedinLeadsEvidence from "./linkedin-leads/evidence.js";
-import formerRpaPms from "./former-rpa-pms/config.js";
-import * as formerRpaPmsEvidence from "./former-rpa-pms/evidence.js";
-import xEngage from "./x-engage/config.js";
-import * as xEngageEvidence from "./x-engage/evidence.js";
-import lkEngage from "./lk-engage/config.js";
-import * as lkEngageEvidence from "./lk-engage/evidence.js";
 import redditEngage from "./reddit-engage/config.js";
 import * as redditEngageEvidence from "./reddit-engage/evidence.js";
 
@@ -45,10 +37,6 @@ const agent = (config: AgentConfig, ev: Omit<Agent, "config">): Agent => ({
 
 // id (the agents/<id>/ folder) → the agent. The CLI resolves --agent here; the app never uses ids.
 export const AGENTS: Record<string, Agent> = {
-	"linkedin-leads": agent(linkedinLeads, linkedinLeadsEvidence),
-	"former-rpa-pms": agent(formerRpaPms, formerRpaPmsEvidence),
-	"x-engage": agent(xEngage, xEngageEvidence),
-	"lk-engage": agent(lkEngage, lkEngageEvidence),
 	"reddit-engage": agent(redditEngage, redditEngageEvidence)
 };
 
