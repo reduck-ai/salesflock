@@ -38,17 +38,23 @@ export const sinceIso = (window: string): string => {
 // A subreddit's newest threads within a window — the funnel's ONE fetch: each thread carries its
 // `body`, the post's FULL text (the script's contract), so discovery already yields the judged
 // evidence. sort:"new" is chronological and the script's own `since` accepts shorthand ("48h", "7d").
+//
+// Every function here takes a trailing `device` — WHICH paired browser, i.e. which signed-in Reddit
+// account the site sees doing this. The client cannot choose it: the ids belong to whoever owns the
+// accounts, which is the agent (agents/reddit-engage/config.ts DEVICES), and core must not import an
+// agent. What the client DOES own is the read/write line below, so the caller only has to know that
+// much. Omitted ⇒ REDUCK_DEVICE_ID, else the server auto-picks (fine with one device paired).
 export type { Thread, Threads };
-export const getSubredditThreads = (subreddit: string, since = "48h"): Promise<Threads> =>
-	run<Threads>(scripts.threads, { subreddit, sort: "new", since });
+export const getSubredditThreads = (subreddit: string, since = "48h", device?: string): Promise<Threads> =>
+	run<Threads>(scripts.threads, { subreddit, sort: "new", since }, device);
 
 // One thread WITH its comment tree — the funnel's second read, for a post that survived the
 // pre-screen. `all_comments` expands every "more replies" loader: the deciding line is often a
 // reply the OP left several levels down (measured at depth 3), and a tree cut off at what Reddit
 // happens to render on load would silently drop it — an absence indistinguishable from "nothing to
 // find", which is the one thing a gate must never confuse.
-export const getThread = (url: string): Promise<Thread> =>
-	run<Thread>(scripts.thread, { url: threadUrl(url), all_comments: true });
+export const getThread = (url: string, device?: string): Promise<Thread> =>
+	run<Thread>(scripts.thread, { url: threadUrl(url), all_comments: true }, device);
 
 // The two writes — the only calls in this file that change anything on Reddit, and the reason the
 // agent stopped being read-only. `say(url, text)` opens a conversation under a post; `answer(
@@ -56,8 +62,11 @@ export const getThread = (url: string): Promise<Thread> =>
 // outreach is keyed on afterwards, and the anchor the next answer hangs off. Deliberately two
 // functions rather than one with a mode flag — they take different addresses (a post, a comment)
 // and a caller that has to pick between them cannot silently post a follow-up as a fresh comment.
+// They are also the two calls whose `device` decides WHOSE name is on the comment, which is why the
+// read/write line and the account line are the same line: a scrape may be done by anyone, a reply
+// may only be done by us.
 export type { Comment, Reply };
-export const say = (url: string, text: string): Promise<Comment> =>
-	run<Comment>(scripts.comment, { url: threadUrl(url), text });
-export const answer = (permalink: string, text: string): Promise<Reply> =>
-	run<Reply>(scripts.reply, { permalink, text });
+export const say = (url: string, text: string, device?: string): Promise<Comment> =>
+	run<Comment>(scripts.comment, { url: threadUrl(url), text }, device);
+export const answer = (permalink: string, text: string, device?: string): Promise<Reply> =>
+	run<Reply>(scripts.reply, { permalink, text }, device);

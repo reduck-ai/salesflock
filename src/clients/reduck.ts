@@ -71,7 +71,7 @@ interface Envelope {
 // `retryAfterMs`, and hands back the same thing the CLI would. A failed run RAISES with the
 // server's message: the error belongs to the caller (a reviewer's card, the CLI's exit code) and
 // is never swallowed into a fake-empty success.
-const runHttp = async <T>(addr: string, args: Args, key: string): Promise<T> => {
+const runHttp = async <T>(addr: string, args: Args, key: string, device?: string): Promise<T> => {
 	const api = async (path: string, init?: RequestInit): Promise<Envelope> => {
 		const res = await fetch(`${MCP_URL}${path}`, {
 			...init,
@@ -87,14 +87,17 @@ const runHttp = async <T>(addr: string, args: Args, key: string): Promise<T> => 
 	// write scripts say so in their own contract, "runs only via the browser extension"). The hosted
 	// cloud browser would be a different, signed-out identity.
 	//
-	// REDUCK_DEVICE_ID names WHICH paired browser when there are several — required then, because the
-	// server refuses to guess (rightly: the browsers are different signed-in identities, so an
-	// auto-pick would post as whoever happened to answer). Omit it with one device and it auto-picks.
+	// WHICH paired browser, when there are several — and the server refuses to guess, rightly: two
+	// browsers are two signed-in identities, so an auto-pick would act as whoever happened to answer.
+	// The caller names it, because only the caller knows what this run IS (a scrape or a post) and
+	// therefore which identity should be seen doing it. REDUCK_DEVICE_ID is the fallback for a caller
+	// that has no opinion; with one device paired, neither is needed.
+	const deviceId = device ?? process.env.REDUCK_DEVICE_ID;
 	let env = await api("/run", {
 		method: "POST",
 		body: JSON.stringify({
 			browser: "extension",
-			...(process.env.REDUCK_DEVICE_ID ? { deviceId: process.env.REDUCK_DEVICE_ID } : {}),
+			...(deviceId ? { deviceId } : {}),
 			script: { ...addrParts(addr), args }
 		})
 	});
@@ -104,21 +107,43 @@ const runHttp = async <T>(addr: string, args: Args, key: string): Promise<T> => 
 		env = await api(`/runs/${env.runId}`);
 	}
 	if (env.status === "failed") throw new Error(`reduck ${addr}: ${env.externalMessage ?? env.error}`);
+	// A terminal run that carries neither a result nor a `failed` status. Measured: a device signed
+	// OUT of the site came back exactly this way, and returning `undefined` made the caller crash one
+	// frame later on a property of nothing — the error naming a field instead of the browser. An empty
+	// answer that was never an answer is the fake-empty success the invariants forbid, so refuse it
+	// here, where the run id is still in hand. (`null` is a real result; only absence is not.)
+	if (env.result === undefined)
+		throw new Error(
+			`reduck ${addr}: run ${env.runId ?? "?"} ended "${env.status}" with no result — ` +
+				`read its trace (is the device signed in?)`
+		);
 	return env.result as T;
 };
 
-const runCli = async <T>(addr: string, args: Args, pairs: string[]): Promise<T> => {
+const runCli = async <T>(addr: string, args: Args, pairs: string[], device?: string): Promise<T> => {
 	const [cmd, ...pre] = reduckArgv();
+	// `--device` is the CLI's own name for the same choice the REST body calls `deviceId`, so both
+	// transports honour it identically — otherwise which identity acted would depend on which
+	// transport happened to answer, which is the one thing a caller must be able to rely on.
+	const target = device ?? process.env.REDUCK_DEVICE_ID;
 	// 64MB stdout headroom: a busy subreddit's week of full post bodies overflows Node's 1MB default.
-	const { stdout, stderr } = await exec(cmd, [...pre, "run", "--script", addr, ...pairs], {
-		maxBuffer: 64 * 1024 * 1024
-	});
+	const { stdout, stderr } = await exec(
+		cmd,
+		[...pre, "run", "--script", addr, ...pairs, ...(target ? ["--device", target] : [])],
+		{
+			maxBuffer: 64 * 1024 * 1024
+		}
+	);
 	const runId = stderr.match(/run_id:\s*(\S+)/)?.[1] ?? "?";
 	log("reduck", `${addr} ${pairs.join(" ")} ← ${runId}`);
 	return JSON.parse(stdout) as T;
 };
 
-export const run = <T = unknown>(addr: string, args: Args): Promise<T> =>
+// run(addr, args, device?) — `device` is WHICH paired browser, i.e. which signed-in identity the
+// site sees. Core carries it and never chooses it: only the caller knows whether this run reads or
+// writes, and an agent that keeps those on separate accounts (see agents/reddit-engage/config.ts
+// DEVICES) must be able to say so per call. Omitted ⇒ REDUCK_DEVICE_ID, else the server auto-picks.
+export const run = <T = unknown>(addr: string, args: Args, device?: string): Promise<T> =>
 	slot(async () => {
 		const pairs = Object.entries(args).map(([k, v]) => `${k}=${v}`);
 		// Log at the START — so a slow or hung run is visible immediately, not only once it returns —
@@ -128,8 +153,8 @@ export const run = <T = unknown>(addr: string, args: Args): Promise<T> =>
 		const t0 = Date.now();
 		const key = process.env.REDUCK_API_KEY;
 		const out = key
-			? await runHttp<T>(addr, args, key)
-			: await runCli<T>(addr, args, pairs);
+			? await runHttp<T>(addr, args, key, device)
+			: await runCli<T>(addr, args, pairs, device);
 		log("reduck", `${addr} ${pairs.join(" ")} → done (${Date.now() - t0}ms)`);
 		return out;
 	});

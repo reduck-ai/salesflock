@@ -33,7 +33,7 @@ import { projectInput } from "../../src/project.js";
 import { mapLimit } from "../../src/concurrency.js";
 import { drain } from "../../src/drain.js";
 import { parse, stringify } from "yaml";
-import config, { SUBREDDITS, OWNER, subKey } from "./config.js";
+import config, { DEVICES, SUBREDDITS, OWNER, subKey } from "./config.js";
 import type { Subject, Verdict } from "../../src/decide.js";
 import type { PromptSpec, Row } from "../../src/stores/index.js";
 import type { Threads } from "../../src/clients/reddit/index.js";
@@ -346,7 +346,8 @@ export const queue = async (
 // they moved since the scan, and they are the two numbers the card shows.
 export const refresh = async (url: string): Promise<Row> => {
 	const u = threadUrl(url);
-	const t = await getThread(u);
+	// DEVICES.read — a scrape, so it goes out on the reading account, never OWNER's.
+	const t = await getThread(u, DEVICES.read);
 	// Partial, and that is the point: an upsert writes only the fields it is handed, so omitting
 	// Name (required on a full row — it is the Notion title) is how this leaves identity alone.
 	const row: Partial<RedditThreads> = {
@@ -400,7 +401,7 @@ export const tools = {
 	scan: async (since = "48h", subreddits: readonly string[] = Object.keys(SUBREDDITS)) =>
 		mapLimit([...subreddits], async (subreddit) => {
 			const ranAt = new Date().toISOString();
-			const { threads } = await getSubredditThreads(subreddit, since);
+			const { threads } = await getSubredditThreads(subreddit, since, DEVICES.read);
 			const queued = (await mapLimit(threads, (t) => queue(t, subreddit, ranAt))).filter(
 				(q) => q.queued
 			);

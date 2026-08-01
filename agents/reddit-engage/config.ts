@@ -78,9 +78,32 @@ export const SUBREDDITS: Record<string, string> = {
 // ("r/AI_Agents", "AI_Agents") finds the same community. The twin of threadUrl's normalization.
 export const subKey = (subreddit: string): string => subreddit.replace(/^r\//i, "").toLowerCase();
 
-// Our own Reddit username: `queue` never backlogs our own threads (you don't reply to yourself).
-// Empty ⇒ the check is off until filled in.
+// Our own Reddit username — the account DEVICES.write is signed in as (keep the two in step, and
+// see the note there for why nothing can check that for you). `queue` never backlogs our own threads
+// (you don't reply to yourself). Empty ⇒ the check is off until filled in.
 export const OWNER: string = "Separate-Still3770";
+
+// WHICH paired browser does what — read on one account, write on another, because a browser IS an
+// identity and the two jobs have opposite risk profiles. Scraping is high-volume and its worst case
+// is a rate-limit or a shadowban; posting is low-volume under the one name that has to keep being
+// welcome in these communities. Splitting them means no amount of reading can cost us the account
+// that replies.
+//
+// Declared here, beside OWNER, because these are OUR accounts: the reduck client takes a device per
+// call but cannot know which is which (core must not import an agent), and the read/write line it
+// DOES own is exactly this line — `say`/`answer` are the writes, everything else reads. Passed
+// explicitly at each call site rather than registered into the client once: a module-level default
+// would be order-dependent, and losing that race means a reply posts under the reading account.
+//
+// The ids come from `reduck list_devices`; WHO each one is comes from
+// `reduck run --script reduck/reddit.com/whoami` on it. Nothing checks that write is still OWNER —
+// signing that browser into a different account silently changes who we are, so verify after any
+// re-pair or re-login. (Measured, the hard way: both devices were throwaway accounts for an
+// afternoon while this file claimed otherwise.)
+export const DEVICES = {
+	read: "4ff47fc1-c4db-4710-aaed-ece4c8636707",
+	write: "e87f7b96-4ce6-401a-bfbe-b8773060b788"
+} as const;
 
 export default {
 	destination: "notion",
@@ -168,7 +191,8 @@ export default {
 						`the reply carries a link (${link[0]}) — Reddit will not let it be submitted here. ` +
 							`Edit the draft to say it in words, or point them at the name and let them search.`
 					);
-				const { permalink } = await say(threadUrl(url), text);
+				// DEVICES.write — the one account whose name belongs on a reply (OWNER's).
+				const { permalink } = await say(threadUrl(url), text, DEVICES.write);
 				return {
 					"Comment URL": permalink.startsWith("http")
 						? permalink
