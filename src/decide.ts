@@ -8,7 +8,7 @@
 // (the model never invents offsets; code owns them) and `submit_claims` commits, stopping the
 // moment a submit passes both gates (the Output schema, and every quote in-range) BEFORE the write.
 
-import { getStore } from "./stores/index.js";
+import { getStore, queryAll } from "./stores/index.js";
 import type { AgentConfig, PromptSpec, Row, Store } from "./stores/index.js";
 import { idOf, pageUrl } from "./stores/notion.js";
 import { blocksOf, segmentsOf } from "./stores/notion.codec.js";
@@ -298,11 +298,18 @@ export const createReviewer = ({ config, renderEvidence, store: given }: Reviewe
 	};
 
 	// list(scope, opts) — decisions by review state, each flagged with the human delta it carries (free —
-	// `query` returns the fields, and one feedbackOf per row yields both flags): `hasFeedback` (any
-	// channel touched) and the stricter `overturned` (the human changed the committed Output — a
+	// the rows arrive with their fields, and one feedbackOf per row yields both flags): `hasFeedback`
+	// (any channel touched) and the stricter `overturned` (the human changed the committed Output — a
 	// disagreement, not just a note). "Final output" set = reviewed (the committed output IS the
 	// decision); pending is the queue, all is both (a union — every Decision has the property, so
 	// is_empty ∪ is_not_empty is exhaustive).
+	//
+	// EVERY page, via `queryAll`, not `query`. Decisions accumulate forever, so all three scopes
+	// outgrow one page — and `query` REFUSES a truncated read rather than return a partial set, which
+	// is right for a caller reasoning on absence and wrong for this one: listing is enumeration, and
+	// once the table passed 100 rows `--all` stopped working entirely instead of paging (measured).
+	// The invariant is intact either way — the failure mode `query` protects against is a silent
+	// partial set, and walking the cursor to the end is the other way to not have one.
 	//
 	// `opts.feedback` keeps ONLY the rows carrying a delta, and carries the delta itself — the same
 	// `renderFeedback` markdown `showDecision --feedback` prints. It costs nothing: `feedbackOf`
@@ -311,7 +318,7 @@ export const createReviewer = ({ config, renderEvidence, store: given }: Reviewe
 	// a show per id — which reads the whole corpus of human corrections in one go.
 	const list = async (scope: "pending" | "reviewed" | "all" = "pending", opts: { feedback?: boolean } = {}) => {
 		const filter = scope === "all" ? { or: [SCOPE.pending, SCOPE.reviewed] } : SCOPE[scope];
-		const rows = await store.query(config.models.Decisions, filter);
+		const rows = await queryAll(store, config.models.Decisions, filter);
 		return rows.flatMap((r) => {
 			const fb = feedbackOf(r.fields);
 			if (opts.feedback && !fb) return [];
