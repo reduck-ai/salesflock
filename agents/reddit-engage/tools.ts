@@ -37,7 +37,8 @@ const store = getStore(config.destination);
 
 // A short, single-line label from a thread's title. Slices by CODE POINT (`[...s]`), never by code
 // unit, so it can't cut an emoji's surrogate pair in half.
-const label = (text: string, n = 60): string => [...text.replace(/\s+/g, " ").trim()].slice(0, n).join("");
+const label = (text: string, n = 60): string =>
+	[...text.replace(/\s+/g, " ").trim()].slice(0, n).join("");
 
 const nameOf = (subreddit: string, title: string): string => `r/${subreddit} — ${label(title)}`;
 
@@ -70,7 +71,13 @@ const readThread = (url: string): Promise<Row> =>
 // CHANGED across a `refresh` (did the OP answer us?) diffs two of these; the store holds the
 // before, refresh returns the after.
 export interface Seed {
-	comments?: { author?: string | null; body?: string | null; score?: number | null; depth?: number | null }[];
+	comments?: {
+		author?: string | null;
+		body?: string | null;
+		score?: number | null;
+		depth?: number | null;
+		created?: string | null;
+	}[];
 	[k: string]: unknown;
 }
 export const seedOf = (row: Row): Seed | null => {
@@ -89,7 +96,8 @@ export const seedOf = (row: Row): Seed | null => {
 const hasCommentTree = (row: Row): boolean => Array.isArray(seedOf(row)?.comments);
 
 const tierOf = (v: Verdict): string => String((v.output as { tier?: unknown }).tier ?? "");
-const resolveSubject = async (url: string): Promise<Subject> => subjectOf(url, await readThread(url));
+const resolveSubject = async (url: string): Promise<Subject> =>
+	subjectOf(url, await readThread(url));
 
 const linkEntity = async (
 	subject: Subject,
@@ -106,7 +114,14 @@ const linkEntity = async (
 	return subject.ref as string;
 };
 
-const decider = createDecider({ config, store, renderEvidence, projectInput, resolveSubject, linkEntity });
+const decider = createDecider({
+	config,
+	store,
+	renderEvidence,
+	projectInput,
+	resolveSubject,
+	linkEntity
+});
 
 // The funnel's forward order; a stage never drags a thread backward. "Not qualified" is the
 // terminal miss, off the ladder. "Approved" is terminal (nothing posts).
@@ -114,7 +129,10 @@ const LADDER: readonly string[] = config.ladder;
 const rank = (s: string | null): number => (s ? LADDER.indexOf(s) : -1);
 
 const statusOf = async (u: string): Promise<string | null> => {
-	const [r] = await store.query(config.models.RedditThreads, { property: "Thread URL", url: { equals: u } });
+	const [r] = await store.query(config.models.RedditThreads, {
+		property: "Thread URL",
+		url: { equals: u }
+	});
 	return r ? String(r.fields.Status ?? "") : null;
 };
 
@@ -126,7 +144,13 @@ export const queue = async (
 	t: Threads["threads"][number],
 	subreddit: string,
 	ranAt: string
-): Promise<{ url: string; queued: boolean; status: string | null; reason?: string; thread?: string }> => {
+): Promise<{
+	url: string;
+	queued: boolean;
+	status: string | null;
+	reason?: string;
+	thread?: string;
+}> => {
 	const u = threadUrl(t.url);
 	if (OWNER && t.author?.toLowerCase() === OWNER.toLowerCase())
 		return { url: u, queued: false, status: null, reason: "owner" };
@@ -153,6 +177,12 @@ export const queue = async (
 				created: t.created,
 				score: t.score,
 				num_comments: t.num_comments,
+				// What KIND of post this is — and the listing already knows it, so it costs no fetch. It is
+				// the field that keeps two negatives apart: 22% of stored threads have no `op_text`, and
+				// without this the evidence reads the same "(no text)" whether the OP wrote nothing or the
+				// post is an image with nothing to write. One is an empty post, the other is a post whose
+				// content is not text at all — and only one of them is a thread anyone can answer.
+				post_type: t.post_type ?? undefined,
 				op_text: t.body ?? undefined
 			},
 			{ lineWidth: 0 }
@@ -197,12 +227,22 @@ export const refresh = async (url: string): Promise<Row> => {
 				created: t.created,
 				score: t.score,
 				num_comments: t.num_comments,
+				post_type: t.post_type ?? undefined,
+				// Where a link/image/video post actually points — the page's answer to the question
+				// `post_type` raises. For those posts the destination IS the content, so a thread that
+				// reads as empty is only empty because we dropped the one field that held it.
+				content_href: t.content_href ?? undefined,
 				op_text: t.op_text || undefined,
 				comments: t.comments.map((c) => ({
 					author: c.author ?? undefined,
 					body: c.body,
 					score: c.score ?? undefined,
-					depth: c.depth
+					depth: c.depth,
+					// The discussion's clock. Without it the tree is a flat set of opinions: nothing says
+					// whether the thread is still alive, nor whether the OP's own reply landed before or
+					// after the answer it appears to concede to — which is much of why a reply reads the
+					// tree at all.
+					created: c.created ?? undefined
 				}))
 			},
 			{ lineWidth: 0 }
@@ -225,7 +265,9 @@ export const tools = {
 		mapLimit([...subreddits], async (subreddit) => {
 			const ranAt = new Date().toISOString();
 			const { threads } = await getSubredditThreads(subreddit, since);
-			const queued = (await mapLimit(threads, (t) => queue(t, subreddit, ranAt))).filter((q) => q.queued);
+			const queued = (await mapLimit(threads, (t) => queue(t, subreddit, ranAt))).filter(
+				(q) => q.queued
+			);
 			return { subreddit, seen: threads.length, queued };
 		}),
 
@@ -274,7 +316,11 @@ export const tools = {
 			// renders as evidence (a reviewer sees what the reply answers AND how hard a fit it was).
 			// It is also just a column, so the Notion table filters and sorts by it for free.
 			await Promise.all([
-				store.upsert(config.models.RedditThreads, { "Thread URL": u, Status: move.status, Tier: tier }, "Thread URL"),
+				store.upsert(
+					config.models.RedditThreads,
+					{ "Thread URL": u, Status: move.status, Tier: tier },
+					"Thread URL"
+				),
 				store.comment(
 					row.id,
 					[
@@ -286,7 +332,8 @@ export const tools = {
 					].join("\n")
 				)
 			]);
-			if (!move.advances) return { url: u, tier, ...(screened ? { screened } : {}), status: move.status };
+			if (!move.advances)
+				return { url: u, tier, ...(screened ? { screened } : {}), status: move.status };
 		}
 		// By KEY, not the Subject in hand: the draft's evidence must include the Tier just written, so
 		// this stage reads the row back rather than judging a copy that predates its own gate.
@@ -343,7 +390,11 @@ export const tools = {
 
 	// refresh — the primitive above, exposed: re-pull one thread's page and re-freeze it. Evidence
 	// only, so it never disturbs where a thread sits in the funnel.
-	refresh: (url: string) => refresh(url).then((r) => ({ url: threadUrl(url), comments: seedOf(r)?.comments?.length ?? 0 })),
+	refresh: (url: string) =>
+		refresh(url).then((r) => ({
+			url: threadUrl(url),
+			comments: seedOf(r)?.comments?.length ?? 0
+		})),
 
 	// draft — manually (re-)draft a reply for one thread on the frozen evidence, moving it to the
 	// draft gate. No dependency to carry: the qualification is a judgment, not a Decision, so there

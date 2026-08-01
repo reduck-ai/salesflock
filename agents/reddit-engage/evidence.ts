@@ -24,6 +24,8 @@ interface ThreadSeed {
 	created?: string | null;
 	score?: number | null;
 	num_comments?: number | null;
+	post_type?: string | null;
+	content_href?: string | null;
 	op_text?: string | null;
 	comments?:
 		| {
@@ -31,6 +33,7 @@ interface ThreadSeed {
 				body?: string | null;
 				score?: number | null;
 				depth?: number | null;
+				created?: string | null;
 		  }[]
 		| null;
 }
@@ -112,8 +115,12 @@ const renderComment = (
 ): string => {
 	const who = c.author ?? "[deleted]";
 	const isOp = !!op && who === op;
+	// author · when · score — the head's byline, in the head's order, so the two lines read as one
+	// convention rather than two. `when` is the same deterministic instant for the same reason: this
+	// render IS the anchor space, so a relative age would move every offset below it on each read.
 	const byline = dot(
 		isOp ? `<b>u/${who} (OP)</b>` : `u/${who}`,
+		when(c.created),
 		c.score != null && `${c.score} points`
 	);
 	// dedent for the same reason the OP's body needs it — Reddit's scrape indents every paragraph
@@ -126,6 +133,24 @@ const renderComment = (
 		``,
 		`</div>`
 	].join("\n");
+};
+
+// The post's own words — or, when it has none, WHY it has none. 22% of stored threads have no
+// `op_text`, and "(no text)" alone fuses two facts a gate must never confuse: an OP who wrote
+// nothing (an empty question, rarely worth a reply) and a post whose content was never text in the
+// first place (an image, a video, a link — where the destination IS the post). `post_type` says
+// which, and for the link kinds `content_href` says what it was.
+//
+// A seed frozen before those fields existed keeps the exact old string, deliberately: it is the
+// body, so anything else here would shift the offsets of every quote below it in already-committed
+// Decisions. Old evidence renders as it always did; only re-frozen threads gain the sentence.
+const body = (t: ThreadSeed): string => {
+	const text = dedent(t.op_text || "");
+	if (text) return text;
+	if (!t.post_type) return "(no text)";
+	return t.post_type === "text"
+		? "(the OP left the post empty — a title and nothing else)"
+		: `(${t.post_type} post — no text of its own${t.content_href ? `; it points at ${t.content_href}` : ""})`;
 };
 
 // The thread as Reddit lays it out: a HEAD — title, then a meta line led by the community — and
@@ -168,7 +193,7 @@ const renderThread = (yaml: string): string => {
 					...t.comments.map((c) => renderComment(c, t.author))
 				]
 			: [divider("No comments — nobody has replied to this post")];
-	return [head, dedent(t.op_text || "(no text)"), ...comments].filter(Boolean).join("\n\n");
+	return [head, body(t), ...comments].filter(Boolean).join("\n\n");
 };
 
 // Per-field renderer: Thread mirrors Reddit; the community's rules are authored as markdown in
