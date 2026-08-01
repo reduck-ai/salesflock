@@ -11,6 +11,7 @@
 import { getStore } from "./stores/index.js";
 import type { AgentConfig, PromptSpec, Row, Store } from "./stores/index.js";
 import { idOf, pageUrl } from "./stores/notion.js";
+import { blocksOf, segmentsOf } from "./stores/notion.codec.js";
 import { reviewOf, feedbackOf, renderFeedback } from "./review.js";
 import * as llm from "./ai/llm.js";
 import { collectQuotes, findQuotes, inRange, quoteKey, type Statement } from "./anchor.js";
@@ -193,6 +194,70 @@ export const createReviewer = ({ config, renderEvidence, store: given }: Reviewe
 		};
 	};
 
+	// editPrompt(kind) — the live contract for AUTHORING rather than for judging: the same document
+	// `showPrompt` returns, but rendered so its seams are visible (every transcluded region delimited
+	// in place and named). The other half of the two-reader rule (src/stores/notion.codec.ts): a judge
+	// must not see transclusion markers, and an author must not be blind to them.
+	const editPrompt = async (kind: string) => {
+		const live = await showPrompt(kind);
+		const doc = await store.authoring(live.id);
+		return { ...live, ...doc };
+	};
+
+	// pushPrompt(kind, markdown) — publish the NEXT version of a kind's contract: a new row, never an
+	// edit (README #5 — a Decision pins the fingerprint of the wording it read, so a version is
+	// immutable by construction). The prose is the page's body; the machine half (both schema columns)
+	// is copied as RAW TEXT from the live row rather than re-serialized, so only the wording moves.
+	//
+	// The shared regions are the reason this is a tool and not a recipe. A transcluded section is
+	// authored on its own page and read by every prompt that syncs it, so publishing must put back a
+	// REFERENCE, never the text: paste it as literal prose and this version silently forks — the shared
+	// page keeps being edited, and this prompt stops hearing about it. So each region is verified
+	// against its original and written back as a reference; a region whose text has been changed is
+	// refused, naming the page where it is actually authored.
+	const pushPrompt = async (kind: string, markdown: string) => {
+		const live = await showPrompt(kind);
+		const row = await livePrompt(live.kind); // the RAW schema columns, to copy rather than re-emit
+		const blocks: object[] = [];
+		for (const seg of segmentsOf(markdown)) {
+			if (!seg.shared) {
+				blocks.push(...blocksOf(seg.text));
+				continue;
+			}
+			// The original's own rendering — the same blocks the reference serves, so equal text means
+			// "unchanged". Compared trimmed: the delimiters sit on their own lines, so the region's text
+			// carries the newlines that joined them, not content.
+			const original = await store.body(seg.shared);
+			if (seg.text.trim() !== original.trim()) {
+				const src = (await store.authoring(live.id)).regions.find((r) => r.syncedFrom === seg.shared)?.source;
+				throw new Error(
+					`this candidate changes a SHARED section — it is authored on ${
+						src ? `"${src.title}" (${src.url})` : `block ${seg.shared}`
+					}, and every prompt that syncs it reads the same words. Edit it there and re-run ` +
+						`\`prompts edit\`, or restore the section here; publishing it as this page's own prose ` +
+						`would fork it.`
+				);
+			}
+			blocks.push({
+				object: "block",
+				type: "synced_block",
+				synced_block: { synced_from: { block_id: seg.shared } }
+			});
+		}
+		const version = live.version + 1;
+		const ref = await store.create(
+			config.models.Prompts,
+			{
+				Name: live.kind,
+				Version: version,
+				"Input schema": String(row.fields["Input schema"] ?? ""),
+				"Output schema": String(row.fields["Output schema"] ?? "")
+			},
+			blocks
+		);
+		return { kind: live.kind, version, from: live.version, id: ref.id, url: ref.url };
+	};
+
 	// instructionsHash(kind) — the fingerprint the live contract WOULD get now, so a caller can
 	// compare it to what a Decision pinned. Equal ⇒ that judgment's contract still reads the same;
 	// different ⇒ someone edited the body (or the shared page it syncs) or a schema column in place
@@ -263,7 +328,19 @@ export const createReviewer = ({ config, renderEvidence, store: given }: Reviewe
 		});
 	};
 
-	return { store, appLink, kindOf, livePrompt, showPrompt, prompts, instructionsHash, showDecision, list };
+	return {
+		store,
+		appLink,
+		kindOf,
+		livePrompt,
+		showPrompt,
+		editPrompt,
+		pushPrompt,
+		prompts,
+		instructionsHash,
+		showDecision,
+		list
+	};
 };
 
 export interface DeciderDeps extends ReviewerDeps {
@@ -277,7 +354,14 @@ export interface DeciderDeps extends ReviewerDeps {
 	// Advance the subject's pipeline entity row (to the prompt's `pending` Status, unless it's a held
 	// DAG dependent — the one place the domain funnel advances) and return that row's id. The relation
 	// it binds to is `config.entity`, so linkEntity no longer reports it — it just hands back the id.
-	linkEntity: (subject: Subject, spec: PromptSpec, opts: { dependsOn?: string[] }) => Promise<string>;
+	// `accept` means the decision is born committed, so there is no pending gate to park the entity
+	// at: the caller resolves its Status itself, and writing `spec.pending` first would be a write
+	// nobody ever reads (plus a visible flicker in the CRM).
+	linkEntity: (
+		subject: Subject,
+		spec: PromptSpec,
+		opts: { dependsOn?: string[]; accept?: boolean }
+	) => Promise<string>;
 	// The few-shot block the LLM sees, overridable per agent. Default: prior committed Decisions
 	// (examplesFor). x-engage supplies the owner's own Posts+Replies — its authentic voice — instead.
 	renderExamples?: (key: string, subject: Subject) => Promise<string>;
@@ -340,9 +424,15 @@ export const createDecider = (deps: DeciderDeps) => {
 	};
 
 	// The judgment context: the Prompt row's full contract plus the Person's frozen evidence.
-	const judgmentContext = async (key: string, handle: string) => {
+	//
+	// `handle` may be the subject's key OR an already-resolved Subject. A judgment is a pure function
+	// of its context (README #7), so handing the context in is more honest than re-fetching it: a
+	// caller that already read the row — to check a funnel guard, say — shouldn't pay for a second
+	// read of the same row. Pass the key when you want it fresh (a later stage reading what an
+	// earlier one just wrote), pass the Subject when you already hold it.
+	const judgmentContext = async (key: string, handle: string | Subject) => {
 		const spec = config.prompts![key];
-		const subject = await resolveSubject(handle);
+		const subject = typeof handle === "string" ? await resolveSubject(handle) : handle;
 		const f = subject.fields;
 
 		// The live contract, via the ONE shaping (showPrompt): the instructions are the Prompt PAGE's
@@ -383,7 +473,7 @@ export const createDecider = (deps: DeciderDeps) => {
 	// the page to learn it.
 	const decide = async (
 		key: string,
-		publicId: string,
+		publicId: string | Subject,
 		{ dependsOn, accept }: { dependsOn?: string[]; accept?: boolean } = {}
 	) => {
 		const ctx = await judgmentContext(key, publicId);
@@ -454,24 +544,22 @@ export const createDecider = (deps: DeciderDeps) => {
 		}
 
 		const ranAt = new Date().toISOString();
-		const entityId = await linkEntity(ctx.subject, ctx.spec, { dependsOn });
+		const entityId = await linkEntity(ctx.subject, ctx.spec, { dependsOn, accept });
 		const name = `${ctx.subject.name} - ${ctx.spec.name} — ${ranAt.slice(0, 19).replace("T", " ")}`;
-		const d = await store.upsert(
-			config.models.Decisions,
-			{
-				Name: name,
-				Output: JSON.stringify(output),
-				...(accept ? { "Final output": JSON.stringify(output) } : {}),
-				Reasoning: JSON.stringify(statements),
-				Input: JSON.stringify(ctx.input),
-				Model: llm.modelName(config.model),
-				"Instructions hash": ctx.prompt.hash,
-				Prompt: [ctx.prompt.id],
-				[config.entity]: [entityId],
-				...(dependsOn?.length ? { "Depends on": dependsOn } : {})
-			},
-			"Name"
-		);
+		// created, not upserted: the Name carries the instant of the judgment, so a key lookup could
+		// never match, and Decisions accumulate rather than converge (append-only).
+		const d = await store.create(config.models.Decisions, {
+			Name: name,
+			Output: JSON.stringify(output),
+			...(accept ? { "Final output": JSON.stringify(output) } : {}),
+			Reasoning: JSON.stringify(statements),
+			Input: JSON.stringify(ctx.input),
+			Model: llm.modelName(config.model),
+			"Instructions hash": ctx.prompt.hash,
+			Prompt: [ctx.prompt.id],
+			[config.entity]: [entityId],
+			...(dependsOn?.length ? { "Depends on": dependsOn } : {})
+		});
 		return {
 			id: d.id,
 			name,

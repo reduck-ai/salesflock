@@ -13,10 +13,10 @@
 // logged-in person sees the whole personal CRM). Same contract as hubspot.ts.
 
 import { spawn } from "node:child_process";
-import { bodyOf, chunks, plain, type BlockPage, type NotionValue } from "./notion.codec.js";
+import { authoringOf, bodyOf, chunks, plain, type BlockPage, type NotionValue } from "./notion.codec.js";
 import { pace, NOTION_RPS } from "../concurrency.js";
 import { log } from "../log.js";
-import type { Ref, Row, Store } from "./index.js";
+import type { AuthoringDoc, Ref, Row, SharedSource, Store } from "./index.js";
 
 // Spawn `ntn` capturing stderr (the verbose trace rides there) — only the token harvest uses it.
 // stdin is closed ("ignore"): `ntn api` reads a request body from stdin, so an open empty pipe
@@ -96,7 +96,11 @@ const api = async <T>(path: string, init?: { method?: string; body?: object }): 
 			);
 		slot.hold(wait); // every caller, in flight and future, now waits behind this
 		waited += wait;
-		log("notion", `${res.status} ${reasonOf(text)} — all calls parked ${Math.round(wait / 1000)}s …`);
+		log(
+			"notion",
+			`${res.status} ${reasonOf(text)} — all calls parked ${Math.round(wait / 1000)}s, ` +
+				`then ${slot.rps().toFixed(1)} rps …`
+		);
 	}
 };
 
@@ -255,15 +259,44 @@ const locate = async (
 	return { dsId, ds, page: results[0] };
 };
 
-export const upsert = async (model: string, record: object, keyProp: string): Promise<Ref> => {
-	const fields = record as Record<string, unknown>;
-	const { dsId, ds, page } = await locate(model, keyProp, fields[keyProp]);
+// A record → the API's `properties` payload, against the model's live schema. Shared by upsert and
+// create, so the two can't serialize a field differently.
+const propertiesOf = (
+	ds: DataSource,
+	model: string,
+	fields: Record<string, unknown>
+): Record<string, unknown> => {
 	const properties: Record<string, unknown> = {};
 	for (const [name, value] of Object.entries(fields)) {
 		const p = ds.properties[name];
-		if (!p) throw new Error(`notion.upsert: no property "${name}" on "${model}"`);
+		if (!p) throw new Error(`notion: no property "${name}" on "${model}"`);
 		if (value != null) properties[name] = serialize(value, p);
 	}
+	return properties;
+};
+
+// create(model, record, blocks?) — one POST, no lookup: the write for a row whose identity is unique
+// by construction (an append-only Decision, a new Prompt version). Two calls where upsert costs
+// three, and the intent is in the name rather than in a key that can never match. `blocks` is the
+// page's initial CONTENT, so a row whose prose IS the record (a Prompt) is born whole rather than
+// created empty and then filled.
+export const create = async (model: string, record: object, blocks?: object[]): Promise<Ref> => {
+	const dsId = await resolveDsId(model);
+	const ds = await loadDs(dsId);
+	const { id } = await api<{ id: string }>("/pages", {
+		body: {
+			parent: { type: "data_source_id", data_source_id: dsId },
+			properties: propertiesOf(ds, model, record as Record<string, unknown>),
+			...(blocks?.length ? { children: blocks } : {})
+		}
+	});
+	return { id, url: pageUrl(id), created: true };
+};
+
+export const upsert = async (model: string, record: object, keyProp: string): Promise<Ref> => {
+	const fields = record as Record<string, unknown>;
+	const { dsId, ds, page } = await locate(model, keyProp, fields[keyProp]);
+	const properties = propertiesOf(ds, model, fields);
 	let id: string;
 	let created: boolean;
 	if (page) {
@@ -372,10 +405,52 @@ export const comment = async (id: string, text: string): Promise<void> => {
 // a page id already implies its model). Prose is authored, not compiled, so it lives in the body,
 // never a column — a Prompt's instructions are the body of its page (and `chunks`' 100-item cap is
 // why a column could never hold them anyway). Paging and rendering are the codec's; this is transport.
-export const body = (id: string): Promise<string> =>
-	bodyOf(idOf(id), (blockId, cursor) =>
-		api<BlockPage>(`/blocks/${blockId}/children?page_size=100${cursor ? `&start_cursor=${cursor}` : ""}`)
+const blockPage = (blockId: string, cursor?: string): Promise<BlockPage> =>
+	api<BlockPage>(`/blocks/${blockId}/children?page_size=100${cursor ? `&start_cursor=${cursor}` : ""}`);
+
+export const body = (id: string): Promise<string> => bodyOf(idOf(id), blockPage);
+
+// authoring(id) — `body`'s twin for the OTHER reader of the same page. `body` compiles the document
+// for inference (transclusions spliced flat, because a marker would be chrome in the model's prompt,
+// and those bytes are what a Decision fingerprints). This renders it for AUTHORING: every transcluded
+// region delimited where it sits, and named — so whoever edits the prose knows which words are this
+// page's own and which are borrowed, and where the borrowed ones actually live.
+//
+// One shallow read first, because a label has to be in hand while the markers are being written and
+// resolving a source needs the network. Only top-level regions are resolved: `segmentsOf` refuses to
+// publish a nested one anyway, so a label for one would be a promise the write side can't keep.
+export const authoring = async (id: string): Promise<AuthoringDoc> => {
+	const pageId = idOf(id);
+	const top = await blockPage(pageId);
+	const froms = [
+		...new Set(
+			top.results.flatMap((b) => {
+				const from = (b.synced_block as { synced_from?: { block_id?: string } | null } | undefined)
+					?.synced_from?.block_id;
+				return b.type === "synced_block" && from ? [from] : [];
+			})
+		)
+	];
+	// A synced ORIGINAL lives on some page; that page is what an author opens. Resolving it per region
+	// (not per reference) means a section reused twice reports one source.
+	const sources = new Map<string, SharedSource>(
+		await Promise.all(
+			froms.map(async (from) => {
+				const block = await api<{ parent?: { page_id?: string } }>(`/blocks/${from}`);
+				const host = block.parent?.page_id ?? from;
+				return [
+					from,
+					{ id: host, url: pageUrl(host), title: (await title("", host).catch(() => "")) || "(untitled)" }
+				] as const;
+			})
+		)
 	);
+	const { markdown, regions } = await authoringOf(pageId, blockPage, (from) => {
+		const s = sources.get(from);
+		return s && `"${s.title}" ${s.url}`;
+	});
+	return { markdown, regions: regions.map((r) => ({ ...r, source: sources.get(r.syncedFrom) })) };
+};
 
 // describe(model) — a JSON Schema of the model's writable properties. The data source
 // id rides in `$id` so a writer can recover it; `title` names the dump file. Properties
@@ -405,4 +480,17 @@ export const describe = async (model: string): Promise<Record<string, unknown>> 
 };
 
 // The Store this module implements (Notion is the full System of Record).
-export const notion: Store = { describe, upsert, read, query, queryPage, get, title, body, comment, archive };
+export const notion: Store = {
+	describe,
+	upsert,
+	create,
+	read,
+	query,
+	queryPage,
+	get,
+	title,
+	body,
+	authoring,
+	comment,
+	archive
+};

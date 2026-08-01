@@ -27,8 +27,10 @@ const store: Store = {
 		}
 	],
 	body: async () => prompt.body,
+	authoring: nope,
 	describe: nope,
 	upsert: nope,
+	create: nope,
 	read: nope,
 	queryPage: nope,
 	get: nope,

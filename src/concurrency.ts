@@ -3,13 +3,15 @@
 // ceiling, and bounding the wrong quantity doesn't bound anything at all):
 //   REDUCK_CONCURRENCY — the single browser device (the reduck runner's gate). Physical: how many.
 //   NOTION_RPS         — the Notion API (the store's pacer). A RATE, because that is what Notion
-//                        limits: ~3 requests/second per connection, plus a second workspace-wide
-//                        limit shared with every other connection (the review app included). So no
-//                        local measurement can justify a concurrency number — the workspace limit is
-//                        invisible from inside one process, and a burst that "drew zero 429s" one
-//                        evening earns a 631s ban the next. There is deliberately NO Notion
-//                        concurrency knob: at 3 rps with sub-second calls, in-flight count is 1–3 by
-//                        construction, so a second knob would only be a way to get it wrong again.
+//                        limits: ~3 requests/second per connection *on average*, plus a second
+//                        workspace-wide limit shared with every other connection (the review app
+//                        included). So no local measurement can justify a concurrency number — the
+//                        workspace limit is invisible from inside one process, and a burst that
+//                        "drew zero 429s" one evening earns a 631s ban the next. The default sits
+//                        UNDER the documented average, because an average sustained exactly has no
+//                        margin (measured: 3 rps still drew a 429), and `pace` adapts from there.
+//                        There is deliberately NO Notion concurrency knob: at this rate with
+//                        sub-second calls, in-flight count is 1–3 by construction.
 //   LLM_CONCURRENCY    — the model provider (llm.ts's gate). Providers throttle wide fan-outs
 //                        (Bedrock 429s at even 2 concurrent on some accounts — measured, not assumed).
 //   TASK_CONCURRENCY   — a tool's fan-out over a list (mapLimit's default).
@@ -19,7 +21,7 @@
 import { renderError } from "./errors.js";
 
 export const REDUCK_CONCURRENCY = Number(process.env.REDUCK_CONCURRENCY) || 4;
-export const NOTION_RPS = Number(process.env.NOTION_RPS) || 3;
+export const NOTION_RPS = Number(process.env.NOTION_RPS) || 2.5;
 export const LLM_CONCURRENCY = Number(process.env.LLM_CONCURRENCY) || 8;
 export const TASK_CONCURRENCY = Number(process.env.TASK_CONCURRENCY) || 8;
 
@@ -48,8 +50,17 @@ export const gate = (limit: number) => {
 // state: `hold` parks every caller at once, in flight and future, which is the single queue a
 // rate-limited API asks for. Without it each caller discovers the same ban separately, burns its own
 // attempts on it, and fails alone — the exact way a 631s ban cost a 417-row batch 377 of its rows.
+// `rps` is a CEILING, not a target. The documented limit is an *average*, so sustaining exactly it
+// leaves no margin for jitter — measured: paced at the documented 3 rps, a run still drew one
+// `public_api_request_rate_limit` after ~8 minutes. So the clock adapts: a `hold` halves the rate,
+// and clean requests ease it back toward the ceiling. The backend's own 429s calibrate it, which is
+// the only honest source — the real capacity depends on the workspace's plan and on who else is
+// talking to it, neither of which is knowable from in here.
 export const pace = (rps: number) => {
-	const interval = 1000 / rps;
+	const floor = 1000 / rps; // the fastest spacing allowed
+	const CEILING = floor * 8; // the slowest we back off to (a workspace-wide squeeze)
+	const EASE = 0.02; // fraction of `floor` recovered per clean start (~50 calls back to full rate)
+	let interval = floor;
 	let next = 0; // the instant the next request may start (max of the pace floor and any hold)
 	let until = 0; // nothing starts before this — set by hold()
 	const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -60,14 +71,19 @@ export const pace = (rps: number) => {
 			const at = Math.max(Date.now(), next, until);
 			next = at + interval;
 			if (at > Date.now()) await sleep(at - Date.now());
-			if (Date.now() >= until) return fn();
-			// A hold arrived while we waited — re-reserve behind it instead of walking into the ban.
+			if (Date.now() < until) continue; // a hold arrived while we waited — re-reserve behind it
+			interval = Math.max(floor, interval - floor * EASE); // clean start ⇒ creep back up
+			return fn();
 		}
 	};
 	return Object.assign(slot, {
 		hold: (ms: number): void => {
 			until = Math.max(until, Date.now() + ms);
-		}
+			interval = Math.min(CEILING, interval * 2); // and go slower than we were
+		},
+		// The rate the clock has settled on — for the log line that reports a park, so the operator
+		// sees what it backed off TO, not just that it backed off.
+		rps: (): number => 1000 / interval
 	});
 };
 

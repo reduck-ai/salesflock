@@ -5,25 +5,32 @@
 // (projectInput → renderEvidence) and the same search_quotes/submit_claims two-tool loop as
 // decide.ts — only the persistence is dropped and the instruction body is swappable.
 //
-//   node agents/reddit-engage/eval_qualify.mjs [candidate.md]   (run from salesflock/)
-//   — omit the arg to eval the LIVE prompt body (the definitive check: real codec render).
+//   node agents/reddit-engage/eval_qualify.mjs [candidate.md] [--only <id,id,…>]   (run from salesflock/)
+//   — omit the file to eval the LIVE prompt body (the definitive check: real codec render).
+//   — --only filters the ground truth to those thread ids, for tuning one case without paying for 35.
+//
+// A candidate may be either projection of a body: `sflock prompts edit` output (transclusion markers
+// in) or a flat body. Markers are stripped before judging, so what this scores is exactly what
+// `prompts push` would publish — a candidate cannot drift from the artifact it is qualifying.
 //
 // The tuning loop this drives:
-//   1. Iterate a candidate .md locally until green — run it TWICE: gemini-3.5-flash at temp 0 is
-//      not run-stable on borderline threads, so one green run proves nothing.
+//   1. `sflock prompts edit --agent reddit-engage qualify > candidate.md`, edit your OWN prose (the
+//      delimited regions are authored on their own pages — the CLI prints which), then iterate here
+//      until green — run it TWICE: gemini-3.5-flash at temp 0 is not run-stable on borderline
+//      threads, so one green run proves nothing.
 //   2. Don't overfit: rules state the PRINCIPLE ("would automating a browser fix this?"), never an
 //      enumeration of the test set's surface domains; illustrative examples must come from
-//      DIFFERENT domains than the ground-truth threads, or 15/15 just memorizes the 15.
-//   3. Publish the winner as a NEW Prompt version (append-only — a new row, never an edit):
-//      `ntn api /v1/pages` into the Prompts data source, Version = live+1, Input/Output schema
-//      columns copied from the prior version, "## Who we are" kept as the shared synced_block
-//      (3a84d7b7-884c-81f2-a93f-fe75f6dbc910). Then re-run this with no arg against the live body.
+//      DIFFERENT domains than the ground-truth threads, or 35/35 just memorizes the 35.
+//   3. Publish the winner: `sflock prompts push --agent reddit-engage qualify candidate.md` — a new
+//      row at Version live+1, schema columns copied verbatim, shared sections written back as
+//      references (and refused if you changed one). Then re-run this with no arg against the live body.
 //   4. Inspect versions any time: `sflock prompts list/show --agent reddit-engage`.
 
 import "../../dist/src/env.js";
 import { readFileSync, readdirSync } from "node:fs";
 import { parse } from "yaml";
 import { getStore } from "../../dist/src/stores/index.js";
+import { compileAuthoring } from "../../dist/src/stores/notion.codec.js";
 import { createReviewer } from "../../dist/src/decide.js";
 import { renderEvidence, fieldSpan } from "../../dist/agents/reddit-engage/evidence.js";
 import { projectInput } from "../../dist/src/project.js";
@@ -37,9 +44,17 @@ import config from "../../dist/agents/reddit-engage/config.js";
 const store = getStore(config.destination);
 const reviewer = createReviewer({ config, store, renderEvidence, fieldSpan });
 const live = await reviewer.showPrompt("Reddit Thread Qualification");
-const candidate = process.argv[2];
-const system = candidate ? readFileSync(candidate, "utf8") : live.body;
+const args = process.argv.slice(2);
+const onlyAt = args.indexOf("--only");
+const only = onlyAt < 0 ? null : new Set(args[onlyAt + 1].split(",").map((s) => s.trim()));
+// The first bare arg that is not --only's VALUE. The `onlyAt >= 0` guard matters: without it, an
+// absent --only (onlyAt = -1) excludes index 0 — silently dropping the candidate and evaluating the
+// LIVE body while claiming to test the file. Measured, embarrassingly.
+const candidate = args.find((a, i) => !a.startsWith("--") && !(onlyAt >= 0 && i === onlyAt + 1));
+// A candidate is compiled the way `prompts push` compiles it, so the eval judges the shipping artifact.
+const system = candidate ? compileAuthoring(readFileSync(candidate, "utf8")) : live.body;
 console.error(`[eval] instructions: ${candidate ?? `live v${live.version} (${live.hash})`}`);
+if (only) console.error(`[eval] --only ${[...only].join(",")}`);
 
 const STATEMENTS = {
 	type: "array",
@@ -108,7 +123,9 @@ let allExact = 0;
 let allGate = 0;
 let total = 0;
 for (const file of files) {
-	const gt = parse(readFileSync(`${DIR}/${file}`, "utf8"));
+	const all = parse(readFileSync(`${DIR}/${file}`, "utf8"));
+	const gt = only ? all.filter((t) => [...only].some((id) => t.url.includes(id))) : all;
+	if (!gt.length) continue;
 	const rows = await mapLimit(gt, async (t) => {
 		const u = threadUrl(t.url);
 		const row = await store.read(config.models.RedditThreads, "Thread URL", u);

@@ -14,12 +14,13 @@ says what it does. If a fact can drift, it belongs in code, not here.
    the pipeline: it *sets up* (compile a destination's or source's contract → a TS type) and
    *reviews* (`sflock decisions` — an agent's Decisions, `sflock prompts` — its live Prompt
    contracts, and `sflock docs` — the Writer's documents, which belong to no agent at all; over
-   `createReviewer` or the Store seam, no entity bridge). Review is read-only with ONE exception,
-   and it is a prose exception: `sflock docs push` hands a revision of a document back — through the
-   app's own save sink, so it lands in the editor a human has open rather than behind a reload. Text
-   a person will edit is the only thing `sflock` writes; pipeline state stays the runtime's. The per-agent runtime
-   binary is *action* (compose scripts, persist, advance the funnel). Setup describes, review
-   inspects, runtime does.
+   `createReviewer` or the Store seam, no entity bridge). Review is read-only with exactly two
+   exceptions, and both are *prose* exceptions: `sflock docs push` hands a revision of a document
+   back — through the app's own save sink, so it lands in the editor a human has open rather than
+   behind a reload — and `sflock prompts push` publishes the next version of a judgment's
+   instructions. Text a person will edit is the only thing `sflock` writes; pipeline state stays the
+   runtime's. The per-agent runtime binary is *action* (compose scripts, persist, advance the
+   funnel). Setup describes, review inspects, runtime does.
 
 3. **`reduck` is a runner, not a schema source.** One base-script call → run it with
    `reduck run` directly. Wrap it in a tool **only** for what `reduck` can't do: compose
@@ -40,6 +41,12 @@ says what it does. If a fact can drift, it belongs in code, not here.
    Prompts (who we are) is written ONCE on its own page and pulled into each body as a Notion
    *synced block* — the same "declare it once, both consumers read it" rule the code obeys.
    Exactly two layers, Pages then Prompts: a section serving a single Prompt has earned no page.
+   Transclusion gives that body **two readers wanting opposite things, so it has two projections**:
+   *inference* compiles it flat (a marker would be chrome in the model's prompt, and those bytes are
+   what a judgment fingerprints), while *authoring* delimits each borrowed region and names the page
+   it comes from — because prose you cannot attribute is prose you cannot safely edit, and editing a
+   shared section in place forks it away from every other Prompt that reads it. Both projections come
+   from ONE traversal, so they can never disagree about what the document says.
    The cost of authored-not-compiled is that the text can change under a past judgment — so every
    Decision **pins the fingerprint of the instructions it read**, beside the model that read them.
    A relation names which prompt; only the fingerprint says which *wording*, and it catches an edit
@@ -78,11 +85,9 @@ says what it does. If a fact can drift, it belongs in code, not here.
 
 ## Applied
 
-`agents/linkedin-leads/` is the worked example: a canonical `Company` and `Person`
-(LinkedIn), source lenses and pipeline rows kept off them, one composite tool per thing
-`reduck run` can't express. Its method — the stage sequence — lives in the
-`linkedin-leads` skill; its identity lives in the CRM, as its Prompt bodies (with the generic
-part — who we are — a synced block from one shared page, per #5).
-`former-rpa-pms`, `x-engage` (on X), `lk-engage` (LinkedIn engagement) and `reddit-engage`
-(Reddit engagement) realize the same contract (#10); the review app resolves each Decision's
-agent from the roster (`$agents`).
+`agents/reddit-engage/` is the worked example, and today the only agent: one pipeline entity
+(the thread, keyed on its canonical URL), no tool `reduck run` can already express, and a
+funnel that judges then drafts. Its identity lives in the CRM, as its Prompt bodies (with the
+generic part — who we are — a synced block from one shared page, per #5). The roster
+(`$agents`) still resolves each Decision's agent per row, because that is what makes adding
+the next agent a registration rather than a refactor (#10).

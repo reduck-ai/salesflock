@@ -89,12 +89,14 @@ const notImplemented = (): never => {
 export const hubspot: Store = {
 	describe,
 	upsert: notImplemented,
+	create: notImplemented,
 	read: notImplemented,
 	query: notImplemented,
 	queryPage: notImplemented,
 	get: notImplemented,
 	title: notImplemented,
 	body: notImplemented,
+	authoring: notImplemented,
 	comment: notImplemented,
 	archive: notImplemented
 };

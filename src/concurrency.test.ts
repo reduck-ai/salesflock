@@ -20,6 +20,15 @@ test("pace: starts are spaced by 1/rps, however wide the fan-out", async () => {
 	starts.slice(1).forEach((s, i) => assert.ok(s >= starts[i], "starts are ordered"));
 });
 
+test("pace: a hold lowers the rate, and clean starts ease it back to the ceiling", async () => {
+	const slot = pace(100); // floor 10ms
+	assert.equal(Math.round(slot.rps()), 100);
+	slot.hold(0); // the backend said stop — even for no time, it said stop
+	assert.ok(slot.rps() < 60, `rate should halve, got ${slot.rps().toFixed(1)}`);
+	for (let i = 0; i < 60; i++) await slot(async () => {}); // clean traffic
+	assert.ok(slot.rps() > 95, `rate should recover, got ${slot.rps().toFixed(1)}`);
+});
+
 test("pace: hold parks every caller — in flight and future — not just the one that hit the limit", async () => {
 	const slot = pace(1000);
 	const t0 = Date.now();

@@ -21,7 +21,7 @@ import { drain } from "../../src/drain.js";
 import { parse, stringify } from "yaml";
 import config, { SUBREDDITS, OWNER, subKey } from "./config.js";
 import type { Subject } from "../../src/decide.js";
-import type { PromptSpec } from "../../src/stores/index.js";
+import type { PromptSpec, Row } from "../../src/stores/index.js";
 import type { Threads } from "../../src/clients/reddit/index.js";
 import type { RedditThreads } from "./schema/RedditThreads.js";
 
@@ -42,8 +42,10 @@ const nameOf = (subreddit: string, title: string): string => `r/${subreddit} —
 // keeps one place to declare them, and they still land in the Decision's frozen Input (so the review
 // app renders them and the drafter can cite one), because that freeze is of the projected fields, not
 // of the row. A prompt whose Input schema doesn't name "Subreddit rules" simply never sees them.
-const resolveSubject = async (url: string): Promise<Subject> => {
-	const row = await store.read(config.models.RedditThreads, "Thread URL", threadUrl(url));
+// subjectOf(url, row) — the pure half: a thread row → the Subject a judgment reads. Split out so a
+// caller that already holds the row (engage, for its funnel guard) never pays to read it twice —
+// `decide` takes either a key or a Subject.
+const subjectOf = (url: string, row: Row): Subject => {
 	const rules = SUBREDDITS[subKey(String(row.fields.Subreddit ?? ""))];
 	return {
 		key: url,
@@ -52,12 +54,18 @@ const resolveSubject = async (url: string): Promise<Subject> => {
 		ref: row.id
 	};
 };
+const readThread = (url: string): Promise<Row> =>
+	store.read(config.models.RedditThreads, "Thread URL", threadUrl(url));
+const resolveSubject = async (url: string): Promise<Subject> => subjectOf(url, await readThread(url));
+
 const linkEntity = async (
 	subject: Subject,
 	spec: PromptSpec,
-	{ dependsOn }: { dependsOn?: string[] }
+	{ dependsOn, accept }: { dependsOn?: string[]; accept?: boolean }
 ): Promise<string> => {
-	if (!dependsOn?.length)
+	// A held dependent leaves Status alone; so does an auto-accepted decision — its caller resolves
+	// the Status itself, so parking the thread at `spec.pending` first would be a write nobody reads.
+	if (!dependsOn?.length && !accept)
 		await store.upsert(
 			config.models.RedditThreads,
 			{ Name: subject.name, "Thread URL": threadUrl(subject.key), Status: spec.pending },
@@ -151,13 +159,16 @@ export const tools = {
 	// double-drafts.
 	engage: async (url: string) => {
 		const u = threadUrl(url);
-		const status = await statusOf(u);
+		// ONE read of the thread row serves both the funnel guard and the judgment: the guard needs the
+		// Status, the judgment needs the frozen evidence, and they are the same row.
+		const row = await readThread(u);
+		const status = String(row.fields.Status ?? "");
 		if (status === "Not qualified" || rank(status) >= rank("Qualification pending review"))
 			return { url: u, skipped: true, status };
 		// Accepted in its own create (`accept`), never created and then patched: the funnel IS the
 		// Confirm here, so "Final output" ≡ Output is part of what this Decision IS. Its Name comes
 		// back from decide (which composed it), so nothing re-reads the page to learn it either.
-		const q = await decider.decide("qualify", u, { accept: true });
+		const q = await decider.decide("qualify", subjectOf(u, row), { accept: true });
 		const move = config.prompts!.qualify.resolve(q.output);
 		const tier = String((q.output as { tier?: unknown }).tier ?? "");
 		// The Tier lands on the THREAD row, not just inside the qualification's Output: the thread is

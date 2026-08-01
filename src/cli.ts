@@ -8,7 +8,13 @@
 //   sflock decisions list --agent <id> --feedback   every decision I have given feedback on, with the feedback
 //   sflock decisions show --agent <id> <decision> [--feedback]   one decision, or just its feedback
 //   sflock prompts list --agent <id>    each decision kind's LIVE contract: version + fingerprint
-//   sflock prompts show --agent <id> <kind>   one live contract in full (body, schemas, hash)
+//   sflock prompts show --agent <id> <kind> [--body]   one live contract in full — or just the body,
+//                                       the exact document the model reads (the inference projection)
+//   sflock prompts edit --agent <id> <kind>    that body for AUTHORING: transcluded regions delimited
+//                                       in place and named, so you can see which words are borrowed
+//   sflock prompts push --agent <id> <kind> [file]     publish the NEXT version: a new Prompt row,
+//                                       schemas copied verbatim, shared regions written back as
+//                                       references (refused if the candidate changed one)
 //   sflock docs list                    the Writer's documents (agent-agnostic — one shared table)
 //   sflock docs show <doc>              one document, its body as markdown
 //   sflock docs push <doc> [file]       a new version of one document — saved AND applied live in the
@@ -21,6 +27,12 @@
 // createReviewer (no entity bridge); docs reads the Writer's table through the Store seam
 // (src/docs.ts) — no --agent, because the writing table belongs to no one agent — and pushes through
 // the app's own save sink, so a revision reaches the open editor. sflock holds no per-store semantics.
+//
+// Review is read-only with TWO exceptions, and both are prose exceptions (README #2): `docs push`
+// hands back a document, and `prompts push` a new version of a judgment's instructions. Text a person
+// will edit is the only thing sflock writes; pipeline state stays the runtime binaries'. Both also
+// obey the same split — a prompt body has two readers, so `show --body` renders it for the model and
+// `edit` for the author (src/stores/notion.codec.ts).
 
 import "./env.js";
 import { Command } from "commander";
@@ -144,10 +156,50 @@ prompts
 	.argument("<kind>", `prompt key in config.prompts (e.g. "qualify") or the Prompt's full Name`)
 	.description("One kind's live contract in full: body (the authored instructions), Input/Output schemas, version, fingerprint.")
 	.requiredOption("--agent <id>", "agent under agents/ whose config.ts declares the prompts")
+	.option("--body", "print only the body — the exact document the model reads (the inference projection)")
+	.action(async (kind: string, { agent, body }: { agent: string; body?: boolean }) => {
+		const { config } = loadAgent(agent);
+		const reviewer = createReviewer({ ...loadAgent(agent) });
+		const contract = await reviewer.showPrompt(config.prompts?.[kind]?.name ?? kind);
+		console.log(body ? contract.body : JSON.stringify(contract, null, 2));
+	});
+
+// edit / push — the AUTHORING half of prompts, and the reason it is separate from `show`. A prompt
+// body has two readers with opposite needs: the model wants transclusions spliced flat (a marker
+// would be chrome in its prompt, and those bytes are what a Decision fingerprints), while a person
+// improving the prose needs to see which words are this page's own and which are borrowed from a
+// shared page — otherwise they edit shared prose by accident and fork it. `show --body` is the
+// model's view; `edit` is the author's. Both come from ONE traversal, so they cannot drift.
+prompts
+	.command("edit")
+	.argument("<kind>", `prompt key in config.prompts (e.g. "qualify") or the Prompt's full Name`)
+	.description("The live body for AUTHORING: transcluded regions delimited in place and named. Markdown on stdout (redirect it to a file), the region map on stderr.")
+	.requiredOption("--agent <id>", "agent under agents/ whose config.ts declares the prompts")
 	.action(async (kind: string, { agent }: { agent: string }) => {
 		const { config } = loadAgent(agent);
 		const reviewer = createReviewer({ ...loadAgent(agent) });
-		console.log(JSON.stringify(await reviewer.showPrompt(config.prompts?.[kind]?.name ?? kind), null, 2));
+		const doc = await reviewer.editPrompt(config.prompts?.[kind]?.name ?? kind);
+		// The map goes to stderr: stdout is the document, so `> candidate.md` yields a file that pushes
+		// back unchanged. Naming each region's page here is the whole point — it answers "edit what where".
+		console.error(`${doc.kind} v${doc.version} (${doc.hash}) — ${doc.regions.length} shared region(s):`);
+		for (const r of doc.regions)
+			console.error(`  ${r.syncedFrom}  "${r.source?.title ?? "?"}"  ${r.source?.url ?? ""}`);
+		if (doc.regions.length)
+			console.error(`  (edit those on their own pages — changing them here is refused by \`prompts push\`)`);
+		console.log(doc.markdown);
+	});
+
+prompts
+	.command("push")
+	.argument("<kind>", `prompt key in config.prompts (e.g. "qualify") or the Prompt's full Name`)
+	.argument("[file]", `markdown file from \`prompts edit\`; omit (or "-") to read it from stdin`)
+	.description("Publish the NEXT version of a kind's contract: a new Prompt row (never an edit), body from the file, both schema columns copied verbatim. Shared regions are written back as references, and refused if changed.")
+	.requiredOption("--agent <id>", "agent under agents/ whose config.ts declares the prompts")
+	.action(async (kind: string, file: string | undefined, { agent }: { agent: string }) => {
+		const { config } = loadAgent(agent);
+		const reviewer = createReviewer({ ...loadAgent(agent) });
+		const markdown = file && file !== "-" ? await readFile(file, "utf8") : await text(process.stdin);
+		console.log(JSON.stringify(await reviewer.pushPrompt(config.prompts?.[kind]?.name ?? kind, markdown), null, 2));
 	});
 
 // docs — the Writer's long-form documents (the /write surface of the review app). No --agent: it is
