@@ -1,6 +1,11 @@
 # Qualification ground truth — every human-reviewed digest, one list (the eval reads url/title/tier).
-# r/ai_agents (15: 10 T1, 1 T2, 4 No) + r/hermesagent (19: 13 T1, 0 T2, 6 No) = 34 threads.
+# r/ai_agents (15) + r/hermesagent (19) + r/ClaudeAI (5) = 39 threads: 22 T1, 6 T2, 11 No.
 # Original fields untouched per source dump; `tier` and `reasoning` are the human labels.
+#
+# The T2 ceiling (v12) relabelled three of these: 1v5pxxw, 1v5l31m and 1v4y7hm all voice real access
+# pain, but each is automating the author's OWN job hunt — right pain, no buyer. 1v5ge3u and 1v4amj6
+# deliberately stayed T1 and are the controls: a free-tier Termux stack shopping for extraction
+# tooling is still a purchase in our aisle, and "i am a beginner" is a skill, not a standing.
 
 # --- r/ai_agents digest (source: ai_agents_threads.yaml, 553 threads) ---
 - url: https://www.reddit.com/r/ai_agents/comments/1v51217/
@@ -164,7 +169,7 @@
           ended up writing my own thing rather than keep fighting playwright. link in the comments per rule 3.
         
           mostly wondering what everyone else does here, especially for sites you have to be logged into.
-  tier: No
+  tier: 'No'
   reasoning: |
     He is trying to sell his shit as he said "link in the comments"
 - url: https://www.reddit.com/r/ai_agents/comments/1v7x4w8/
@@ -194,7 +199,7 @@
         
           
           Someone else runs a procedure and now everyone can run it for free too. Like a shared database.
-  tier: No
+  tier: 'No'
   reasoning: |
     Another Vendor / open source builder trying to sell shit, competitor.
 - url: https://www.reddit.com/r/ai_agents/comments/1v89fp6/
@@ -391,7 +396,7 @@
     Built an agent that lives in group chats. Started on Sendblue for iMessage, hit their free-plan rule where recipients have to verify before the bot is allowed to message them, paid up to remove that for groups. Added Telegram and SMS as fallbacks, then Linq as a fourth because it does iMessage, RCS and SMS through one API.
         
           Is anyone reaching users reliably on a single channel, or is stacking providers just what this is?
-  tier: No
+  tier: 'No'
   reasoning: |
     Off topic.
 - url: https://www.reddit.com/r/ai_agents/comments/1v9q68u/
@@ -457,7 +462,7 @@
           Is there a better stack or architecture for this use case, especially something that avoids Twilio's fixed SMS subscription cost?
         
           Thanks!
-  tier: No
+  tier: 'No'
   reasoning: |
     No off topic.
 
@@ -710,11 +715,12 @@
   post_type: text
   body: "How can we give browser control to hermes?\n    \n      Like i want it to apply for all the jobs\
     \ for me on its own and make a special resume for each job listing"
-  tier: T1
+  tier: T2
   reasoning: |
-    "How can we give browser control to hermes? Like i want it to apply for all the jobs for me on
-    its own and make a special resume for each job listing." Logged-in browser actions (job portals,
-    form submission) with no API alternative, stuck at step zero and asking. Direct fit.
+    "i want it to apply for all the jobs for me on its own and make a special resume for each job
+    listing." Logged-in browser actions on job portals with no API alternative — the pain is exactly
+    ours and Reduck is the literal answer. Capped at T2 anyway: he is automating his OWN job hunt, so
+    there is no business or income behind it and nobody to sell to. Help plainly, do not pitch.
 - url: https://www.reddit.com/r/hermesagent/comments/1v5l31m/
   title: Which browser is best for AI Agent which can interact and fill form on its own?
   author: Party-Law2859
@@ -732,13 +738,14 @@
     \ here who might have run into this or built these things.\n    \n      What is the best browser for\
     \ an AI agent that can actually perform manual work and actions on my behalf?\n    \n      I tried\
     \ Brave with Cuda but it keeps crashing, Tried Safari but some things work some doesn't"
-  tier: T1
+  tier: T2
   reasoning: |
     "have my agent actually go to each job URL and apply on my behalf... if any CAPTCHA comes up,
     it should be able to do bypass or maybe alert me... I tried Brave with Cuda but it keeps
-    crashing, Tried Safari but some things work some doesn't." Actively-shopping buyer whose primary
-    need is reliable browser automation with forms and captchas — do not underclaim: real paired
-    sessions avoid most captcha triggers, the rest solvable with scripts on low-level primitives.
+    crashing, Tried Safari but some things work some doesn't." Forms and captchas on job portals —
+    our surface exactly. Capped at T2: the postings are HIS, applying on HIS behalf, so this is his
+    own job hunt. Trying free browsers is not the in-our-aisle purchase that lifts the ceiling —
+    he is picking a runtime for a personal errand, not buying data access.
 - url: https://www.reddit.com/r/hermesagent/comments/1v5ge3u/
   title: Best web Search and Extract free setup (Termux Install)
   author: lawfulcrispy
@@ -773,12 +780,12 @@
     \ Playwright or n8n, and how you handled logins, duplicate applications, CAPTCHAs, and job sites blocking\
     \ automation.\n    \n      Would be great to see how others approached it, even if it’s just a basic\
     \ setup or work in progress."
-  tier: T1
+  tier: T2
   reasoning: |
     "how you handled logins, duplicate applications, CAPTCHAs, and job sites blocking automation" —
-    the exact T1 checklist (sessions, captchas, ban-safe automation) stated verbatim, with a
-    human-review gate already planned. Builder one layer above us asking how others keep this
-    running; literal-answer test passes.
+    the access checklist stated verbatim, with a human-review gate already planned, so the pain is
+    unambiguous. Still T2: "compare them with my background, customize the CV or cover letter" makes
+    it his own job search. Real pain, no buyer — the ceiling wins over the literal-answer test.
 - url: https://www.reddit.com/r/hermesagent/comments/1v4rwmc/
   title: Do you actually talk to Hermes all day, or let it work in the background?
   author: Anxious_Pineapple773
@@ -863,3 +870,75 @@
   tier: T1
   reasoning: |
     Weekly manual portal-export loop ("I export all my google search console and google analytics data and give it to claude") that he wants automated daily on a mac mini, plus ahrefs limits — repeatable logged-in data pulls we cover; guide him to saved scripts.
+
+# --- r/ClaudeAI (source: claudeai_threads.yaml, 291-thread digest) — 1vakiqt is the reviewed
+# decision that motivated the T2 ceiling; the other four came from the same digest review. ---
+- url: https://www.reddit.com/r/claudeai/comments/1vakiqt/
+  title: I created a dashboard artifact and am stuck trying to implement this functionality. Any help greatly appreciated.
+  author: cefriano
+  created: 2026-07-30T05:31:49.029000+0000
+  score: 0
+  num_comments: 5
+  tier: T2
+  reasoning: |
+    "I'm currently job hunting, and I created a Claude task to scan dozens of job boards and company
+    career pages every day" — then: "I want to add a 'Generate' button ... so that when I click the
+    button, it fetches the JD from the posting URL ... It can't fetch info from the URL or open the
+    link in Chrome itself." Genuine access pain and Reduck is the literal answer (a script opens the
+    posting and returns the JD). Capped at T2 by stated standing: he says he is job hunting, so the
+    automation serves his own search — no business, no buyer. v11 scored this T1 and drafted a reply
+    that pitched a DM; that miss is what the ceiling exists to prevent.
+- url: https://www.reddit.com/r/claudeai/comments/1vbsvt5/
+  title: What's the best way to create a good automated daily news briefing with Claude Pro without burning through usage?
+  author: raym0ndlin
+  created: 2026-07-31T14:41:46.822000+0000
+  score: 2
+  num_comments: 7
+  tier: T2
+  reasoning: |
+    "I provided RSS feeds, but some feeds were blocked/inaccessible. I then asked Claude to scrape the
+    source websites instead, but the resulting news wasn't always current or reliable." Blocked feeds plus
+    unreliable ad-hoc scraping on a daily recurring pull, and he is shopping for a setup ("What setup are
+    you using for something similar?"). Reduck is the literal answer, but the briefing is for himself on
+    his iPhone — personal use, no business, no buyer: capped at T2 by the same standing ceiling as 1vakiqt.
+
+- url: https://www.reddit.com/r/claudeai/comments/1vbpf4j/
+  title: Why are recorded skills so slow.
+  author: bbarker1992
+  created: 2026-07-31T12:22:07.376000+0000
+  score: 0
+  num_comments: 6
+  tier: T1
+  reasoning: |
+    "I get orders from etsy that I manually load onto my WordPress site... Takes me aprox 2 minutes per
+    order copying and pasting delivery info back and forth, generating labels on etsy, uploading copies of
+    the labels onto our server" and "watching it slowly and methodically work it's way through a single test
+    order took literally more than 15 minutes... Am i missing something here or is it really that slow at
+    taking actions when using it's connected chrome skill?" A weekly logged-in Etsy->WordPress loop the agent
+    replays click-by-click instead of running as a script. Recurring manual loop plus unreliable/slow
+    logged-in browser work, stuck and asking.
+
+- url: https://www.reddit.com/r/claudeai/comments/1vbc1px/
+  title: Claude for data scraping, analysis and vetting
+  author: whatdoyouknowno
+  created: 2026-07-31T01:03:28.122000+0000
+  score: 2
+  num_comments: 7
+  tier: T1
+  reasoning: |
+    "as part of my job I am often scouring various tendering / procurement platforms (infrastructure)"
+    and the pipeline verifies "against the government tender portal (ground-truth tender status) and primary
+    sources", closing with "The key issue is that there are major accuracy issues even I try to keep it to
+    primary sources only". Recurring loop against government + procurement portals with no usable API, a
+    stated reliability failure, and he asks what he should be using. Saved deterministic scripts per portal
+    is the literal answer.
+
+- url: https://www.reddit.com/r/claudeai/comments/1vatduv/
+  title: 'Root vs. subfolder start in a multi-client repo + Sonnet subagents for grunt work: is this best practice?'
+  author: Joetunn
+  created: 2026-07-30T13:16:28.161000+0000
+  score: 0
+  num_comments: 3
+  tier: 'No'
+  reasoning: |
+    Dude did not mention a pain related to interacting with websites at scale / consistently.
