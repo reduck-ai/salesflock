@@ -2,10 +2,11 @@
 // reddit-engage as CLI subcommands — JSON on stdout. The READ-ONLY funnel, two stages joined by
 // the store (the "To qualify" status is the worklist between them):
 //   scan → new threads of the watched subreddits (the listing carries the full post text), queued
-//   at "To qualify" — then engage → [ qualification Decision → (if good) reply draft held behind
-//   it via dependsOn ] → [human gate]; plus draft (manual redraft) and list/show for the shared
-//   review queue. Each stage is idempotent and monotonic on the canonical Thread URL, so either
-//   re-runs safely after a crash; sending is unwired.
+//   at "To qualify" — then engage → [ qualify as a judgment, kept as the thread's Tier + a comment
+//   on its page → (if good) a reply draft, the one Decision ] → [human gate]; plus draft (manual
+//   redraft) and list/show for the shared review queue. Each stage is idempotent and monotonic on
+//   the canonical Thread URL, and the thread's rung says what is still owed, so either re-runs
+//   safely after a crash; sending is unwired.
 
 import "../../src/env.js";
 import { Command } from "commander";
@@ -29,15 +30,21 @@ program
 
 program
 	.command("engage")
-	.argument("[threads...]", "thread URLs to engage; omit to drain every thread at 'To qualify'")
-	.description("Qualification Decision → (if it scores well) a reply draft held behind it via dependsOn. Batched; no args drains scan's whole backlog, page by page.")
+	.argument("[threads...]", "thread URLs to engage; omit to drain the backlog ('To qualify' + 'To engage')")
+	.description("Qualify (a judgment: Tier on the thread, claims as a page comment — no Decision) — the post alone first, then the full thread with its comments for anything that survives → if it still scores well, a reply draft for review. Batched; no args drains the whole backlog, page by page.")
 	.action(async (threads: string[]) => out(threads.length ? await batch(threads, tools.engage) : await tools.engagePending()));
+
+program
+	.command("refresh")
+	.argument("<threads...>", "thread URLs to re-pull from their own page")
+	.description("Re-read a thread from its page and re-freeze its evidence (post + full comment tree, score, count). Evidence only — never touches Status or Tier, so it is safe at any point in the funnel. Batched.")
+	.action(async (threads: string[]) => out(await batch(threads, tools.refresh)));
 
 program
 	.command("draft")
 	.argument("[threads...]", "thread URLs to (re)draft as a standalone reply Decision")
 	.option("--show", "print the judgment context (contract + evidence); writes nothing")
-	.description("Manually (re)draft a reply for a thread — standalone, no qualification dependency, on the frozen evidence. Batched.")
+	.description("Manually (re)draft a reply for a thread, on the frozen evidence. Batched.")
 	.action(async (threads: string[], { show }) => out(show ? await batch(threads, tools.context) : await batch(threads, tools.draft)));
 
 program

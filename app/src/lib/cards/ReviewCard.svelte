@@ -30,7 +30,8 @@
 	import OutputForm from "./OutputForm.svelte";
 	// An agent may ship an evidence.css — the skin for the classes its evidence.ts emits. The queue
 	// is mixed, so every skin loads here, one import per agent (classes are namespaced per agent, and
-	// the card the row renders decides which ones fire). No agent ships one today, hence none listed.
+	// the card the row renders decides which ones fire).
+	import "$agents/reddit-engage/evidence.css";
 	import { Badge } from "$lib/components/ui/badge";
 	import { quoteAt, canonNormalize, quoteKey } from "$core/anchor";
 	import { schemaError } from "$core/output";

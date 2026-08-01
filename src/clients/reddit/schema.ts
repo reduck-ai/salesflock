@@ -18,6 +18,46 @@ export interface Threads {
   subreddit: string;
 }
 
+export interface Thread {
+  /**
+   * Reddit fullname, e.g. t3_1ldvy4n
+   */
+  id: string;
+  score: number;
+  title: string;
+  author: string;
+  domain?: string | null;
+  created: string;
+  op_text: string;
+  comments: {
+    /**
+     * Comment fullname, e.g. t1_myeuclu
+     */
+    id: string;
+    body: string;
+    /**
+     * Reply nesting level; with array order (thread order) reconstructs the tree
+     */
+    depth: number;
+    score?: number | null;
+    author: string | null;
+    created: string | null;
+    permalink?: string | null;
+  }[];
+  permalink: string;
+  post_type: string;
+  subreddit: string;
+  /**
+   * Submission target: external link for link posts, the thread url for self posts
+   */
+  content_href?: string | null;
+  /**
+   * Reddit's total comment count; compare with comments.length to detect on-load truncation
+   */
+  num_comments: number;
+  upvote_ratio?: number | null;
+}
+
 export interface Info {
   id?: string | null;
   rules?:

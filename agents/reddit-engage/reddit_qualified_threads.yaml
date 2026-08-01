@@ -1,11 +1,16 @@
 # Qualification ground truth — every human-reviewed digest, one list (the eval reads url/title/tier).
-# r/ai_agents (15) + r/hermesagent (19) + r/ClaudeAI (5) = 39 threads: 22 T1, 6 T2, 11 No.
+# r/ai_agents (18) + r/hermesagent (19) + r/ClaudeAI (5) = 42 threads: 24 T1, 5 T2, 13 No.
 # Original fields untouched per source dump; `tier` and `reasoning` are the human labels.
 #
 # The T2 ceiling (v12) relabelled three of these: 1v5pxxw, 1v5l31m and 1v4y7hm all voice real access
 # pain, but each is automating the author's OWN job hunt — right pain, no buyer. 1v5ge3u and 1v4amj6
 # deliberately stayed T1 and are the controls: a free-tier Termux stack shopping for extraction
 # tooling is still a purchase in our aisle, and "i am a beginner" is a skill, not a standing.
+#
+# 1vbsvt5 was relabelled T2 → T1 and the ceiling KEPT, which draws the line the ceiling actually
+# means: it caps a finite personal ERRAND (a job hunt ends, and nobody funds it), not a recurring
+# personal HABIT run by someone already paying for tooling. The pain there repeats daily and forever
+# — that is a buyer. This pair, 1vbsvt5 against 1vakiqt, is the sharpest control in the set.
 
 # --- r/ai_agents digest (source: ai_agents_threads.yaml, 553 threads) ---
 - url: https://www.reddit.com/r/ai_agents/comments/1v51217/
@@ -894,13 +899,18 @@
   created: 2026-07-31T14:41:46.822000+0000
   score: 2
   num_comments: 7
-  tier: T2
+  tier: T1
   reasoning: |
     "I provided RSS feeds, but some feeds were blocked/inaccessible. I then asked Claude to scrape the
     source websites instead, but the resulting news wasn't always current or reliable." Blocked feeds plus
     unreliable ad-hoc scraping on a daily recurring pull, and he is shopping for a setup ("What setup are
-    you using for something similar?"). Reduck is the literal answer, but the briefing is for himself on
-    his iPhone — personal use, no business, no buyer: capped at T2 by the same standing ceiling as 1vakiqt.
+    you using for something similar?"). Reduck is the literal answer.
+    Was T2 under the standing ceiling ("it's for himself, so no buyer"); relabelled T1, and the ceiling
+    kept, because that reading stretched it past what it means. The ceiling caps a finite personal
+    ERRAND — a job hunt ends, and nobody funds it — not a recurring personal HABIT run by someone
+    already paying for tooling. This pull repeats every day forever and he is on Claude Pro shopping for
+    a better setup: that is a buyer. Against 1vakiqt, whose author states he is job hunting, this is the
+    sharpest control in the set — the ceiling turns on a stated finite errand, never on "he is the user".
 
 - url: https://www.reddit.com/r/claudeai/comments/1vbpf4j/
   title: Why are recorded skills so slow.
@@ -942,3 +952,52 @@
   tier: 'No'
   reasoning: |
     Dude did not mention a pain related to interacting with websites at scale / consistently.
+
+# --- live funnel (2026-08-01) — threads the human flagged on their REPLY draft, i.e. misses the
+# qualification made. 1vayt1t and 1vc0moj are the set's first two-phase cases: their stored rows
+# carry the comment tree, so the eval scores the read the funnel actually makes last, and its
+# pre-screen column re-checks that the post-only read would not have dropped them first. ---
+- url: https://www.reddit.com/r/ai_agents/comments/1vayt1t/
+  title: How do I set up a ai agent
+  author: Original-Deer9063
+  created: 2026-07-30T16:38:23.501000+0000
+  score: 0
+  num_comments: 8
+  tier: T1
+  reasoning: |
+    "Auto-post to TikTok, Instagram, and YouTube Shorts... where the real limitations are (platform API
+    restrictions, content moderation, etc.)". Posting to three platforms whose APIs are gated or metered
+    is our surface, and he names the restriction himself — textbook T1.
+    Reviewed at T2 on the reasoning that he has not separated generation from posting, so he is shopping
+    for a stack rather than buying access; settled at T1 because that is a judgment about the PERSON's
+    clarity, not about the pain, and the ladder ranks pain and standing. "Not yet articulate" is a skill,
+    the same way "i am a beginner" is in 1v4amj6 — neither is a missing buyer.
+- url: https://www.reddit.com/r/ai_agents/comments/1vccyni/
+  title: Are you even aware of AI shopping agents?
+  author: nikta456
+  created: 2026-08-01T04:11:17.499000+0000
+  score: 1
+  num_comments: 2
+  tier: 'No'
+  reasoning: |
+    A findings broadcast addressed to store owners — "do they even know agents are coming?", 21 brands
+    scanned, pass rates — with no pain of his own and no question he wants answered. Nothing to reply to.
+    The control pair: 1v51217 is the SAME author scored T1, and the difference is the whole test. There
+    he ran an agent, it failed on a real page, and he asked the sub what the biggest obstacle is; here he
+    tells brands what they are getting wrong. Author identity carries nothing — the ask does.
+- url: https://www.reddit.com/r/ai_agents/comments/1vc0moj/
+  title: Where to run my agents if I'm not an app developer
+  author: Negative-Guard-4487
+  created: 2026-07-31T19:24:24.684000+0000
+  score: 3
+  num_comments: 14
+  tier: 'No'
+  reasoning: |
+    THE case that motivated reading the comments at all. The post reads like access pain — "telegram is
+    banned in my country and I tried with proxies, they didn't work. Then I tried WhatsApp, and META
+    won't even let me create a developer account" — and on the post alone it is a defensible T1. Under
+    it, the OP answers three questions and unmakes his own case: "And there's no audience for now",
+    "I'm a broke student?", and "I wasted 200$ worth of free credits in a single day doing something
+    silly". No buyer, no user, no judgment — and the deciding line sits at depth 3, behind a "more
+    replies" loader. Note the pain is also not ours: his blocker is where to HOST and how to reach
+    users, not getting a script through a website.

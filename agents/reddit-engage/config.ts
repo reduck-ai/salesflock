@@ -1,6 +1,7 @@
 // reddit-engage — subreddit-driven Reddit engagement, the Reddit sibling of lk-engage:
-//   scan [ the watched subreddits' new threads → qualify (LLM, title + post) → reply draft (LLM,
-//   dependsOn) in parallel ] → [human gate]. READ-ONLY — nothing is ever posted to Reddit.
+//   scan the watched subreddits' new threads → qualify (LLM, title + post; a judgment, NOT a
+//   Decision — nobody reviews it, so its whole record is the thread's Tier + Status and a comment on
+//   the thread page) → reply draft (LLM) → [human gate]. READ-ONLY — nothing is ever posted to Reddit.
 // One pipeline table (Reddit Threads, the peer of Lk Engagements) + the two universal tables every
 // agent shares (Decisions, Prompts). No People table: the thread IS the unit, its author a flat
 // column. `sflock pull --agent reddit-engage` reads this to regenerate schema/*.ts; the runtime
@@ -66,7 +67,7 @@ export const SUBREDDITS: Record<string, string> = {
 // ("r/AI_Agents", "AI_Agents") finds the same community. The twin of threadUrl's normalization.
 export const subKey = (subreddit: string): string => subreddit.replace(/^r\//i, "").toLowerCase();
 
-// Our own Reddit username: hydrate never queues our own threads (you don't reply to yourself).
+// Our own Reddit username: `queue` never backlogs our own threads (you don't reply to yourself).
 // Empty ⇒ the check is off until filled in.
 export const OWNER: string = "";
 
@@ -82,24 +83,28 @@ export default {
 	// fan-out is wide, and this account's Bedrock TPS throttles at even 2 concurrent (measured).
 	model: "google/gemini-3.5-flash",
 	// The forward ladder — declared once here, obeyed by the runtime's stages (tools.ts) AND by the
-	// review app's commit, so neither can move a thread backward. "Not qualified" is off it:
-	// terminal, only reachable through a non-advancing decision.
-	ladder: ["To qualify", "Qualification pending review", "To engage", "Draft pending review", "Approved"],
+	// review app's commit, so neither can move a thread backward. It is also the funnel's RESUME
+	// point: every rung is a worklist ("To qualify" = scanned, "To engage" = qualified but not yet
+	// drafted), so `engage` reads the rung and picks up exactly where a crashed run stopped. "Not
+	// qualified" is off it: terminal, only reachable through a non-advancing qualification.
+	ladder: ["To qualify", "To engage", "Draft pending review", "Approved"],
 	prompts: {
-		// Is this thread worth answering? The one gate of the funnel (no deterministic pre-filter).
-		// Its committed output IS the decision: tier "No" is the terminal miss (non-advancing, so the
-		// review app archives any reply drafted against it); T1/T2 advance.
+		// Is this thread worth answering? The one filter of the funnel (no deterministic pre-filter),
+		// and NOT a human gate: it is calibrated against reddit_qualified_threads.yaml, so the funnel
+		// judges it and keeps only the verdict (Tier + Status + a comment on the thread page). No
+		// `pending` for the same reason — there is no gate to park the thread at. tier "No" is the
+		// terminal miss (non-advancing, nothing is drafted); T1/T2 advance to the draft.
 		qualify: {
 			name: "Reddit Thread Qualification",
-			pending: "Qualification pending review",
 			resolve: (o) =>
 				o.tier === "No"
 					? { status: "Not qualified", advances: false }
 					: { status: "To engage", advances: true }
 		},
-		// The reply draft, held behind the qualification via dependsOn. The committed output IS the
-		// decision: `resolve` advances to "Approved" (the terminal gate — posting is unwired). No
-		// negative branch: declining to engage is simply not confirming.
+		// The reply draft — the ONE Decision this agent creates, because it is the one thing a human
+		// rules on. The committed output IS the decision: `resolve` advances to "Approved" (the
+		// terminal gate — posting is unwired). No negative branch: declining to engage is simply not
+		// confirming.
 		reply: {
 			name: "Reddit Reply",
 			pending: "Draft pending review",

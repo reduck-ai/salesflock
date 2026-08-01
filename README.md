@@ -59,6 +59,13 @@ says what it does. If a fact can drift, it belongs in code, not here.
    A judgment is a **pure function of its context** — never a fetch — so it re-runs when
    the criteria change and fans out in parallel. Shared context is computed once and
    frozen, then handed to each per-item call; only the verdict is per-item.
+   Judging and persisting stay distinct too, and the line between them is the human:
+   **a Decision exists iff a person will rule on it.** A calibrated stage — one whose prompt is
+   held green against a committed ground truth — judges and keeps only what a later reader needs
+   (a column on its entity, a comment on its page). Minting a Decision there and committing it in
+   the same breath would fake a review that never happened, and the queue a human reads is exactly
+   the wrong place to put a row nobody will open. The eval, not the CRM, is where such a stage's
+   record lives: a miss is fixed by a line in the ground truth, not by overturning a row.
 
 8. **The state seam is yours; the store is theirs.** Agents write through the `Store`
    interface (`src/stores/`); the destination is chosen in the agent's `config.ts` (default

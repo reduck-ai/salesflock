@@ -1,0 +1,99 @@
+/* reddit-engage evidence skin — OWNED BY THE AGENT, the skin twin of evidence.ts (which emits these
+   classes). The app loads it through the roster's registration step (one import in ReviewCard), so
+   core stays agent-agnostic: the Reddit look lives HERE, not in the shared card. Theme TOKENS only
+   (--foreground, --muted-foreground) — the agent skins its evidence, it never dictates the palette.
+   Scoped under .evidence (the class on the rendered document) so it cannot leak past it.
+
+   Two things to style, deliberately, and they are the two boundaries of the document: the thread's
+   HEAD, and where the OP stops speaking. The post's body between them is Reddit's own markdown on
+   the app's prose typography — it is the baseline, and everything else is visibly not it. */
+
+.evidence .rd-head {
+	margin: 2px 0 12px;
+}
+
+/* the post title — the one large thing in the document, so the eye lands on what the reply answers */
+.evidence .rd-title {
+	display: block;
+	font-size: 17px;
+	line-height: 1.3;
+	font-weight: 650;
+	color: var(--foreground);
+}
+
+/* the byline: community · author · when · score · comments. Muted and small, so it frames the title
+   without competing with it. */
+.evidence .rd-meta {
+	display: block;
+	margin-top: 4px;
+	font-size: 12px;
+	line-height: 1.5;
+	color: var(--muted-foreground);
+}
+
+/* the community leads the byline in full colour — which subreddit this came from is context you
+   read before the post, and it is what the rules in the folded section govern. The same rule earns
+   its keep twice: a comment's byline is an .rd-meta too, so the <b> that marks the OP replying
+   under their own post lights up here, with no second declaration. */
+.evidence .rd-meta b {
+	color: var(--foreground);
+	font-weight: 600;
+}
+
+/* ── where the OP stops speaking ─────────────────────────────────────────────────────────────────
+   The divider is the answer to "is this still the post?": a hairline across the column with its
+   label sitting on it. One line, and the question never comes up again below it. */
+.evidence .rd-divider {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 20px 0 12px;
+	font-size: 12px;
+	font-weight: 600;
+	letter-spacing: 0.02em;
+	color: var(--muted-foreground);
+}
+.evidence .rd-divider::after {
+	content: "";
+	flex: 1;
+	height: 1px;
+	background: var(--border);
+}
+
+/* a comment: a rail on the left and slightly quieter type. Reddit's own hierarchy, and the reason
+   it works — the post is the thing being answered, so it stays the largest voice on the page. */
+.evidence .rd-comment {
+	border-left: 2px solid var(--border);
+	padding-left: 10px;
+	margin: 10px 0;
+	font-size: 13px;
+	line-height: 1.55;
+	color: var(--muted-foreground);
+}
+
+/* the OP answering under their own post — the reason the tree is fetched at all, so it is the one
+   card that reads at full strength: a lit rail and the post's own colour. */
+.evidence .rd-comment.rd-op {
+	border-left-color: var(--foreground);
+	color: var(--foreground);
+}
+
+/* nesting, from the `data-depth` the seed carries — already clamped to 0–4 by evidence.ts, so
+   every value that can arrive has a rule and nothing falls back to flush-left. */
+.evidence .rd-comment[data-depth="1"] {
+	margin-left: 14px;
+}
+.evidence .rd-comment[data-depth="2"] {
+	margin-left: 28px;
+}
+.evidence .rd-comment[data-depth="3"] {
+	margin-left: 42px;
+}
+.evidence .rd-comment[data-depth="4"] {
+	margin-left: 56px;
+}
+
+/* a comment's own paragraphs sit tighter than the post's — a card is one utterance, not a document */
+.evidence .rd-comment > p {
+	margin: 4px 0;
+}

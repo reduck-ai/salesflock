@@ -1,12 +1,15 @@
-// The decision engine — agent-agnostic. Decide a person against a Prompt row (an LLM two-tool
-// loop, or a manual verdict) and persist ONE Decision, held to the Prompt's Output schema +
-// quote-range contract before the write. Extracted from the linkedin-leads agent so every agent
-// shares one engine: `createDecider` closes over the agent's store, config, and evidence
-// renderers, returning the decision tools (decide/context/list/showDecision).
+// The decision engine — agent-agnostic. Judge a subject against a Prompt row (an LLM two-tool loop)
+// and, when a human will rule on the result, persist ONE Decision, held to the Prompt's Output
+// schema + quote-range contract before the write. Extracted from the linkedin-leads agent so every
+// agent shares one engine: `createDecider` closes over the agent's store, config, and evidence
+// renderers, returning the decision tools (judge/decide/context/list/showDecision).
 //
-// The LLM decides in a two-tool loop — `search_quotes` turns cited text into {start,end} spans
+// The LLM judges in a two-tool loop — `search_quotes` turns cited text into {start,end} spans
 // (the model never invents offsets; code owns them) and `submit_claims` commits, stopping the
 // moment a submit passes both gates (the Output schema, and every quote in-range) BEFORE the write.
+// That loop is `runJudgment` below, and it is deliberately PURE: judging and persisting are two
+// jobs (README #7), so a funnel gate nobody reviews takes the verdict without minting a Decision —
+// a Decision is the human's queue, and a row born already-committed is noise in it.
 
 import { getStore, queryAll } from "./stores/index.js";
 import type { AgentConfig, PromptSpec, Row, Store } from "./stores/index.js";
@@ -85,6 +88,90 @@ export interface Verdict {
 	output: Record<string, unknown>;
 	statements: Statement[];
 }
+
+// responseSchemaFor(outputSchema) — the envelope every evidenced judgment returns: the domain
+// output, its shape declared by the Prompt, wrapped in the fixed anchoring layer above. Declared
+// once so the loop that enforces it and anything printing the expected shape cannot disagree.
+export const responseSchemaFor = (outputSchema: object): Record<string, unknown> => ({
+	type: "object",
+	required: ["output", "statements"],
+	properties: { output: outputSchema, statements: STATEMENTS }
+});
+
+// Everything a judgment needs, and nothing else: the instructions, the evidence, and the Output
+// contract. A judgment is a pure function of its context (README #7), so this IS the context — no
+// store, no entity, no Decision.
+export interface Judgment {
+	system: string;
+	examples?: string;
+	evidence: string;
+	outputSchema: Record<string, unknown>;
+}
+
+// runJudgment(j, model?) — the two-tool loop, and the one place it lives. `search_quotes` is the
+// ONLY source of offsets: it canon-matches cited text and returns every occurrence as a {start,end}
+// span with context; `submit_claims` commits only when the Output satisfies its schema and every
+// quote is one search returned. It WRITES NOTHING, which is what lets it serve all three callers
+// without any of them re-implementing it: `decide` (judge, then persist a Decision), a funnel gate
+// that only needs the verdict, and the offline eval — which used to carry its own copy of this loop
+// and could therefore certify a prompt against code that wasn't the code that runs.
+export const runJudgment = async (j: Judgment, model?: string): Promise<Verdict> => {
+	const returned = new Set<string>();
+	let submitted: Verdict | undefined;
+	const search_quotes = llm.jsonTool<{ texts: string[] }>({
+		description:
+			"Locate verbatim quotes in the Evidence. Pass the exact text you intend to cite; get back, " +
+			"per text, every occurrence as a {start,end} span with its surrounding `before`/`after` " +
+			"context. When a quote occurs more than once, read the context and take the {start,end} of " +
+			"the occurrence that fits your point. An empty match list means re-quote an exact substring.",
+		schema: {
+			type: "object",
+			required: ["texts"],
+			properties: {
+				texts: {
+					type: "array",
+					items: { type: "string" },
+					description: "verbatim substrings of the Evidence you mean to cite"
+				}
+			}
+		},
+		execute: ({ texts }) =>
+			texts.map((text) => ({
+				text,
+				matches: findQuotes(j.evidence, text).map((q) => {
+					returned.add(quoteKey(q));
+					return {
+						start: q.start,
+						end: q.end,
+						before: j.evidence.slice(Math.max(0, q.start - 48), q.start),
+						after: j.evidence.slice(q.end, q.end + 48)
+					};
+				})
+			}))
+	});
+	const submit_claims = llm.jsonTool<Verdict>({
+		description:
+			"Commit the final judgment: the domain Output plus the claim→proof statements. Every quote " +
+			"{start,end} must be one `search_quotes` returned — search for the text first, then submit that span.",
+		schema: responseSchemaFor(j.outputSchema),
+		execute: (v) => {
+			const err = schemaError(j.outputSchema, v.output);
+			if (err) return { ok: false, error: `the Output does not satisfy its schema: ${err}` };
+			const bad = collectQuotes(v).find((q) => !inRange(j.evidence, q) || !returned.has(quoteKey(q)));
+			if (bad)
+				return {
+					ok: false,
+					error: `quote ${quoteKey(bad)} was not returned by search_quotes — search for its text, then submit the span you got back.`
+				};
+			submitted = v;
+			return { ok: true };
+		}
+	});
+	const prompt = [j.system, j.examples, `## Evidence\n\n${j.evidence}`].filter(Boolean).join("\n\n");
+	await llm.agent(prompt, { search_quotes, submit_claims }, () => submitted !== undefined, model);
+	if (!submitted) throw new Error("the model did not submit a valid decision within the step budget");
+	return submitted;
+};
 
 // The subject of a decision — who/what is being judged: the frozen fields projectInput reads, a
 // display name for the Decision, and the subject's own store row id (for the entity link below).
@@ -361,14 +448,7 @@ export interface DeciderDeps extends ReviewerDeps {
 	// Advance the subject's pipeline entity row (to the prompt's `pending` Status, unless it's a held
 	// DAG dependent — the one place the domain funnel advances) and return that row's id. The relation
 	// it binds to is `config.entity`, so linkEntity no longer reports it — it just hands back the id.
-	// `accept` means the decision is born committed, so there is no pending gate to park the entity
-	// at: the caller resolves its Status itself, and writing `spec.pending` first would be a write
-	// nobody ever reads (plus a visible flicker in the CRM).
-	linkEntity: (
-		subject: Subject,
-		spec: PromptSpec,
-		opts: { dependsOn?: string[]; accept?: boolean }
-	) => Promise<string>;
+	linkEntity: (subject: Subject, spec: PromptSpec, opts: { dependsOn?: string[] }) => Promise<string>;
 	// The few-shot block the LLM sees, overridable per agent. Default: prior committed Decisions
 	// (examplesFor). x-engage supplies the owner's own Posts+Replies — its authentic voice — instead.
 	renderExamples?: (key: string, subject: Subject) => Promise<string>;
@@ -456,109 +536,42 @@ export const createDecider = (deps: DeciderDeps) => {
 		const input = projectInput(f, inputSchema);
 		const evidence = renderEvidence(input);
 
-		const responseSchema = {
-			type: "object",
-			required: ["output", "statements"],
-			properties: { output: outputSchema, statements: STATEMENTS }
-		};
+		const responseSchema = responseSchemaFor(outputSchema);
 		const examples = deps.renderExamples
 			? await deps.renderExamples(key, subject)
 			: await examplesFor(key, String(f.Name ?? subject.name));
 		return { spec, subject, prompt, system, examples, outputSchema, input, evidence, responseSchema };
 	};
 
-	// decide — decide the person against a Prompt row (the LLM two-tool loop) and persist one
-	// Decision. dependsOn makes the Decision a DAG node: reviewable only once every upstream is
-	// Accepted (derived by the app). A dependency-free decision moves its Lead to the prompt's
-	// pending gate; a dependent one leaves Status alone.
-	//
-	// `accept` writes "Final output" ≡ Output in the SAME create — a calibrated stage that commits its
-	// own judgment (the review app's Confirm, made by the funnel) is one write, not a create followed
-	// by a patch of the row we just made. The caller still owns the consequences (the entity's Status
-	// move, the audit comment): what belongs here is only that the Decision is born in the state it
-	// means. `name` comes back for the same reason — it is composed here, so nobody needs to re-read
-	// the page to learn it.
+	// judge — the verdict alone: the contract, the frozen evidence, the two-tool loop, and nothing
+	// persisted. For a stage whose judgment nobody will rule on, so no Decision should exist: a
+	// Decision is the human's queue, and a row born already-committed is noise in it. The caller
+	// keeps whatever the verdict is worth (a column on its entity, a comment on its page) and owns
+	// the entity's Status itself — there is no gate to park it at.
+	const judge = async (key: string, handle: string | Subject): Promise<Verdict> =>
+		runJudgment(await judgmentContext(key, handle), config.model);
+
+	// decide — judge, then persist ONE Decision: the same loop as `judge`, plus everything that makes
+	// it reviewable. dependsOn makes the Decision a DAG node: reviewable only once every upstream is
+	// Accepted (derived by the app). A dependency-free decision moves its entity to the prompt's
+	// pending gate; a dependent one leaves Status alone. `name` comes back because it is composed
+	// here, so nobody needs to re-read the page to learn it.
 	const decide = async (
 		key: string,
 		publicId: string | Subject,
-		{ dependsOn, accept }: { dependsOn?: string[]; accept?: boolean } = {}
+		{ dependsOn }: { dependsOn?: string[] } = {}
 	) => {
 		const ctx = await judgmentContext(key, publicId);
-
-		let output: Record<string, unknown> | undefined;
-		let statements: Statement[] | undefined;
-		{
-			// The two-tool loop. `search_quotes` is the ONLY source of offsets: it canon-matches cited
-			// text and returns every occurrence as a {start,end} span with context; `submit_claims`
-			// commits only when the Output satisfies its schema and every quote is one search returned.
-			const returned = new Set<string>();
-			let submitted: Verdict | undefined;
-			const search_quotes = llm.jsonTool<{ texts: string[] }>({
-				description:
-					"Locate verbatim quotes in the Evidence. Pass the exact text you intend to cite; get back, " +
-					"per text, every occurrence as a {start,end} span with its surrounding `before`/`after` " +
-					"context. When a quote occurs more than once, read the context and take the {start,end} of " +
-					"the occurrence that fits your point. An empty match list means re-quote an exact substring.",
-				schema: {
-					type: "object",
-					required: ["texts"],
-					properties: {
-						texts: {
-							type: "array",
-							items: { type: "string" },
-							description: "verbatim substrings of the Evidence you mean to cite"
-						}
-					}
-				},
-				execute: ({ texts }) =>
-					texts.map((text) => ({
-						text,
-						matches: findQuotes(ctx.evidence, text).map((q) => {
-							returned.add(quoteKey(q));
-							return {
-								start: q.start,
-								end: q.end,
-								before: ctx.evidence.slice(Math.max(0, q.start - 48), q.start),
-								after: ctx.evidence.slice(q.end, q.end + 48)
-							};
-						})
-					}))
-			});
-			const submit_claims = llm.jsonTool<Verdict>({
-				description:
-					"Commit the final judgment: the domain Output plus the claim→proof statements. Every quote " +
-					"{start,end} must be one `search_quotes` returned — search for the text first, then submit that span.",
-				schema: ctx.responseSchema,
-				execute: (v) => {
-					const err = schemaError(ctx.outputSchema, v.output);
-					if (err) return { ok: false, error: `the Output does not satisfy its schema: ${err}` };
-					const bad = collectQuotes(v).find((q) => !inRange(ctx.evidence, q) || !returned.has(quoteKey(q)));
-					if (bad)
-						return {
-							ok: false,
-							error: `quote ${quoteKey(bad)} was not returned by search_quotes — search for its text, then submit the span you got back.`
-						};
-					submitted = v;
-					return { ok: true };
-				}
-			});
-			const prompt = [ctx.system, ctx.examples, `## Evidence\n\n${ctx.evidence}`]
-				.filter(Boolean)
-				.join("\n\n");
-			await llm.agent(prompt, { search_quotes, submit_claims }, () => submitted !== undefined, config.model);
-			if (!submitted) throw new Error("the model did not submit a valid decision within the step budget");
-			({ output, statements } = submitted);
-		}
+		const { output, statements } = await runJudgment(ctx, config.model);
 
 		const ranAt = new Date().toISOString();
-		const entityId = await linkEntity(ctx.subject, ctx.spec, { dependsOn, accept });
+		const entityId = await linkEntity(ctx.subject, ctx.spec, { dependsOn });
 		const name = `${ctx.subject.name} - ${ctx.spec.name} — ${ranAt.slice(0, 19).replace("T", " ")}`;
 		// created, not upserted: the Name carries the instant of the judgment, so a key lookup could
 		// never match, and Decisions accumulate rather than converge (append-only).
 		const d = await store.create(config.models.Decisions, {
 			Name: name,
 			Output: JSON.stringify(output),
-			...(accept ? { "Final output": JSON.stringify(output) } : {}),
 			Reasoning: JSON.stringify(statements),
 			Input: JSON.stringify(ctx.input),
 			Model: llm.modelName(config.model),
@@ -571,7 +584,7 @@ export const createDecider = (deps: DeciderDeps) => {
 			id: d.id,
 			name,
 			output,
-			claims: statements!.map((s) => s.claim),
+			claims: statements.map((s) => s.claim),
 			where: d.url,
 			open: appLink(d.id)
 		};
@@ -584,5 +597,5 @@ export const createDecider = (deps: DeciderDeps) => {
 		return { system, examples, evidence, responseSchema };
 	};
 
-	return { ...reviewer, decide, context, judgmentContext };
+	return { ...reviewer, judge, decide, context, judgmentContext };
 };

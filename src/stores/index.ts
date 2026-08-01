@@ -93,7 +93,10 @@ export const queryAll = async (store: Store, model: string, filter: object): Pro
 // pending stamp and the review app's `record`) read the same map of decision kind → semantics.
 export interface PromptSpec {
 	name: string; // the Prompt row's Name
-	pending: string; // Lead Status while the decision awaits the human gate
+	// Entity Status while the decision awaits the human gate. Absent when the judgment HAS no gate —
+	// a calibrated funnel stage that judges without minting a Decision (`judge`, not `decide`): there
+	// is nothing to park the entity at, and the stage resolves its Status itself.
+	pending?: string;
 	resolve: (output: Record<string, unknown>) => { status: string; advances: boolean };
 }
 

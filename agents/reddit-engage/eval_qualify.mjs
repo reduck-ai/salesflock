@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 // Offline eval of "Reddit Thread Qualification" against EVERY ./*_qualified_threads.yaml (the
 // human-labeled ground truths — one file per subreddit digest; a candidate must win them ALL, or
-// it just overfits the newest set). FAITHFUL to the runtime: evidence from the frozen Notion rows
-// (projectInput → renderEvidence) and the same search_quotes/submit_claims two-tool loop as
-// decide.ts — only the persistence is dropped and the instruction body is swappable.
+// it just overfits the newest set). FAITHFUL to the runtime, and not by resemblance: evidence comes
+// from the frozen Notion rows (projectInput → renderEvidence) and the judging is `runJudgment`
+// ITSELF, the same call `rdt engage` makes — only the instruction body is swappable. (This file
+// used to carry its own copy of that two-tool loop, which meant it could certify a prompt against
+// code that was not the code that runs.)
 //
 //   node agents/reddit-engage/eval_qualify.mjs [candidate.md] [--only <id,id,…>]   (run from salesflock/)
 //   — omit the file to eval the LIVE prompt body (the definitive check: real codec render).
@@ -33,17 +35,14 @@
 
 import "../../dist/src/env.js";
 import { readFileSync, readdirSync } from "node:fs";
-import { parse } from "yaml";
+import { parse, stringify } from "yaml";
 import { getStore } from "../../dist/src/stores/index.js";
 import { compileAuthoring } from "../../dist/src/stores/notion.codec.js";
-import { createReviewer } from "../../dist/src/decide.js";
+import { createReviewer, runJudgment } from "../../dist/src/decide.js";
 import { renderEvidence, fieldSpan } from "../../dist/agents/reddit-engage/evidence.js";
 import { projectInput } from "../../dist/src/project.js";
 import { threadUrl } from "../../dist/src/clients/reddit/index.js";
 import { mapLimit } from "../../dist/src/concurrency.js";
-import * as llm from "../../dist/src/ai/llm.js";
-import { collectQuotes, findQuotes, inRange, quoteKey } from "../../dist/src/anchor.js";
-import { schemaError } from "../../dist/src/output.js";
 import config from "../../dist/agents/reddit-engage/config.js";
 
 const store = getStore(config.destination);
@@ -61,71 +60,33 @@ const system = candidate ? compileAuthoring(readFileSync(candidate, "utf8")) : l
 console.error(`[eval] instructions: ${candidate ?? `live v${live.version} (${live.hash})`}`);
 if (only) console.error(`[eval] --only ${[...only].join(",")}`);
 
-const STATEMENTS = {
-	type: "array",
-	items: {
-		type: "object",
-		required: ["claim", "supporting", "quotes"],
-		properties: {
-			claim: { type: "string" },
-			supporting: { type: "boolean" },
-			quotes: {
-				type: "array",
-				items: { type: "object", required: ["start", "end"], properties: { start: { type: "integer" }, end: { type: "integer" } } }
-			}
-		}
-	}
-};
+// The runtime's own loop, called with the candidate instructions in place of the live body. No
+// `examples` — none exist for this kind (verified), and the runtime would pass the same nothing.
+const judge = (evidence) => runJudgment({ system, evidence, outputSchema: live.outputSchema }, config.model);
 
-// decide.ts's loop, minus the write.
-const judge = async (evidence) => {
-	const responseSchema = {
-		type: "object",
-		required: ["output", "statements"],
-		properties: { output: live.outputSchema, statements: STATEMENTS }
-	};
-	const returned = new Set();
-	let submitted;
-	const search_quotes = llm.jsonTool({
-		description:
-			"Locate verbatim quotes in the Evidence. Pass the exact text you intend to cite; get back, " +
-			"per text, every occurrence as a {start,end} span with its surrounding `before`/`after` " +
-			"context. When a quote occurs more than once, read the context and take the {start,end} of " +
-			"the occurrence that fits your point. An empty match list means re-quote an exact substring.",
-		schema: { type: "object", required: ["texts"], properties: { texts: { type: "array", items: { type: "string" } } } },
-		execute: ({ texts }) =>
-			texts.map((text) => ({
-				text,
-				matches: findQuotes(evidence, text).map((q) => {
-					returned.add(quoteKey(q));
-					return { start: q.start, end: q.end, before: evidence.slice(Math.max(0, q.start - 48), q.start), after: evidence.slice(q.end, q.end + 48) };
-				})
-			}))
-	});
-	const submit_claims = llm.jsonTool({
-		description:
-			"Commit the final judgment: the domain Output plus the claim→proof statements. Every quote " +
-			"{start,end} must be one `search_quotes` returned — search for the text first, then submit that span.",
-		schema: responseSchema,
-		execute: (v) => {
-			const err = schemaError(live.outputSchema, v.output);
-			if (err) return { ok: false, error: `the Output does not satisfy its schema: ${err}` };
-			const bad = collectQuotes(v).find((q) => !inRange(evidence, q) || !returned.has(quoteKey(q)));
-			if (bad) return { ok: false, error: `quote ${quoteKey(bad)} was not returned by search_quotes — search for its text, then submit the span you got back.` };
-			submitted = v;
-			return { ok: true };
-		}
-	});
-	const prompt = [system, `## Evidence\n\n${evidence}`].join("\n\n"); // examples: none exist (verified)
-	await llm.agent(prompt, { search_quotes, submit_claims }, () => submitted !== undefined, config.model);
-	if (!submitted) throw new Error("no valid decision within the step budget");
-	return submitted;
+// The PRE-SCREEN check, and the reason it exists: `engage` reads a thread twice on growing evidence
+// — the post alone, then (only if that survives) the whole page with its comments. The second read
+// is the one this eval scores, but the first one holds a veto nothing else can catch: a thread it
+// drops is never fetched, so the definitive read never happens and the miss leaves no trace. That
+// is eliminating on ABSENCE of evidence, frozen by a monotonic ladder — the exact failure the
+// funnel's invariants forbid.
+//
+// So each hydrated case is judged a second time on its seed with `comments` REMOVED, reproducing
+// what the pre-screen saw. The verdict may legitimately differ (that is the point of fetching);
+// what may never happen is a pre-screen "No" on a thread the truth says to engage. A case with no
+// stored comments has nothing to strip — its two reads are the same read, so it costs no extra call.
+const stripComments = (input) => {
+	const seed = parse(input.Thread ?? "");
+	if (!seed || !Array.isArray(seed.comments)) return null;
+	delete seed.comments;
+	return { ...input, Thread: stringify(seed, { lineWidth: 0 }) };
 };
 
 const DIR = "agents/reddit-engage";
 const files = readdirSync(DIR).filter((f) => f.endsWith("_qualified_threads.yaml"));
 let allExact = 0;
 let allGate = 0;
+let allFatal = 0;
 let total = 0;
 for (const file of files) {
 	const all = parse(readFileSync(`${DIR}/${file}`, "utf8"));
@@ -136,17 +97,35 @@ for (const file of files) {
 		const row = await store.read(config.models.RedditThreads, "Thread URL", u);
 		const input = projectInput(row.fields, live.inputSchema);
 		const v = await judge(renderEvidence(input));
-		return { id: u.match(/comments\/(\w+)/)[1], title: t.title.slice(0, 55), truth: t.tier, got: v.output.tier, claims: v.statements.map((s) => `${s.supporting ? "+" : "-"} ${s.claim}`) };
+		const opOnly = stripComments(input);
+		// No comments stored ⇒ the pre-screen IS this read; don't pay for it twice.
+		const pre = opOnly ? (await judge(renderEvidence(opOnly))).output.tier : v.output.tier;
+		return {
+			id: u.match(/comments\/(\w+)/)[1],
+			title: t.title.slice(0, 55),
+			truth: t.tier,
+			got: v.output.tier,
+			pre,
+			twoPhase: !!opOnly,
+			claims: v.statements.map((s) => `${s.supporting ? "+" : "-"} ${s.claim}`)
+		};
 	});
 	const exact = rows.filter((r) => r.got === r.truth).length;
 	const gate = rows.filter((r) => (r.got === "No") === (r.truth === "No")).length;
+	// A pre-screen drop on a thread the truth says to engage: the thread is never fetched, so the
+	// verdict scored above would never have been reached in production. Louder than a wrong tier.
+	const fatal = rows.filter((r) => r.pre === "No" && r.truth !== "No");
 	allExact += exact;
 	allGate += gate;
+	allFatal += fatal.length;
 	total += rows.length;
-	console.log(`\n=== ${file}: exact ${exact}/${rows.length}, engage-vs-drop ${gate}/${rows.length} ===`);
+	console.log(`\n=== ${file}: exact ${exact}/${rows.length}, engage-vs-drop ${gate}/${rows.length}, pre-screen kills ${fatal.length} ===`);
 	for (const r of rows) {
-		console.log(`${r.got === r.truth ? "  " : "✗ "}${r.id}  truth=${r.truth.padEnd(3)} got=${String(r.got).padEnd(3)} ${r.title}`);
+		const flag = r.pre === "No" && r.truth !== "No" ? "☠ " : r.got === r.truth ? "  " : "✗ ";
+		const phase = r.twoPhase ? `pre=${String(r.pre).padEnd(3)}` : "          ";
+		console.log(`${flag}${r.id}  truth=${r.truth.padEnd(3)} ${phase} got=${String(r.got).padEnd(3)} ${r.title}`);
 		if (r.got !== r.truth) for (const c of r.claims) console.log(`      ${c}`);
 	}
 }
-console.log(`\n=== TOTAL: exact ${allExact}/${total}, engage-vs-drop ${allGate}/${total} ===`);
+console.log(`\n=== TOTAL: exact ${allExact}/${total}, engage-vs-drop ${allGate}/${total}, pre-screen kills ${allFatal} ===`);
+if (allFatal) console.log(`☠ = the post-only read drops a thread the truth engages — it would never reach the second read.`);
