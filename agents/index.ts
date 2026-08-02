@@ -12,11 +12,12 @@
 //   2. One line in AGENTS below (a duplicate kind fails loud at load).
 //   3. package.json "bin" — the runtime binary.
 //   4. app ReviewCard.svelte — import the evidence.css, only if the agent ships one.
-//   5. CRM: the agent's entity table + a dual `config.entity` relation on the shared Decisions,
-//      and one Prompt row per config.prompts spec — the row's Name must equal spec.name VERBATIM
-//      (it is the join key `agentFor` resolves; a mismatch renders generic and never moves the
-//      entity), columns Version / Input schema / Output schema / Proposal / Anchor field, page
-//      body = the authored instructions.
+//   5. agents/<id>/prompts/<key>/ — one folder per config.prompts key: PROMPT.md (the instructions),
+//      input.json, output.json. Shared sections are inlined from the pool (`prompts/<name>.md`) and
+//      kept honest by `sflock prompts sync` (src/prompts.ts).
+//   6. CRM: the agent's entity table + a dual `config.entity` relation on the shared Decisions. Each
+//      Decision carries its `Kind` — spec.name VERBATIM, the join key `agentFor` resolves; a mismatch
+//      renders generic and never moves the entity.
 
 import type { AgentConfig, PromptSpec } from "../src/stores/index.js";
 import type { Quote } from "../src/anchor.js";
@@ -24,12 +25,14 @@ import redditEngage from "./reddit-engage/config.js";
 import * as redditEngageEvidence from "./reddit-engage/evidence.js";
 
 export interface Agent {
+	id: string; // the agents/<id>/ folder — where this agent's prompt files live
 	config: AgentConfig;
 	renderEvidence: (input: Record<string, string>) => string;
 	fieldSpan: (input: Record<string, string>, key: string) => Quote | null;
 }
 
-const agent = (config: AgentConfig, ev: Omit<Agent, "config">): Agent => ({
+const agent = (id: string, config: AgentConfig, ev: Omit<Agent, "config" | "id">): Agent => ({
+	id,
 	config,
 	renderEvidence: ev.renderEvidence,
 	fieldSpan: ev.fieldSpan
@@ -37,22 +40,22 @@ const agent = (config: AgentConfig, ev: Omit<Agent, "config">): Agent => ({
 
 // id (the agents/<id>/ folder) → the agent. The CLI resolves --agent here; the app never uses ids.
 export const AGENTS: Record<string, Agent> = {
-	"reddit-engage": agent(redditEngage, redditEngageEvidence)
+	"reddit-engage": agent("reddit-engage", redditEngage, redditEngageEvidence)
 };
 
 // kind (Prompt Name) → the one agent that declares it, plus the spec itself. Two agents declaring
 // one kind would make a decision's semantics ambiguous — that's a config bug, failed at load.
-const kinds = new Map<string, Agent & { spec: PromptSpec }>();
+const kinds = new Map<string, Agent & { key: string; spec: PromptSpec }>();
 for (const a of Object.values(AGENTS))
-	for (const spec of Object.values(a.config.prompts ?? {})) {
+	for (const [key, spec] of Object.entries(a.config.prompts ?? {})) {
 		if (kinds.has(spec.name)) throw new Error(`duplicate decision kind "${spec.name}" across agents`);
-		kinds.set(spec.name, { ...a, spec });
+		kinds.set(spec.name, { ...a, key, spec });
 	}
 
 // The row's own resolver: a Decision's kind → the agent that judged it. undefined for a kind no
 // agent declares today (a renamed prompt, a decommissioned agent) — the caller keeps such rows
 // readable (generic rendering) but never moves their pipeline.
-export const agentFor = (kind?: string): (Agent & { spec: PromptSpec }) | undefined =>
+export const agentFor = (kind?: string): (Agent & { key: string; spec: PromptSpec }) | undefined =>
 	kind ? kinds.get(kind) : undefined;
 
 // Every REVIEWABLE kind — the review app's per-Prompt filter options, stable whatever is queued.

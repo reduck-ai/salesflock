@@ -19,6 +19,7 @@
 // browser, Notion and LLM work progress concurrently instead of serializing inside one narrow wave.
 
 import { renderError } from "./errors.js";
+import { log } from "./log.js";
 
 export const REDUCK_CONCURRENCY = Number(process.env.REDUCK_CONCURRENCY) || 4;
 export const NOTION_RPS = Number(process.env.NOTION_RPS) || 2.5;
@@ -87,19 +88,31 @@ export const pace = (rps: number) => {
 	});
 };
 
-// mapLimit(items, fn, limit) — map `fn` over `items` with at most `limit` in flight (default the tool
-// fan-out), results in input order. The backend gates beneath it are the hard floors for slow work.
+// mapLimit(items, fn, opts) — map `fn` over `items` with at most `opts.limit` in flight (default the
+// tool fan-out), results in input order. The backend gates beneath it are the hard floors for slow work.
+//
+// `opts.label` turns the fan-out into a PROGRESS line: `m/n <label>` on each completion. It belongs
+// here and nowhere else, because `n` exists here and nowhere else — a backend seam logs the call it
+// is making and cannot know how many more are coming, so "how far along" is only answerable by the
+// thing holding the list. The two seams are complementary, not redundant: this one says how much is
+// left, the write's own start/done line (stores/notion.ts `traced`) says which row is stuck when the
+// counter stops moving. Unlabelled ⇒ silent, so a fan-out that is not worth watching costs nothing.
 export const mapLimit = async <T, R>(
 	items: T[],
 	fn: (item: T, index: number) => Promise<R>,
-	limit = TASK_CONCURRENCY
+	{ limit = TASK_CONCURRENCY, label }: { limit?: number; label?: string } = {}
 ): Promise<R[]> => {
 	const out: R[] = new Array(items.length);
 	let next = 0;
+	let done = 0;
 	const worker = async (): Promise<void> => {
 		while (next < items.length) {
 			const i = next++;
 			out[i] = await fn(items[i], i);
+			// Counted on COMPLETION, never on dispatch: `limit` items are in flight at any moment, so a
+			// counter that ticked when work started would run ahead of what has actually landed — and
+			// with the store as the record, what landed is the only thing the number can honestly mean.
+			if (label) log("batch", `${++done}/${items.length} ${label}`);
 		}
 	};
 	await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
@@ -112,9 +125,14 @@ export const mapLimit = async <T, R>(
 // exit flags that something failed, so a run is never silently "successful" while an item errored.
 export const batch = async <T, R>(
 	items: T[],
-	fn: (item: T) => Promise<R>
+	fn: (item: T) => Promise<R>,
+	label?: string
 ): Promise<(R | { item: T; error: string })[]> => {
-	const results = await mapLimit(items, (item) => fn(item).catch((e: unknown) => ({ item, error: renderError(e) })));
+	const results = await mapLimit(
+		items,
+		(item) => fn(item).catch((e: unknown) => ({ item, error: renderError(e) })),
+		{ label }
+	);
 	if (results.some((r) => r && typeof r === "object" && "error" in r)) process.exitCode = 1;
 	return results;
 };

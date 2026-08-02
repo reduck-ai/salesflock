@@ -1,14 +1,15 @@
-// The calibration surface — agent-agnostic, read-only, and the counterpart of `sflock prompts
-// edit/push`: authoring writes the next version of a judgment's instructions, this says whether it
-// is any better. Two evals, because there are two questions and they must be asked in this order:
+// The calibration surface — agent-agnostic, read-only, and the counterpart of editing a prompt file:
+// a commit changes a judgment's instructions, this says whether it is any better. Two evals, because
+// there are two questions and they must be asked in this order:
 //
 //   evalJudge  — does the SCORER agree with the human?   (its ground truth is the review history)
 //   evalReply  — does the DRAFTER satisfy the scorer?    (needs no labels, so it runs anywhere)
 //
-// Free text cannot be scored by `===`, so the scorer is a Prompt row like everything else (the
-// agent's `judge` spec): versioned, fingerprinted, and authored through the same three verbs as the
-// prompt it grades. A hand-written checker would drift from the instructions it checks; a Prompt
-// cannot, because a run reports which version scored it.
+// Free text cannot be scored by `===`, so the scorer is a prompt like everything else (the agent's
+// `judge` folder): authored, fingerprinted and diffed exactly as the prompt it grades. A hand-written
+// checker would drift from the instructions it checks; a prompt cannot, because a run reports the
+// fingerprint that scored it. Every eval refuses to run at all on a prompt whose shared sections have
+// drifted from the pool (`load`, below) — scoring text nobody committed proves nothing.
 //
 // THE CORPUS IS A QUERY, NOT A FILE. Every review already freezes the whole example — the evidence
 // (`Input`), the model's attempt (`Output`) and the human's word (`Final output`) — so a ground-truth
@@ -34,7 +35,8 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { isSeq, parse, parseDocument, stringify } from "yaml";
 import { AGENTS, type Agent } from "../agents/index.js";
-import { createReviewer, runJudgment, type Contract, type Subject } from "./decide.js";
+import { createReviewer, runJudgment, type Subject } from "./decide.js";
+import { promptDir, syncPrompts, type Contract } from "./prompts.js";
 import { compileAuthoring } from "./stores/notion.codec.js";
 import { feedbackOf } from "./review.js";
 import { projectInput } from "./project.js";
@@ -91,6 +93,16 @@ const load = async (id: string, prompt: string): Promise<Ctx> => {
 	const { config } = agent;
 	const spec = config.prompts?.[prompt];
 	if (!spec) throw new Error(`agent "${id}" declares no prompt "${prompt}"`);
+	// A drift check before anything is scored: a prompt whose inlined section no longer matches its
+	// source is not the prompt anyone thinks they are calibrating, so a green run on it certifies
+	// nothing. Local and cheap, and it is the same function `sflock prompts --check` and the test call.
+	const drifted = (await syncPrompts()).filter((p) => p.drifted.length);
+	if (drifted.length)
+		throw new Error(
+			`refusing to score a drifted prompt: ${drifted
+				.map((p) => `${p.agent}/${p.key} (${p.drifted.join(", ")})`)
+				.join("; ")} — run \`sflock prompts\` to re-inline from the pool.`
+		);
 	return {
 		agent,
 		store: getStore(config.destination),
@@ -106,22 +118,23 @@ const load = async (id: string, prompt: string): Promise<Ctx> => {
 const scorerOf = async ({ agent, reviewer }: Ctx): Promise<Contract> => {
 	const judge = agent.config.prompts?.judge;
 	if (!judge) throw new Error(`this agent declares no "judge" prompt to score with`);
-	return reviewer.showPrompt(judge.name);
+	return reviewer.prompt("judge");
 };
 
-// The instructions under test: a candidate file, or the live body. A candidate may be either
-// projection of a document (`prompts edit` output, markers in, or a flat body) — `compileAuthoring`
-// splices it exactly as `prompts push` would, so what is scored is what publishing would ship.
+// The instructions under test: a candidate file, or the committed one. A candidate is just a copy of
+// a PROMPT.md — shared-section markers in, or already flat — and `compileAuthoring` drops them exactly
+// as the loader does, so what is scored is what committing that file would ship. Which is also why
+// editing a prompt needs no tool at all now: cp, edit, eval, cp back, commit.
 const instructions = async (live: Contract, candidate?: string): Promise<{ system: string; label: string }> =>
 	candidate
 		? { system: compileAuthoring(await readFile(candidate, "utf8")), label: candidate }
-		: { system: live.body, label: `live v${live.version} (${live.hash})` };
+		: { system: live.body, label: `committed (${live.hash})` };
 
-// gtPath(id, prompt) — where a graded prompt's ground truth lives: one YAML per prompt, beside the
-// agent (`reply_ground_truth.yaml`, `qualify_ground_truth.yaml`). Convention, not config — an agent
-// has one file per prompt it grades, so nothing needs declaring. What is INSIDE differs by whether a
-// human ruled on the prompt (a pointer vs a self-contained fixture); where it sits does not.
-const gtPath = (id: string, prompt: string): string => join("agents", id, `${prompt}_ground_truth.yaml`);
+// gtPath(id, prompt) — where a graded prompt's ground truth lives: IN its own folder, beside the
+// instructions it grades and the schemas they are held to. Convention, not config — one judgment is
+// one directory, so nothing needs declaring. What is INSIDE differs by whether a human ruled on the
+// prompt (a pointer vs a self-contained fixture); where it sits does not.
+const gtPath = (id: string, prompt: string): string => join(promptDir(id, prompt), "ground_truth.yaml");
 
 const HEADER = `# Ground truth for the reply judge — one entry per REVIEWED decision, refreshed by
 #   sflock eval cases --agent <agent> --prompt <prompt>
@@ -148,7 +161,7 @@ const harvest = async ({ store, reviewer, agent, kind }: Ctx): Promise<Case[]> =
 	});
 	return rows.flatMap((r) => {
 		const name = String(r.fields.Name ?? r.id);
-		if (reviewer.kindOf(name) !== kind) return [];
+		if (reviewer.kindOf(r.fields) !== kind) return [];
 		const fb = feedbackOf(r.fields);
 		return {
 			id: r.id,
@@ -286,7 +299,7 @@ export const evalReply = async (
 ) => {
 	const ctx = await load(id, prompt);
 	const judge = await scorerOf(ctx);
-	const graded = await ctx.reviewer.showPrompt(ctx.kind);
+	const graded = await ctx.reviewer.prompt(prompt);
 	const { system, label } = await instructions(graded, candidate);
 	// The agent's own funnel module — the ONE thing core cannot derive: how to resolve a subject and
 	// how to name a set of them. Imported dynamically, and only on the path that needs it, so the
@@ -314,7 +327,7 @@ export const evalReply = async (
 		);
 		return { ...s, drafted: drafted.output, ...v };
 	});
-	return { label, judge: `v${judge.version} (${judge.hash})`, rows };
+	return { label, judge: judge.hash, rows };
 };
 
 // ─── evalQualify — the third question, and the one that needs no model to answer ────────────────
@@ -371,7 +384,7 @@ interface Reducible {
 
 export const evalQualify = async (id: string, prompt: string, candidate?: string, only?: string[]) => {
 	const ctx = await load(id, prompt);
-	const graded = await ctx.reviewer.showPrompt(ctx.kind);
+	const graded = await ctx.reviewer.prompt(prompt);
 	const { system, label } = await instructions(graded, candidate);
 	const path = gtPath(id, prompt);
 	const raw = await readFile(path, "utf8").catch(() => {

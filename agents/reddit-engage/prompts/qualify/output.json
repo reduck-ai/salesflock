@@ -1,0 +1,19 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": [
+    "tier"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "tier": {
+      "type": "string",
+      "enum": [
+        "T1",
+        "T2",
+        "No"
+      ],
+      "description": "worth-replying tier; 'T1'/'T2' advance to drafting, 'No' drops the thread"
+    }
+  }
+}

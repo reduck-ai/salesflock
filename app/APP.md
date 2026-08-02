@@ -123,7 +123,8 @@ committing skeleton for the whole round-trip.
 ## The Writer's voice (`/write` autocomplete)
 
 The two things that shape a suggestion are **local files**, not Notion rows and not env — a
-Decision's grounding is stored (frozen `Input`, a Prompt page), but the Writer's is *declared*:
+Decision's grounding is the frozen `Input` plus its prompt file (`server/prompts.ts`, bundled at
+build time), but the Writer's is *declared*:
 
 - **`src/lib/writer/voice.md`** — the system prompt: who is writing and how. The one place.
 - **`src/lib/writer/examples.yaml`** — which of my own pieces are canonical samples: a pointer

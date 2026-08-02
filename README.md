@@ -27,13 +27,15 @@ says what it does. If a fact can drift, it belongs in code, not here.
    moment anyone reviews again — whereas a CALIBRATED judgment mints no Decision and froze nothing:
    its subject's row is live state that a later stage moves under a label written weeks ago, so there
    the fixture must CARRY its evidence, and the eval reads no store. The two are opposite conventions
-   for the same reason: score against whatever cannot change under you. Review is read-only with exactly two
-   exceptions, and both are *prose* exceptions: `sflock docs push` hands a revision of a document
+   for the same reason: score against whatever cannot change under you. Review is read-only with exactly one
+   exception, and it is a *prose* exception: `sflock docs push` hands a revision of a document
    back — through the app's own save sink, so it lands in the editor a human has open rather than
-   behind a reload — and `sflock prompts push` publishes the next version of a judgment's
-   instructions. Text a person will edit is the only thing `sflock` writes; pipeline state stays the
-   runtime's. The per-agent runtime binary is *action* (compose scripts, persist, advance the
-   funnel). Setup describes, the operator CLI inspects, runtime does.
+   behind a reload. Prompt text used to be the other one, because it lived in a CRM row; it is a file
+   now, so editing it is editing a file and the CLI has nothing to say about it — which leaves
+   `sflock prompts` doing the one job files cannot do for themselves (keeping an inlined shared
+   section in step with its source). Pipeline state stays the runtime's. The per-agent runtime binary
+   is *action* (compose scripts, persist, advance the funnel). Setup describes, the operator CLI
+   inspects, runtime does.
 
    The review *app* is the exception, and it is the one place a human's click is itself an act:
    confirming a decision may perform it (`PromptSpec.act` — post the reply, send the message)
@@ -58,22 +60,21 @@ says what it does. If a fact can drift, it belongs in code, not here.
    `describe → TS` (`sflock pull`); sources compile their reduck output schema → TS
    (`sflock bind`). The server validates args and output against the contract on every run.
    The converse holds too: **prose is authored, not compiled.** A judgment's instructions are
-   a document, so they live in the Prompt page's *body* — never a column, which would compile
-   into a type nothing can validate. Columns carry what a machine reads; the body carries what
-   a person writes, and the CRM's own editor is the authoring surface. Prose shared by several
-   Prompts (who we are) is written ONCE on its own page and pulled into each body as a Notion
-   *synced block* — the same "declare it once, both consumers read it" rule the code obeys.
-   Exactly two layers, Pages then Prompts: a section serving a single Prompt has earned no page.
-   Transclusion gives that body **two readers wanting opposite things, so it has two projections**:
-   *inference* compiles it flat (a marker would be chrome in the model's prompt, and those bytes are
-   what a judgment fingerprints), while *authoring* delimits each borrowed region and names the page
-   it comes from — because prose you cannot attribute is prose you cannot safely edit, and editing a
-   shared section in place forks it away from every other Prompt that reads it. Both projections come
-   from ONE traversal, so they can never disagree about what the document says.
+   a document, so a prompt is a FOLDER — `PROMPT.md` beside the `input.json` / `output.json` it is
+   held to, and the `ground_truth.yaml` it is calibrated against. One judgment, one directory,
+   versioned by git: a diff is the review, `git log -S` is the history, and publishing is a commit.
+   Prose shared by several prompts (who we are) is authored ONCE in a flat pool (`prompts/<name>.md`,
+   where the name IS the identity) and **inlined** into each prompt between markers — so the file on
+   disk is the whole prompt, and reading one needs nothing else. That copy is the deliberate trade:
+   a reference cannot drift but is never the whole file, and self-contained is what a prompt must be.
+   So the copy is *generated and checked* rather than trusted — `sflock prompts` re-inlines every
+   region from the pool, `--check` reports instead, and a test asserts the check is empty. Same shape
+   as the vendored skills in anthropics/financial-services, and the same reasoning: where a copy is
+   unavoidable, make it derivable and comparable, never a thing people remember to keep in step.
    The cost of authored-not-compiled is that the text can change under a past judgment — so every
    Decision **pins the fingerprint of the instructions it read**, beside the model that read them.
-   A relation names which prompt; only the fingerprint says which *wording*, and it catches an edit
-   that arrived through a synced page the prompt doesn't even own.
+   `Kind` names which judgment ruled; only the fingerprint says which *wording*, and it covers the
+   instructions and both schemas, so no part of a contract can move unnoticed.
 
 6. **Idempotency by construction.** One generic `upsert`; every persist-tool declares the
    single unique key that makes a re-run converge instead of duplicate. No key, no tool.
@@ -122,6 +123,6 @@ row per thread we chose to engage), both keyed on the same canonical URL. What i
 *derived* from that data, never a rung anyone wrote down: no Tier ⇒ judge it, a good Tier and no
 outreach ⇒ draft it. So a run that dies mid-funnel leaves the state its own data describes, with
 nothing to reconcile. Its identity lives in the CRM, as its Prompt bodies (with the generic
-part — who we are — a synced block from one shared page, per #5). The roster (`$agents`) still
+part — who we are — inlined from the shared pool, per #5). The roster (`$agents`) still
 resolves each Decision's agent per row, because that is what makes adding the next agent a
 registration rather than a refactor (#10).

@@ -193,6 +193,7 @@ export const preScreen = (input: Record<string, string>): Record<string, string>
 };
 
 export const decider = createDecider({
+	id: "reddit-engage",
 	config,
 	store,
 	renderEvidence,
@@ -525,9 +526,14 @@ export const tools = {
 					.filter(({ seed }) => fetchedComments(seed))
 					.map(({ row }) => String(row.fields["Thread URL"]))
 			);
-			const queued = (await mapLimit(threads, (t) => queue(t, subreddit, ranAt, fetched))).filter(
-				(q) => q.queued
-			);
+			// Labelled with the community, because scans of several subreddits interleave: the fetches
+			// finish in seconds and then every one of their write fan-outs runs at once, so an unlabelled
+			// m/n would be several counters sharing one stream and none of them readable.
+			const queued = (
+				await mapLimit(threads, (t) => queue(t, subreddit, ranAt, fetched), {
+					label: `scan r/${subreddit}`
+				})
+			).filter((q) => q.queued);
 			return { subreddit, seen: threads.length, queued };
 		}),
 
@@ -554,7 +560,7 @@ export const tools = {
 		let screened: string | undefined;
 		if (!tier) {
 			// ONE question, asked twice as the evidence grows — not two prompts. The criteria, the
-			// Output schema and the Prompt row are the same both times; all that differs is that the
+			// Output schema and the prompt folder are the same both times; all that differs is that the
 			// second read can see what was said under the post. So there is nothing to keep in sync,
 			// and the guard on the fetch is DATA, not a flag or a rung: a seed that already carries a
 			// comment tree is read once, definitively, which is also what makes a crashed run resumable.

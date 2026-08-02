@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": [
+    "Thread"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "Thread": {
+      "type": "string",
+      "description": "the Reddit thread under consideration: title and the OP's full post"
+    }
+  }
+}

@@ -1,8 +1,14 @@
-// The decision engine — agent-agnostic. Judge a subject against a Prompt row (an LLM two-tool loop)
-// and, when a human will rule on the result, persist ONE Decision, held to the Prompt's Output
-// schema + quote-range contract before the write. Extracted from the linkedin-leads agent so every
-// agent shares one engine: `createDecider` closes over the agent's store, config, and evidence
-// renderers, returning the decision tools (judge/decide/context/list/showDecision).
+// The decision engine — agent-agnostic. Judge a subject against a prompt (an LLM two-tool loop) and,
+// when a human will rule on the result, persist ONE Decision, held to the prompt's Output schema +
+// quote-range contract before the write. Extracted from the linkedin-leads agent so every agent
+// shares one engine: `createDecider` closes over the agent's store, config, and evidence renderers,
+// returning the decision tools (judge/decide/context/list/showDecision).
+//
+// The contract comes from FILES (src/prompts.ts): agents/<id>/prompts/<key>/, versioned by git. So a
+// Decision freezes what governed it in exactly two columns and needs no relation to resolve either —
+// `Kind` (which judgment ruled, and through the roster which agent's semantics and renderer) and
+// `Instructions hash` (which wording). Nothing else about a prompt is worth storing on a row: the
+// rest is in the repo, at that hash.
 //
 // The LLM judges in a two-tool loop — `search_quotes` turns cited text into {start,end} spans
 // (the model never invents offsets; code owns them) and `submit_claims` commits, stopping the
@@ -13,26 +19,12 @@
 
 import { getStore, queryAll } from "./stores/index.js";
 import type { AgentConfig, PromptSpec, Row, Store } from "./stores/index.js";
-import { idOf, pageUrl } from "./stores/notion.js";
-import { blocksOf, segmentsOf } from "./stores/notion.codec.js";
+import { idOf } from "./stores/notion.js";
+import { loadPrompt, type Contract } from "./prompts.js";
 import { reviewOf, feedbackOf, renderFeedback } from "./review.js";
 import * as llm from "./ai/llm.js";
 import { collectQuotes, findQuotes, inRange, quoteKey, type Statement } from "./anchor.js";
 import { schemaError } from "./output.js";
-import { createHash } from "node:crypto";
-
-// fingerprint(contract) — what the Decision pins alongside its Model: WHICH contract the LLM
-// actually ran under. The Prompt relation can't answer that — a page body is mutable in place (and
-// transcludes a shared page), and the schema COLUMNS are just as editable under a pinned relation
-// (measured: a required Output field added mid-batch retroactively invalidated 9 judged rows, with
-// nothing flagging it). So the hash covers the whole contract — body + Input/Output schemas — making
-// "a new version is a new row, never an edit" checkable for every part of it: two Decisions citing
-// one prompt with different hashes were NOT judged alike. Short — this identifies a version, it does
-// not defend against tampering.
-const fingerprint = (instructions: string): string =>
-	createHash("sha256").update(instructions).digest("hex").slice(0, 12);
-const contractOf = (body: string, fields: Record<string, string | number | boolean>): string =>
-	[body, fields["Input schema"] ?? "", fields["Output schema"] ?? ""].join("\n");
 
 // The LLM's response envelope: the domain `output` — its shape declared by the Prompt's Output
 // schema — plus `statements`, the fixed claim→evidence anchoring layer every evidenced judgment
@@ -187,30 +179,20 @@ export interface Subject {
 // (the LLM's decision, the human diff once ruled, and the feedback snapshot). createDecider builds
 // on this and adds the bridge-coupled judging; the agent-agnostic `sflock decisions` CLI uses it directly.
 export interface ReviewerDeps {
+	id: string; // the agents/<id>/ folder — where this agent's prompt files live
 	config: AgentConfig;
 	renderEvidence: (input: Record<string, string>) => string;
 	store?: Store; // defaults to the config's destination store
 }
 
-// A kind's live contract, shaped once by showPrompt: the versioned Prompt row, the authored body,
-// both schemas parsed, and the fingerprint a Decision made now would pin.
-export interface Contract {
-	kind: string;
-	id: string;
-	url: string;
-	version: number;
-	hash: string;
-	inputSchema: Record<string, unknown>;
-	outputSchema: Record<string, unknown>;
-	body: string;
-}
+export type { Contract };
 
 const SCOPE = {
 	pending: { property: "Final output", rich_text: { is_empty: true } },
 	reviewed: { property: "Final output", rich_text: { is_not_empty: true } }
 } as const;
 
-export const createReviewer = ({ config, renderEvidence, store: given }: ReviewerDeps) => {
+export const createReviewer = ({ id: agentId, config, renderEvidence, store: given }: ReviewerDeps) => {
 	const store = given ?? getStore(config.destination);
 
 	// The review app's base URL (the deployed Decisions surface), if configured. Turns a Decision
@@ -219,145 +201,37 @@ export const createReviewer = ({ config, renderEvidence, store: given }: Reviewe
 	const appLink = (id: string): string | undefined =>
 		appBase ? `${appBase}/${id.replace(/-/g, "")}` : undefined;
 
-	// A Decision's kind from its page Name — which Prompt spec it was judged against.
-	const kindOf = (name: string): string | undefined =>
-		Object.values(config.prompts ?? {}).find((s) => name.includes(s.name))?.name;
+	// A Decision's kind — which prompt spec judged it — read off its own `Kind` column. It used to be
+	// parsed out of the page Name (`name.includes(spec.name)`), which is ambiguous by construction:
+	// "Reddit Reply" is a substring of "Reddit Reply Judge". One written string, no parser.
+	const kindOf = (fields: Record<string, string | number | boolean>): string | undefined =>
+		fields.Kind ? String(fields.Kind) : undefined;
 
-	// livePrompt(name) — the Prompt row that governs a kind TODAY. Prompts are append-only versions
-		// sharing a Name, so the live contract is the highest Version. The one resolver: the LLM reads it
-	// to build a decision, and the staleness check below reads it to ask whether a past decision's
-	// instructions still say what they said.
-	const livePrompt = async (name: string): Promise<Row> => {
-		const versions = await store.query(config.models.Prompts, { property: "Name", title: { equals: name } });
-		if (!versions.length) throw new Error(`no prompt "${name}"`);
-		return versions.reduce((a, b) => (Number(b.fields.Version ?? 0) > Number(a.fields.Version ?? 0) ? b : a));
+	// kind (the Prompt Name a Decision carries) → the config key, which IS the prompt's folder name.
+	// The one place the two namings meet: rows speak kinds, files speak keys.
+	const keyOf = (kind: string): string => {
+		const hit = Object.entries(config.prompts ?? {}).find(([k, s]) => s.name === kind || k === kind);
+		if (!hit) throw new Error(`no prompt "${kind}" — declare it in this agent's config.ts`);
+		return hit[0];
 	};
 
-	// showPrompt(kind) — the live contract that governs a kind TODAY, shaped for reading: the
-	// versioned row, the authored body, both schemas parsed (loud — a malformed schema is a broken
-	// contract), and the fingerprint a Decision made now would pin. The read counterpart of
-	// showDecision; `sflock prompts` prints it, and the staleness check compares against its hash.
-	//
-	// Resolved ONCE per reviewer (the `dsCache` idiom of stores/notion.ts, a promise per key so
-	// concurrent callers share one flight). A contract is invariant, so re-reading it per judged item
-	// was README #7's "shared context computed once" broken in the most expensive way available — the
-	// body is a paged, recursive block walk that dwarfs the per-item reads. And it is a CORRECTNESS
-	// fix: an edit landing mid-batch used to split the batch across two contracts (exactly what
-	// `fingerprint` above exists to catch); one reviewer is now one contract, so a run is atomic with
-	// respect to its instructions. Instance-scoped, never module-global: a CLI process is one run,
-	// and a long-lived consumer just makes a fresh reviewer.
-	const contracts = new Map<string, Promise<Contract>>();
-	const showPrompt = (kind: string): Promise<Contract> => {
-		const hit = contracts.get(kind);
-		if (hit) return hit;
-		// A failure is not cached — it would poison the process; fail loud, then let a retry re-read.
-		const flight = resolveContract(kind).catch((e: unknown) => {
-			contracts.delete(kind);
-			throw e;
-		});
-		contracts.set(kind, flight);
-		return flight;
-	};
-	const resolveContract = async (kind: string): Promise<Contract> => {
-		const prompt = await livePrompt(kind);
-		const body = await store.body(prompt.id);
-		const [inputSchema, outputSchema] = (["Input schema", "Output schema"] as const).map((k) => {
-			if (!prompt.fields[k]) throw new Error(`prompt "${kind}" has no ${k}`);
-			try {
-				return JSON.parse(String(prompt.fields[k])) as Record<string, unknown>;
-			} catch (e) {
-				throw new Error(`prompt "${kind}" ${k} is not valid JSON: ${(e as Error).message}`);
-			}
-		});
-		return {
-			kind,
-			id: prompt.id,
-			url: pageUrl(prompt.id),
-			version: Number(prompt.fields.Version ?? 0),
-			hash: fingerprint(contractOf(body, prompt.fields)),
-			inputSchema,
-			outputSchema,
-			body
-		};
-	};
+	// prompt(kind|key) — the contract that governs a kind TODAY: the folder under
+	// agents/<id>/prompts/. Instructions, both schemas, and the fingerprint a Decision made now would
+	// pin, all from files (src/prompts.ts) — no Notion row, no version column, no publish step.
+	const prompt = (kind: string): Promise<Contract> => loadPrompt(agentId, keyOf(kind));
 
-	// editPrompt(kind) — the live contract for AUTHORING rather than for judging: the same document
-	// `showPrompt` returns, but rendered so its seams are visible (every transcluded region delimited
-	// in place and named). The other half of the two-reader rule (src/stores/notion.codec.ts): a judge
-	// must not see transclusion markers, and an author must not be blind to them.
-	const editPrompt = async (kind: string) => {
-		const live = await showPrompt(kind);
-		const doc = await store.authoring(live.id);
-		return { ...live, ...doc };
-	};
+	// instructionsHash(kind) — the fingerprint the contract WOULD get now, so a caller can compare it
+	// to what a Decision pinned. Equal ⇒ that judgment's wording still stands; different ⇒ the files
+	// have moved since, and `git log -S` says who moved them.
+	const instructionsHash = async (kind: string): Promise<string> => (await prompt(kind)).hash;
 
-	// pushPrompt(kind, markdown) — publish the NEXT version of a kind's contract: a new row, never an
-	// edit (README #5 — a Decision pins the fingerprint of the wording it read, so a version is
-	// immutable by construction). The prose is the page's body; the machine half (both schema columns)
-	// is copied as RAW TEXT from the live row rather than re-serialized, so only the wording moves.
-	//
-	// The shared regions are the reason this is a tool and not a recipe. A transcluded section is
-	// authored on its own page and read by every prompt that syncs it, so publishing must put back a
-	// REFERENCE, never the text: paste it as literal prose and this version silently forks — the shared
-	// page keeps being edited, and this prompt stops hearing about it. So each region is verified
-	// against its original and written back as a reference; a region whose text has been changed is
-	// refused, naming the page where it is actually authored.
-	const pushPrompt = async (kind: string, markdown: string) => {
-		const live = await showPrompt(kind);
-		const row = await livePrompt(live.kind); // the RAW schema columns, to copy rather than re-emit
-		const blocks: object[] = [];
-		for (const seg of segmentsOf(markdown)) {
-			if (!seg.shared) {
-				blocks.push(...blocksOf(seg.text));
-				continue;
-			}
-			// The original's own rendering — the same blocks the reference serves, so equal text means
-			// "unchanged". Compared trimmed: the delimiters sit on their own lines, so the region's text
-			// carries the newlines that joined them, not content.
-			const original = await store.body(seg.shared);
-			if (seg.text.trim() !== original.trim()) {
-				const src = (await store.authoring(live.id)).regions.find((r) => r.syncedFrom === seg.shared)?.source;
-				throw new Error(
-					`this candidate changes a SHARED section — it is authored on ${
-						src ? `"${src.title}" (${src.url})` : `block ${seg.shared}`
-					}, and every prompt that syncs it reads the same words. Edit it there and re-run ` +
-						`\`prompts edit\`, or restore the section here; publishing it as this page's own prose ` +
-						`would fork it.`
-				);
-			}
-			blocks.push({
-				object: "block",
-				type: "synced_block",
-				synced_block: { synced_from: { block_id: seg.shared } }
-			});
-		}
-		const version = live.version + 1;
-		const ref = await store.create(
-			config.models.Prompts,
-			{
-				Name: live.kind,
-				Version: version,
-				"Input schema": String(row.fields["Input schema"] ?? ""),
-				"Output schema": String(row.fields["Output schema"] ?? "")
-			},
-			blocks
-		);
-		return { kind: live.kind, version, from: live.version, id: ref.id, url: ref.url };
-	};
-
-	// instructionsHash(kind) — the fingerprint the live contract WOULD get now, so a caller can
-	// compare it to what a Decision pinned. Equal ⇒ that judgment's contract still reads the same;
-	// different ⇒ someone edited the body (or the shared page it syncs) or a schema column in place
-	// instead of adding a version.
-	const instructionsHash = async (kind: string): Promise<string> => (await showPrompt(kind)).hash;
-
-	// prompts() — every decision kind this agent declares, each with its live contract's version and
-	// fingerprint: the index `sflock prompts list` prints (`show` is one kind in full).
+	// prompts() — every decision kind this agent declares, each with the fingerprint of the contract
+	// governing it today, and the folder it is authored in.
 	const prompts = async () =>
 		Promise.all(
 			Object.entries(config.prompts ?? {}).map(async ([key, spec]) => {
-				const { version, hash, url, id } = await showPrompt(spec.name);
-				return { key, kind: spec.name, pending: spec.pending, version, hash, id, url };
+				const { hash, dir } = await loadPrompt(agentId, key);
+				return { key, kind: spec.name, pending: spec.pending, hash, dir };
 			})
 		);
 
@@ -371,7 +245,7 @@ export const createReviewer = ({ config, renderEvidence, store: given }: Reviewe
 		const base = {
 			id,
 			name,
-			kind: kindOf(name),
+			kind: kindOf(fields),
 			output: JSON.parse(String(fields.Output)) as Record<string, unknown>,
 			statements: JSON.parse(String(fields.Reasoning)) as Statement[],
 			evidence: renderEvidence(JSON.parse(String(fields.Input)) as Record<string, string>),
@@ -413,7 +287,7 @@ export const createReviewer = ({ config, renderEvidence, store: given }: Reviewe
 			return {
 				id: r.id,
 				name,
-				kind: kindOf(name),
+				kind: kindOf(r.fields),
 				hasFeedback: fb !== null,
 				overturned: !!fb?.outputChange,
 				...(fb && opts.feedback ? { feedback: renderFeedback(fb) } : {}),
@@ -426,10 +300,8 @@ export const createReviewer = ({ config, renderEvidence, store: given }: Reviewe
 		store,
 		appLink,
 		kindOf,
-		livePrompt,
-		showPrompt,
-		editPrompt,
-		pushPrompt,
+		keyOf,
+		prompt,
 		prompts,
 		instructionsHash,
 		showDecision,
@@ -490,7 +362,7 @@ export const createDecider = (deps: DeciderDeps) => {
 			]
 		});
 		const mine = rows
-			.filter((r) => kindOf(String(r.fields.Name)) === spec.name)
+			.filter((r) => kindOf(r.fields) === spec.name)
 			.slice(0, EXAMPLE_LIMIT + 1);
 		const shown = await Promise.all(mine.map((r) => showDecision(r.id)));
 		return shown.map((s) => {
@@ -510,7 +382,7 @@ export const createDecider = (deps: DeciderDeps) => {
 		return blocks.length ? `## Examples\n\n<examples>\n${blocks.join("\n")}\n</examples>` : "";
 	};
 
-	// The judgment context: the Prompt row's full contract plus the Person's frozen evidence.
+	// The judgment context: the prompt folder's full contract plus the subject's frozen evidence.
 	//
 	// `handle` may be the subject's key OR an already-resolved Subject. A judgment is a pure function
 	// of its context (README #7), so handing the context in is more honest than re-fetching it: a
@@ -522,14 +394,10 @@ export const createDecider = (deps: DeciderDeps) => {
 		const subject = typeof handle === "string" ? await resolveSubject(handle) : handle;
 		const f = subject.fields;
 
-		// The live contract, via the ONE shaping (showPrompt): the instructions are the Prompt PAGE's
-		// BODY — persona and criteria as one authored markdown document, not a column (prose is
-		// written, not compiled) — plus the parsed Input/Output schemas and the fingerprint the
-		// Decision below pins.
-		const prompt = await reviewer.showPrompt(spec.name);
+		// The contract, from the agent's own prompt folder (src/prompts.ts): the instructions as one
+		// authored markdown document, both schemas, and the fingerprint the Decision below pins.
+		const prompt = await reviewer.prompt(key);
 		const { body: system, inputSchema, outputSchema } = prompt;
-		if (!system.trim())
-			throw new Error(`prompt "${spec.name}" has an empty body — the instructions live in the page body`);
 
 		// Project the Person onto the Input schema, then render it for the LLM. The app renders the
 		// same map from the frozen data, so improving `renderEvidence` reflows every Decision.
@@ -575,8 +443,11 @@ export const createDecider = (deps: DeciderDeps) => {
 			Reasoning: JSON.stringify(statements),
 			Input: JSON.stringify(ctx.input),
 			Model: llm.modelName(config.model),
+			// WHICH judgment, and under WHICH wording — the two halves of "what ruled on this row", and
+			// both are now plain columns. `Kind` replaced a relation into a Prompts table that no longer
+			// exists: with the contract in git, the row's only remaining job was to hold this one string.
+			Kind: ctx.spec.name,
 			"Instructions hash": ctx.prompt.hash,
-			Prompt: [ctx.prompt.id],
 			[config.entity]: [entityId],
 			...(dependsOn?.length ? { "Depends on": dependsOn } : {})
 		});

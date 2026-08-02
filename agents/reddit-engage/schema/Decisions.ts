@@ -12,6 +12,7 @@ export interface Decisions {
   "Include as example"?: boolean;
   Input?: string;
   "Instructions hash"?: string;
+  Kind?: "Reddit Thread Qualification" | "Reddit Reply" | "Reddit Reply Judge";
   /**
    * relation → e976116e-fcf0-42d4-bc16-99fa9c801e1c
    */
@@ -23,10 +24,6 @@ export interface Decisions {
   Model?: string;
   Name: string;
   Output?: string;
-  /**
-   * relation → 942c4138-c9db-404c-9ae0-472f8edb0712
-   */
-  Prompt?: string[];
   Reasoning?: string;
   /**
    * relation → ba8786a2-afd6-4b12-8416-df2a85440f58

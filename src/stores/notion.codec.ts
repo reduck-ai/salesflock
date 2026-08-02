@@ -139,57 +139,30 @@ const indent = (s: string): string =>
 		.map((l) => (l ? `  ${l}` : l))
 		.join("\n");
 
-// A page has TWO readers, and they want opposite things of the same tree:
-//
-//   INFERENCE — compile everything, feed the LLM. Seams invisible: a transclusion marker would be
-//     chrome polluting the document, and this flat text is also what a Decision fingerprints, so its
-//     bytes are load-bearing. `bodyOf`.
-//   AUTHORING — improve the prose. Seams VISIBLE and addressable: which region is transcluded and
-//     from where, so an author knows which words are theirs to change. `authoringOf`.
-//
-// Both come from ONE traversal (`walk`), for the reason `fieldSpan` derives from the very sections
-// `renderEvidence` joins: two implementations of the same rendering drift, and here the drift would be
-// silent — an author would edit prose the judge never reads. The authoring projection is deliberately
-// NOT a bare string (it returns `{markdown, regions}`), so it cannot reach a model or a hash by
-// accident; the type refuses.
+// bodyOf — a page's tree as one flat markdown document, which is the only projection a page needs
+// now: the prompts that used to have a second, seam-visible one are files (src/prompts.ts), where the
+// file IS the authoring view. What survives from that design is the MARKER, below, because the local
+// prompts inherited it verbatim.
 //
 // Paging and nesting are decided HERE, not by the caller (this file stays import-free, and the store
 // and the app authenticate differently), so a store read and an app read can never differ. Pages to
-// exhaustion and recurses into children: a body cut at a page boundary is a silently truncated prompt.
-// A synced block needs no resolving — Notion returns the original's blocks from the REFERENCE's own
-// children endpoint — so the recursion already reaches transcluded content; it is only spliced rather
-// than nested (TRANSPARENT, above). The transport is a parameter, which is also the test seam: feed it
-// fake pages, assert the markdown.
+// exhaustion and recurses into children: a body cut at a page boundary is a silently truncated
+// document. A synced block needs no resolving — Notion returns the original's blocks from the
+// REFERENCE's own children endpoint — so the recursion already reaches transcluded content; it is only
+// spliced rather than nested (TRANSPARENT, above). The transport is a parameter, which is also the
+// test seam: feed it fake pages, assert the markdown.
 
-// A transcluded region of a page: the reference block that carries it, and the ORIGINAL block it
-// syncs from — the id `pushPrompt` writes back, and the handle to whichever page authors it.
-export interface SharedRegion {
-	blockId: string;
-	syncedFrom: string;
-}
-
-// The delimiters the authoring projection wraps a transcluded region in. `syncedFrom` is the whole
-// contract: everything after it is a human-facing label, which is why `SHARED` matches the line
-// whatever the label says — a cosmetic hint can never break the round-trip, and only the id is read
-// back. HTML comments because they are invisible in every markdown preview an author might use.
-const openMark = (syncedFrom: string, label?: string): string =>
-	`<!-- shared:${syncedFrom}${label ? ` — authored on ${label}; edit it there, not here` : ""} -->`;
-const closeMark = (syncedFrom: string): string => `<!-- /shared:${syncedFrom} -->`;
-// Group 1 is the closing slash (empty when opening), group 2 the original's id — the only load-bearing
-// part. `[\s\S]*?` swallows the label, so any hint an author sees still parses back to the same region.
-// The MARKER SYNTAX is the contract, never the id's shape: pinning Notion's 32-hex format here would
-// couple the codec to it for no gain, and a marker is a marker whatever it names.
+// The delimiters a SHARED SECTION is wrapped in — the seam between a document and prose it borrows.
+// The NAME (group 2) is the whole contract: everything after it is a human-facing label, which is why
+// this matches the line whatever the label says — a cosmetic hint can never break the round-trip.
+// And the name's SHAPE was never part of it either: these markers were born naming Notion block ids
+// and now name pool files (prompts/<name>.md), with nothing here to change. Group 1 is the closing
+// slash, empty when opening. HTML comments, because they are invisible in every markdown preview.
 export const SHARED = /^<!--\s*(\/?)shared:(\S+?)\s*(?:—[\s\S]*?)?-->$/;
-
-type Walk = {
-	marks?: (syncedFrom: string) => string | undefined; // label resolver ⇒ authoring mode
-	regions?: SharedRegion[];
-};
 
 const walk = async (
 	id: string,
-	page: (blockId: string, cursor?: string) => Promise<BlockPage>,
-	opts: Walk
+	page: (blockId: string, cursor?: string) => Promise<BlockPage>
 ): Promise<string> => {
 	const blocks: NotionBlock[] = [];
 	for (let cursor: string | undefined; ; ) {
@@ -200,17 +173,9 @@ const walk = async (
 	}
 	const parts: { type: string; text: string }[] = [];
 	for (const b of blocks) {
-		const kids = b.has_children ? await walk(b.id, page, opts) : "";
-		// Only a synced block that REFERENCES another one is a seam an author can act on: its text is
-		// authored elsewhere. An original (`synced_from: null`) is authored right here, and a column is
-		// layout — neither is marked, so the markers mean exactly one thing.
-		const syncedFrom = (b.synced_block as { synced_from?: { block_id?: string } | null } | undefined)
-			?.synced_from?.block_id;
-		if (b.type === "synced_block" && syncedFrom) opts.regions?.push({ blockId: b.id, syncedFrom });
+		const kids = b.has_children ? await walk(b.id, page) : "";
 		const text = TRANSPARENT.has(b.type)
-			? opts.marks && syncedFrom
-				? [openMark(syncedFrom, opts.marks(syncedFrom)), kids, closeMark(syncedFrom)].join("\n")
-				: kids
+			? kids
 			: [renderBlock(b), kids && indent(kids)].filter((s) => s.trim()).join("\n");
 		if (text.trim()) parts.push({ type: b.type, text }); // an empty paragraph IS the blank line below
 	}
@@ -220,34 +185,18 @@ const walk = async (
 	);
 };
 
-// bodyOf(id, page) — the INFERENCE projection: a page's content as one flat markdown document, seams
-// erased. What the judge reads and what a Decision's fingerprint covers.
+// bodyOf(id, page) — a page's content as one flat markdown document. What the Writer's editor loads,
+// and what `blocksOf` writes back.
 export const bodyOf = (
 	id: string,
 	page: (blockId: string, cursor?: string) => Promise<BlockPage>
-): Promise<string> => walk(id, page, {});
+): Promise<string> => walk(id, page);
 
-// authoringOf(id, page, label?) — the AUTHORING projection: the same document with every transcluded
-// region delimited in place and attributed, plus the regions themselves. `label(syncedFrom)` supplies
-// the human-facing "authored on <page>" hint; it is cosmetic by construction (see SHARED).
-//
-// The property the design rests on: `compileAuthoring(authoringOf(p).markdown) === bodyOf(p)`. The
-// markers occupy whole lines of their own, so dropping those lines restores the flat text exactly —
-// which is why the delimiters are the ONE declaration of a region's bounds. Nothing carries offsets
-// that could disagree with them.
-export const authoringOf = async (
-	id: string,
-	page: (blockId: string, cursor?: string) => Promise<BlockPage>,
-	label?: (syncedFrom: string) => string | undefined
-): Promise<{ markdown: string; regions: SharedRegion[] }> => {
-	const regions: SharedRegion[] = [];
-	const markdown = await walk(id, page, { marks: label ?? (() => undefined), regions });
-	return { markdown, regions };
-};
-
-// compileAuthoring(markdown) — authoring projection → inference projection: drop the marker lines.
-// The inverse of authoringOf's marking, and the one way a candidate document becomes the text a model
-// will actually read (so an eval judges what a push would publish).
+// compileAuthoring(markdown) — a document with shared sections marked → the text a MODEL should read:
+// drop the marker lines, keep everything else byte for byte. The markers occupy whole lines of their
+// own, which is exactly what makes that true — and is why the delimiters are the ONE declaration of a
+// region's bounds, with nothing carrying offsets that could disagree with them. A prompt file keeps
+// its markers (they are what make it authorable and checkable); the judge never sees one.
 export const compileAuthoring = (markdown: string): string =>
 	markdown
 		.split("\n")

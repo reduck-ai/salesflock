@@ -13,32 +13,14 @@ export interface Row {
 	fields: Record<string, string | number | boolean>;
 }
 
-// Where a transcluded region's prose is really authored — the page to open to change it.
-export interface SharedSource {
-	id: string;
-	url: string;
-	title: string;
-}
-
-// The AUTHORING projection of a page (the twin of `body`, which is the inference one): the same
-// document with every transcluded region delimited in place, plus what each region is and where it
-// lives. Not a bare string, deliberately — so it cannot be handed to a model or a fingerprint by
-// accident. See src/stores/notion.codec.ts for the two-reader rule this realizes.
-export interface AuthoringDoc {
-	markdown: string;
-	regions: { blockId: string; syncedFrom: string; source?: SharedSource }[];
-}
-
 export interface Store {
 	describe(model: string): Promise<Record<string, unknown>>; // JSON Schema of writable props (setup)
 	upsert(model: string, record: object, key: string): Promise<Ref>; // idempotent write, keyed by `key`
 	// Write a NEW row, no lookup — always an addition, never an update. `upsert` is for a row that
 	// CONVERGES (a pipeline entity, keyed so a re-run lands on the same page); `create` is for one that
-	// ACCUMULATES, and two kinds do: a Decision, whose Name carries the instant it was judged, so an
-	// upsert's key lookup is a guaranteed-miss round-trip on every write; and a Prompt version, whose
-	// siblings all share one Name, so upserting on it would overwrite the live contract instead of
-	// adding the next version. `blocks` is the page's initial CONTENT — where authored prose lives.
-	create(model: string, record: object, blocks?: object[]): Promise<Ref>;
+	// ACCUMULATES — a Decision, whose Name carries the instant it was judged, so an upsert's key lookup
+	// is a guaranteed-miss round-trip on every write.
+	create(model: string, record: object): Promise<Ref>;
 	read(model: string, key: string, value: unknown): Promise<Row>; // the one row where key = value
 	query(model: string, filter: object): Promise<Row[]>; // every row matching a store-native filter
 	// ONE page of matches + whether more exist (and the cursor to the next page when it does).
@@ -49,9 +31,6 @@ export interface Store {
 	get(id: string): Promise<Row>; // the row with this id — model-agnostic (an id implies its model)
 	title(model: string, id: string): Promise<string>; // a record's name, by id (the join)
 	body(id: string): Promise<string>; // a page's CONTENT as markdown — where authored prose lives
-	// The SAME content for the other reader: transclusions delimited in place and attributed, so an
-	// author can tell their own prose from prose borrowed elsewhere. `body` is for inference.
-	authoring(id: string): Promise<AuthoringDoc>;
 	comment(id: string, text: string): Promise<void>; // append a comment to a page — the obs trail
 	archive(id: string): Promise<void>; // move a page to trash (recoverable) — how eager work is deleted
 }
@@ -92,7 +71,11 @@ export const queryAll = async (store: Store, model: string, filter: object): Pro
 // the output — so it lives here, declared once, and both consumers (the runtime's `decide`
 // pending stamp and the review app's `record`) read the same map of decision kind → semantics.
 export interface PromptSpec {
-	name: string; // the Prompt row's Name
+	name: string; // the kind — what a Decision's `Kind` carries, and how the roster resolves its agent
+	// The Input field the review app's composer attaches below (unset ⇒ it floats). A declaration
+	// ABOUT the prompt rather than part of its contract, so it lives here beside `pending`/`resolve`/
+	// `act` rather than in the prompt folder — which holds only what a judgment is made of.
+	anchor?: string;
 	// Entity Status while the decision awaits the human gate. Absent when the judgment HAS no gate —
 	// a calibrated funnel stage that judges without minting a Decision (`judge`, not `decide`): there
 	// is nothing to park the entity at, and the stage resolves its Status itself.

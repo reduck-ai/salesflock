@@ -1,0 +1,28 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": [
+    "Tier",
+    "Thread",
+    "reply"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "Tier": {
+      "type": "string",
+      "description": "how well this thread fits what we do, judged upstream: T1 (squarely our pain) or T2 (partial/adjacent fit)"
+    },
+    "Thread": {
+      "type": "string",
+      "description": "the Reddit thread under consideration: title and the OP's full post"
+    },
+    "Subreddit rules": {
+      "type": "string",
+      "description": "the community's own rules, verbatim — what a commenter there may do about links, self-promotion and disclosure. Absent when this subreddit has never been scanned."
+    },
+    "reply": {
+      "type": "string",
+      "description": "the drafted reply under review — the exact text that would be posted"
+    }
+  }
+}

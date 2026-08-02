@@ -7,10 +7,11 @@
 
 import { error } from "@sveltejs/kit";
 import { env } from "$env/dynamic/private";
-import { bodyOf, chunks, plain, relation, type BlockPage, type NotionValue } from "$core/stores/notion.codec";
+import { chunks, plain, relation, type NotionValue } from "$core/stores/notion.codec";
 import { schemaError } from "$core/output";
 import { hasFeedback } from "$core/review";
 import { agentFor } from "$agents/index";
+import { promptFor } from "$lib/server/prompts";
 import type { Filter } from "$lib/filter";
 
 // The wire seam — exported because the Writer's own client (server/writer.ts) speaks to a DIFFERENT
@@ -30,73 +31,20 @@ export interface Decision {
 	title: string;
 	fields: Record<string, string>;
 	deps: string[]; // upstream Decision ids ("Depends on") — the DAG edges
-	prompt?: string; // the Prompt page id — its Output schema governs the editable output
-	promptName?: string; // the Prompt's Name (the row's kind) — the per-Prompt filter + sort key
-	outputSchema?: Record<string, unknown>; // the Prompt's Output JSON Schema (the edit contract)
+	promptName?: string; // the row's KIND — the per-Prompt filter + sort key, and what resolves the rest
+	outputSchema?: Record<string, unknown>; // the prompt's Output JSON Schema (the edit contract)
 	anchorField?: string; // the Input field the composer attaches below (set ⇒ attached; unset ⇒ floating)
-	system?: string; // the Prompt page's BODY — the instructions, grounding the autocomplete as they ground the judge
+	system?: string; // the prompt's instructions — grounding the autocomplete as they ground the judge
 }
 
-// A Prompt page → its Name and Output JSON Schema (the contract the human's output obeys). All
-// optional: a fork's Prompt need not carry them, so each stays fail-soft.
-//
-// Memoized by page id: a Prompt page's content is immutable by id (a new version is a new row), and
-// many Decisions share one prompt — so without this, decision()/decisions() re-fetch the SAME Prompt
-// page once per card. Safe to share process-wide (not user-specific).
-type PromptInfo = {
-	name: string;
-	outputSchema?: Record<string, unknown>;
-	anchorField?: string;
-};
-const promptInfoCache = new Map<string, PromptInfo>();
-const promptInfo = async (id: string): Promise<PromptInfo> => {
-	const cached = promptInfoCache.get(id);
-	if (cached) return cached;
-	const { properties } = await page(id);
-	const name = String(
-		Object.values(properties)
-			.filter((p) => p.type === "title")
-			.map(plain)[0] ?? ""
-	);
-	const schema = plain(properties["Output schema"]);
-	const anchorField = plain(properties["Anchor field"]);
-	const info: PromptInfo = {
-		name,
-		outputSchema: schema ? (JSON.parse(String(schema)) as Record<string, unknown>) : undefined,
-		anchorField: anchorField ? String(anchorField) : undefined
-	};
-	promptInfoCache.set(id, info);
-	return info;
-};
-
-// A Prompt page's BODY — its instructions, the grounding the autocomplete shares with the judge.
-// Its own (memoized) fetch, deliberately apart from promptInfo: only the card path needs it, so the
-// list never pays for a body it won't ground anything with. Paging + rendering are $core's codec.
-//
-// Fail-SOFT, unlike the judge's read of the same body (decide.ts throws on an empty one). The split
-// is the stake: a judgment without instructions is invalid, but here the body only sharpens a ghost-
-// text suggestion — so an unreadable one must never cost the reviewer their card. Surfaced on stderr,
-// never swallowed silently, and the miss is not cached (a transient 5xx retries on the next open).
-const promptBodyCache = new Map<string, string>();
-const promptBody = async (id: string): Promise<string | undefined> => {
-	const cached = promptBodyCache.get(id);
-	if (cached !== undefined) return cached;
-	try {
-		const md = await bodyOf(id, async (blockId, cursor) => {
-			const query = `page_size=100${cursor ? `&start_cursor=${cursor}` : ""}`;
-			const res = await fetch(`${API}/blocks/${blockId}/children?${query}`, { headers });
-			if (!res.ok) throw new Error(`Notion ${res.status}: ${await res.text()}`);
-			return res.json() as Promise<BlockPage>;
-		});
-		promptBodyCache.set(id, md);
-		return md;
-	} catch (e) {
-		console.error(
-			`promptBody: prompt ${id} body unreadable — autocomplete ungrounded: ${(e as Error).message}`
-		);
-		return undefined;
-	}
-};
+// contractOf(kind) — everything a card needs about the judgment that produced it, from the LOCAL
+// prompt tree (server/prompts.ts) plus the roster. This used to be two memoized Notion reads per
+// distinct prompt (its properties, then its body); the contract is a file now, so it is a lookup.
+const contractOf = (kind?: string): Pick<Decision, "outputSchema" | "anchorField" | "system"> => ({
+	outputSchema: promptFor(kind)?.outputSchema,
+	anchorField: agentFor(kind)?.spec.anchor,
+	system: promptFor(kind)?.system
+});
 
 // advanced(id) — has this Decision advanced the pipeline? The ONE reading of a DAG edge: its
 // committed output run through its Prompt's `resolve`. Read by BOTH consumers, so the invariant does
@@ -107,9 +55,9 @@ const promptBody = async (id: string): Promise<string | undefined> => {
 const advanced = async (id: string): Promise<{ advances: boolean; created: string }> => {
 	const { properties, created_time: created } = await page(id);
 	const fo = plain(properties["Final output"]);
-	const promptId = relation(properties.Prompt)[0];
-	if (!fo || !promptId) return { advances: false, created };
-	const spec = agentFor((await promptInfo(promptId)).name)?.spec;
+	const kind = plain(properties.Kind);
+	if (!fo || !kind) return { advances: false, created };
+	const spec = agentFor(String(kind))?.spec;
 	try {
 		return {
 			// No `resolve` ⇒ the prompt moves no pipeline (an offline scorer), so it advances nothing —
@@ -222,6 +170,7 @@ const toDecision = ({
 		if (v.type === "title") title = String(s);
 		else fields[name] = String(s);
 	}
+	const promptName = fields.Kind || undefined;
 	return {
 		id,
 		url,
@@ -229,23 +178,14 @@ const toDecision = ({
 		title,
 		fields,
 		deps: relation(properties["Depends on"]),
-		prompt: relation(properties.Prompt)[0]
+		promptName,
+		...contractOf(promptName)
 	};
 };
 
 // decision(id) — one Decision by id, for a deep link. No gate: a link opens its decision
 // whatever its state (decided or blocked); the DAG gate governs only the queue's ordering.
-export const decision = async (id: string): Promise<Decision> => {
-	const d = toDecision(await page(id));
-	if (d.prompt) {
-		const info = await promptInfo(d.prompt);
-		d.outputSchema = info.outputSchema;
-		d.anchorField = info.anchorField;
-		d.promptName = info.name;
-		d.system = await promptBody(d.prompt);
-	}
-	return d;
-};
+export const decision = async (id: string): Promise<Decision> => toDecision(await page(id));
 
 // The review working set for a Filter, ordered — the ONE query both the list and the deck consume
 // (the list maps it to summary rows, the deck uses it as the prev/next rail). Only `tab` is the
@@ -284,24 +224,9 @@ export const decisions = async (filter: Filter): Promise<Decision[]> => {
 		results.push(...page.results);
 		cursor = page.has_more ? (page.next_cursor ?? undefined) : undefined;
 	} while (cursor);
+	// Each row arrives whole: `toDecision` resolves its contract from the local prompt tree, so the
+	// list no longer fans out a Prompt read per distinct kind before it can render.
 	const rows = results.map(toDecision);
-
-	// The editable output's contract + Name (the kind): each row's Prompt info (deduped).
-	const infos = new Map(
-		await Promise.all(
-			[...new Set(rows.map((r) => r.prompt).filter((p): p is string => !!p))].map(
-				async (id) => [id, await promptInfo(id)] as const
-			)
-		)
-	);
-	for (const r of rows) {
-		const info = r.prompt && infos.get(r.prompt);
-		if (info) {
-			r.outputSchema = info.outputSchema;
-			r.anchorField = info.anchorField;
-			r.promptName = info.name;
-		}
-	}
 
 	// The DAG gate, derived at read time — never stored: a Decision is reviewable only once every
 	// upstream it depends on has *advanced* the pipeline. Only the review tab gates: past rows are a
@@ -421,13 +346,12 @@ export const record = async (
 	// The write runs in three waves — the calls were always independent, only the awaits serialized
 	// them. Wave 1: the decision page (everything below hangs off its properties).
 	const { properties } = await page(pageId);
-	const promptId = relation(properties.Prompt)[0];
-	// Wave 2: the two reads the gates need, in one flight — the prompt's contract and the DAG deps'
-	// state. Every gate below is pure and runs BEFORE any write.
-	const [{ name, outputSchema }, deps] = await Promise.all([
-		promptId ? promptInfo(promptId) : { name: "", outputSchema: undefined },
-		Promise.all(relation(properties["Depends on"]).map(advanced))
-	]);
+	// The row's KIND is a column on the row itself, so the contract is in hand with no read at all —
+	// leaving one thing for wave 2: the DAG deps' state. Every gate below is pure and runs BEFORE any
+	// write.
+	const name = String(plain(properties.Kind) ?? "");
+	const { outputSchema } = contractOf(name);
+	const deps = await Promise.all(relation(properties["Depends on"]).map(advanced));
 	// The same gate the LLM passes: a committed output that violates its Prompt schema is refused
 	// (defense behind the client's own check) — nothing is persisted.
 	const invalid = outputSchema && schemaError(outputSchema, committedOutput);
@@ -481,7 +405,7 @@ export const record = async (
 	if (move === undefined || owner === undefined) {
 		await decided;
 		return void console.error(
-			`record: ${owner ? `kind "${name}" declares no \`resolve\` — it moves no pipeline and should not be reviewable` : `no agent declares kind "${name}"`} (prompt ${promptId}) — Final output written, entity not moved`
+			`record: ${owner ? `kind "${name}" declares no \`resolve\` — it moves no pipeline and should not be reviewable` : `no agent declares kind "${name}"`} — Final output written, entity not moved`
 		);
 	}
 	// A rejecting gate deletes the eager work it held back — each unreviewed dependent is archived.

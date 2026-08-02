@@ -13,10 +13,10 @@
 // logged-in person sees the whole personal CRM). Same contract as hubspot.ts.
 
 import { spawn } from "node:child_process";
-import { authoringOf, bodyOf, chunks, plain, type BlockPage, type NotionValue } from "./notion.codec.js";
+import { bodyOf, chunks, plain, type BlockPage, type NotionValue } from "./notion.codec.js";
 import { pace, NOTION_RPS } from "../concurrency.js";
 import { log } from "../log.js";
-import type { AuthoringDoc, Ref, Row, SharedSource, Store } from "./index.js";
+import type { Ref, Row, Store } from "./index.js";
 
 // Spawn `ntn` capturing stderr (the verbose trace rides there) — only the token harvest uses it.
 // stdin is closed ("ignore"): `ntn api` reads a request body from stdin, so an open empty pipe
@@ -54,8 +54,9 @@ const resolveToken = async (): Promise<string> => {
 // 429 (rate_limited) and 529 (service_overload) are the same event and handled identically, per
 // Notion's docs. Nothing is capped at "a ban too long to wait for": parking costs nothing now that
 // callers park together, so the run waits it out and keeps its work — bounded only by MAX_WAIT so
-// it can never hang forever. The park is the sole diagnostic here (an exceptional, slow event → the
-// one log seam); normal calls stay quiet, so stdout stays the answer.
+// it can never hang forever. The park is one of this backend's two diagnostics (an exceptional, slow
+// event); the other is `traced` below, on the writes. READS stay quiet — a read answers in one
+// round-trip and its caller is blocked on it, so a line per read would be noise, not a trace.
 const API = "https://api.notion.com/v1";
 const slot = pace(NOTION_RPS);
 const MAX_WAIT = Number(process.env.NOTION_MAX_WAIT) || 900_000; // total parked time one call accepts
@@ -70,10 +71,31 @@ const reasonOf = (text: string): string => {
 		return "rate_limited";
 	}
 };
-const api = async <T>(path: string, init?: { method?: string; body?: object }): Promise<T> => {
+// What one logical operation actually cost, kept apart because the two halves mean opposite things.
+// A `write` figure says how heavy this row was; a `queued` figure says how busy the pacer was, which
+// is a fact about the RUN and not about the row — one call's queue time is every other caller's work.
+// Fusing them (the elapsed a stopwatch around the whole call gives) reads as "this record took 8
+// seconds", which would be wrong in the way that matters: it invites shrinking the record when the
+// only thing that would help is making fewer requests or letting fewer of them race.
+export interface Meter {
+	calls: number; // paced requests spent, retries included
+	work: number; // ms actually spent in flight to Notion
+	queued: number; // ms parked waiting for the pacer's clock (and for any 429 hold)
+}
+const api = async <T>(
+	path: string,
+	init?: { method?: string; body?: object },
+	meter?: Meter
+): Promise<T> => {
 	for (let attempt = 0, waited = 0; ; attempt++) {
-		const res = await slot(async () =>
-			fetch(API + path, {
+		// Both instants come from HERE, not from inside `pace`: the pacer's job is to decide when a
+		// request may start, and the gap between "we asked" and "it started" IS the wait — so measuring
+		// it at the seam that spans both needs no extra bookkeeping in the clock itself.
+		const asked = Date.now();
+		let started = 0;
+		const res = await slot(async () => {
+			started = Date.now();
+			return fetch(API + path, {
 				method: init?.method ?? (init?.body ? "POST" : "GET"),
 				headers: {
 					Authorization: `Bearer ${await token()}`,
@@ -81,8 +103,13 @@ const api = async <T>(path: string, init?: { method?: string; body?: object }): 
 					"Content-Type": "application/json"
 				},
 				body: init?.body ? JSON.stringify(init.body) : undefined
-			})
-		);
+			});
+		});
+		if (meter) {
+			meter.calls++;
+			meter.queued += started - asked;
+			meter.work += Date.now() - started;
+		}
 		if (res.ok) return (await res.json()) as T;
 		const text = await res.text();
 		if (res.status !== 429 && res.status !== 529)
@@ -123,36 +150,54 @@ interface NotionProp {
 // user-pasted handle (an id, a Notion URL, an app URL) to a page.
 export const idOf = (s: string): string => s.match(/[0-9a-f]{32}/i)?.[0] ?? s;
 
+// memo(cache, key, load) — one FLIGHT per key, not one value per key, and that difference is the
+// whole point: these caches serve a fan-out, so what has to be deduped is the request in the air,
+// not the answer once it lands. Caching the value means every caller that starts before the first
+// one returns misses, and they all fetch — a stampede exactly as wide as TASK_CONCURRENCY, paid on
+// every process against a rate-limited backend. (Measured, once the write trace made it visible: a
+// scan's first rows each spent 3–4 paced requests where the steady state is 2.) Storing the promise
+// makes the second caller wait on the first's request instead of issuing its own.
+//
+// A rejection is never cached — it would poison the process — so the entry is dropped and a retry
+// re-reads. The same idiom, for the same reason, as `loadPrompt`'s contract cache in src/prompts.ts.
+//
+// One honest consequence for the trace: only the caller that opens the flight is charged for it,
+// since the others spend no request. `calls` is what I asked Notion for, not what I waited on.
+const memo = <K, V>(cache: Map<K, Promise<V>>, key: K, load: () => Promise<V>): Promise<V> => {
+	const hit = cache.get(key);
+	if (hit) return hit;
+	const flight = load().catch((e: unknown) => {
+		cache.delete(key);
+		throw e;
+	});
+	cache.set(key, flight);
+	return flight;
+};
+
 // Resolve a model handle (database id / data-source id / URL) to a data source id.
 // `GET /databases/{id}` lists a DATABASE's data source(s); given a value that is already
 // a data source id it 404s, so a failed lookup means "use it directly".
 // Memoized: a model→dsId mapping is stable for the life of a (short-lived) CLI process.
-const dsIdCache = new Map<string, string>();
-const resolveDsId = async (model: string): Promise<string> => {
-	const cached = dsIdCache.get(model);
-	if (cached) return cached;
-	const id = idOf(model);
-	const db = await api<{ data_sources?: { id: string }[] }>(`/databases/${id}`).catch(() => null);
-	const ids = db?.data_sources?.map((d) => d.id) ?? [];
-	if (ids.length > 1)
-		throw new Error(
-			`"${model}" is a database with ${ids.length} data sources — pass one of: ${ids.join(", ")}`
+const dsIdCache = new Map<string, Promise<string>>();
+const resolveDsId = (model: string, meter?: Meter): Promise<string> =>
+	memo(dsIdCache, model, async () => {
+		const id = idOf(model);
+		const db = await api<{ data_sources?: { id: string }[] }>(`/databases/${id}`, undefined, meter).catch(
+			() => null
 		);
-	const dsId = ids[0] ?? id;
-	dsIdCache.set(model, dsId);
-	return dsId;
-};
+		const ids = db?.data_sources?.map((d) => d.id) ?? [];
+		if (ids.length > 1)
+			throw new Error(
+				`"${model}" is a database with ${ids.length} data sources — pass one of: ${ids.join(", ")}`
+			);
+		return ids[0] ?? id;
+	});
 
 // A data source's schema (its property map) — also stable per process, so fetch it once per id;
 // the cache removes the repeated schema fetch every locate/describe made.
-const dsCache = new Map<string, DataSource>();
-const loadDs = async (dsId: string): Promise<DataSource> => {
-	const hit = dsCache.get(dsId);
-	if (hit) return hit;
-	const ds = await api<DataSource>(`/data_sources/${dsId}`);
-	dsCache.set(dsId, ds);
-	return ds;
-};
+const dsCache = new Map<string, Promise<DataSource>>();
+const loadDs = (dsId: string, meter?: Meter): Promise<DataSource> =>
+	memo(dsCache, dsId, () => api<DataSource>(`/data_sources/${dsId}`, undefined, meter));
 
 const optionNames = (o?: { options: { name: string }[] }): string[] =>
 	(o?.options ?? []).map((x) => x.name);
@@ -235,14 +280,17 @@ export const pageUrl = (id: string): string => `https://www.notion.so/${id.repla
 const locate = async (
 	model: string,
 	keyProp: string,
-	value: unknown
+	value: unknown,
+	meter?: Meter
 ): Promise<{
 	dsId: string;
 	ds: DataSource;
 	page?: { id: string; properties: Record<string, NotionValue> };
 }> => {
-	const dsId = await resolveDsId(model);
-	const ds = await loadDs(dsId);
+	// Metered too, though both are memoized: the first write of a run genuinely pays for them, and a
+	// count that quietly excluded the schema fetches would be the same half-truth the elapsed was.
+	const dsId = await resolveDsId(model, meter);
+	const ds = await loadDs(dsId, meter);
 	const key = ds.properties[keyProp];
 	if (!key) throw new Error(`notion: no key property "${keyProp}" on "${model}"`);
 	// A relation is keyed by "contains this one id" (Notion has no relation `equals`); every other
@@ -254,7 +302,8 @@ const locate = async (
 			: { [key.type]: { equals: value } };
 	const { results } = await api<{ results: { id: string; properties: Record<string, NotionValue> }[] }>(
 		`/data_sources/${dsId}/query`,
-		{ body: { filter: { property: keyProp, ...clause }, page_size: 1 } }
+		{ body: { filter: { property: keyProp, ...clause }, page_size: 1 } },
+		meter
 	);
 	return { dsId, ds, page: results[0] };
 };
@@ -275,39 +324,84 @@ const propertiesOf = (
 	return properties;
 };
 
-// create(model, record, blocks?) — one POST, no lookup: the write for a row whose identity is unique
-// by construction (an append-only Decision, a new Prompt version). Two calls where upsert costs
-// three, and the intent is in the name rather than in a key that can never match. `blocks` is the
-// page's initial CONTENT, so a row whose prose IS the record (a Prompt) is born whole rather than
-// created empty and then filled.
-export const create = async (model: string, record: object, blocks?: object[]): Promise<Ref> => {
-	const dsId = await resolveDsId(model);
-	const ds = await loadDs(dsId);
-	const { id } = await api<{ id: string }>("/pages", {
-		body: {
-			parent: { type: "data_source_id", data_source_id: dsId },
-			properties: propertiesOf(ds, model, record as Record<string, unknown>),
-			...(blocks?.length ? { children: blocks } : {})
-		}
-	});
-	return { id, url: pageUrl(id), created: true };
+// traced(op, label, write) — the WRITE seam's emission, and the same convention the reduck runner
+// already obeys (src/clients/reduck.ts): a start line BEFORE the work, a done line with the elapsed
+// after. So a stalled write is a dangling start with no done, and the phase reports itself as it
+// happens rather than at the end — which is the whole point, because the answer only reaches stdout
+// when the process exits, and a backgrounded run is read through this line or not at all.
+//
+// It lives HERE, in the backend, and not in the caller that happened to need it: the reduck client
+// logs its own I/O, so a store that stayed silent was the one gap in an otherwise complete trace —
+// for every agent and every stage at once, not just the one being debugged. (Measured, and this is
+// what it costs: a 413-thread scan spent 16s in the browser, all of it logged, and ~7 minutes in
+// these upserts, none of it — a run indistinguishable from a hung one for its whole duration.)
+//
+// The label self-tags each pair (model + the row's key), so concurrent writes stay attributable
+// across interleaved output; the outcome says which of the two things an upsert did.
+//
+// The done line reports the cost SPLIT (see `Meter`), because the single elapsed it used to print
+// was true and misleading at once: it read 8s per row, of which ~800ms was Notion and the rest was
+// this call waiting its turn on a 2.5 rps clock shared with 8 concurrent siblings. Read as a per-row
+// cost it points at the row; read as `2 calls, 786ms, queued 6.4s` it points where the time really
+// is — at the request COUNT and the fan-out width, which are the only two things that would change it.
+const ms = (n: number): string => (n < 1000 ? `${n}ms` : `${(n / 1000).toFixed(1)}s`);
+const traced = async (op: string, label: string, write: (meter: Meter) => Promise<Ref>): Promise<Ref> => {
+	log("notion", `${op} ${label} …`);
+	const meter: Meter = { calls: 0, work: 0, queued: 0 };
+	const ref = await write(meter);
+	log(
+		"notion",
+		`${op} ${label} → ${ref.created ? "created" : "updated"} ` +
+			`(${meter.calls} calls, ${ms(meter.work)}, queued ${ms(meter.queued)})`
+	);
+	return ref;
 };
 
-export const upsert = async (model: string, record: object, keyProp: string): Promise<Ref> => {
+// The model is a bare uuid, which says nothing at a glance and is 36 characters of it; its first
+// segment is enough to tell one table's writes from another's in a mixed trace, and the key is what
+// actually identifies the row.
+const labelOf = (model: string, key: unknown): string =>
+	`${idOf(model).slice(0, 8)} ${key == null || key === "" ? "(no key)" : String(key)}`;
+
+// create(model, record) — one POST, no lookup: the write for a row whose identity is unique by
+// construction (an append-only Decision). Two calls where upsert costs three, and the intent is in
+// the name rather than in a key that can never match.
+// A created row has no key to name it by — its identity is the page that is about to exist — so the
+// trace uses the Name it is being born with, which is what a reader would recognize anyway.
+export const create = (model: string, record: object): Promise<Ref> =>
+	traced("create", labelOf(model, (record as Record<string, unknown>).Name), async (meter) => {
+		const dsId = await resolveDsId(model, meter);
+		const ds = await loadDs(dsId, meter);
+		const { id } = await api<{ id: string }>(
+			"/pages",
+			{
+				body: {
+					parent: { type: "data_source_id", data_source_id: dsId },
+					properties: propertiesOf(ds, model, record as Record<string, unknown>)
+				}
+			},
+			meter
+		);
+		return { id, url: pageUrl(id), created: true };
+	});
+
+export const upsert = (model: string, record: object, keyProp: string): Promise<Ref> => {
 	const fields = record as Record<string, unknown>;
-	const { dsId, ds, page } = await locate(model, keyProp, fields[keyProp]);
-	const properties = propertiesOf(ds, model, fields);
-	let id: string;
-	let created: boolean;
-	if (page) {
-		await api(`/pages/${page.id}`, { method: "PATCH", body: { properties } });
-		({ id, created } = { id: page.id, created: false });
-	} else {
-		const body = { parent: { type: "data_source_id", data_source_id: dsId }, properties };
-		({ id } = await api<{ id: string }>("/pages", { body }));
-		created = true;
-	}
-	return { id, url: pageUrl(id), created };
+	return traced("upsert", labelOf(model, fields[keyProp]), async (meter) => {
+		const { dsId, ds, page } = await locate(model, keyProp, fields[keyProp], meter);
+		const properties = propertiesOf(ds, model, fields);
+		let id: string;
+		let created: boolean;
+		if (page) {
+			await api(`/pages/${page.id}`, { method: "PATCH", body: { properties } }, meter);
+			({ id, created } = { id: page.id, created: false });
+		} else {
+			const body = { parent: { type: "data_source_id", data_source_id: dsId }, properties };
+			({ id } = await api<{ id: string }>("/pages", { body }, meter));
+			created = true;
+		}
+		return { id, url: pageUrl(id), created };
+	});
 };
 
 // A page → a Row: its id plus every property flattened to a plain scalar (relations and other
@@ -410,48 +504,6 @@ const blockPage = (blockId: string, cursor?: string): Promise<BlockPage> =>
 
 export const body = (id: string): Promise<string> => bodyOf(idOf(id), blockPage);
 
-// authoring(id) — `body`'s twin for the OTHER reader of the same page. `body` compiles the document
-// for inference (transclusions spliced flat, because a marker would be chrome in the model's prompt,
-// and those bytes are what a Decision fingerprints). This renders it for AUTHORING: every transcluded
-// region delimited where it sits, and named — so whoever edits the prose knows which words are this
-// page's own and which are borrowed, and where the borrowed ones actually live.
-//
-// One shallow read first, because a label has to be in hand while the markers are being written and
-// resolving a source needs the network. Only top-level regions are resolved: `segmentsOf` refuses to
-// publish a nested one anyway, so a label for one would be a promise the write side can't keep.
-export const authoring = async (id: string): Promise<AuthoringDoc> => {
-	const pageId = idOf(id);
-	const top = await blockPage(pageId);
-	const froms = [
-		...new Set(
-			top.results.flatMap((b) => {
-				const from = (b.synced_block as { synced_from?: { block_id?: string } | null } | undefined)
-					?.synced_from?.block_id;
-				return b.type === "synced_block" && from ? [from] : [];
-			})
-		)
-	];
-	// A synced ORIGINAL lives on some page; that page is what an author opens. Resolving it per region
-	// (not per reference) means a section reused twice reports one source.
-	const sources = new Map<string, SharedSource>(
-		await Promise.all(
-			froms.map(async (from) => {
-				const block = await api<{ parent?: { page_id?: string } }>(`/blocks/${from}`);
-				const host = block.parent?.page_id ?? from;
-				return [
-					from,
-					{ id: host, url: pageUrl(host), title: (await title("", host).catch(() => "")) || "(untitled)" }
-				] as const;
-			})
-		)
-	);
-	const { markdown, regions } = await authoringOf(pageId, blockPage, (from) => {
-		const s = sources.get(from);
-		return s && `"${s.title}" ${s.url}`;
-	});
-	return { markdown, regions: regions.map((r) => ({ ...r, source: sources.get(r.syncedFrom) })) };
-};
-
 // describe(model) — a JSON Schema of the model's writable properties. The data source
 // id rides in `$id` so a writer can recover it; `title` names the dump file. Properties
 // are sorted by name so the file is stable and `git diff` reads as a changelog.
@@ -490,7 +542,6 @@ export const notion: Store = {
 	get,
 	title,
 	body,
-	authoring,
 	comment,
 	archive
 };

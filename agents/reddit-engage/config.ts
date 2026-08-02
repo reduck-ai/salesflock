@@ -1,3 +1,7 @@
+// The three prompts this file names live in `prompts/<key>/` beside it — PROMPT.md plus its two
+// schemas, versioned by git. `name` is the kind a Decision carries; everything else here is what the
+// pipeline does with an output, which is the half a prompt folder deliberately does not hold.
+//
 // reddit-engage — subreddit-driven Reddit engagement:
 //   scan the watched subreddits' new threads → qualify (LLM, title + post; a judgment, NOT a
 //   Decision — nobody reviews it, so its whole record is the thread's Tier and a comment on the
@@ -113,6 +117,9 @@ export const SUBREDDITS: Record<string, string> = {
 
 	openclaw: `This community publishes no rules.`,
 
+	playwright: `- **No Advertising** — No advertising.
+- **No "low quality" posts** — Do not take a picture of a stack trace. Include the stack trace as text.`,
+
 	webscraping: `- **Open Discussions** — Ensure discussions remain public to benefit the entire community
 - **Self-Promotions** — Refer to the wiki for detailed guidelines on promoting services or products
 - **Commercial Products** — Refrain from referring to commercial products or services, including proxy vendors and products with free tiers`,
@@ -176,8 +183,7 @@ export default {
 	models: {
 		RedditThreads: "287eec98-859f-4a64-a50d-75da2e965488",
 		RedditBacklog: "ba8786a2-afd6-4b12-8416-df2a85440f58",
-		Decisions: "eddcfaaf-e6f1-4cea-a112-2b9d98426eb4",
-		Prompts: "942c4138-c9db-404c-9ae0-472f8edb0712"
+		Decisions: "eddcfaaf-e6f1-4cea-a112-2b9d98426eb4"
 	},
 	// The Backlog, not the Thread: a Decision binds to the OUTREACH it advances, and the thread is
 	// merely what that outreach is about. A thread we have never engaged has no row here at all.

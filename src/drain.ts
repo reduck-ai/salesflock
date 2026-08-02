@@ -21,6 +21,11 @@ export const drain = async <R>(
 		const fresh = rows.filter((r) => !seen.has(r.id));
 		if (!fresh.length) return out; // empty, or only rows this run already attempted
 		fresh.forEach((r) => seen.add(r.id));
-		out.push(...(await batch(fresh, run)));
+		// Labelled, so a drain reports m/n as it goes: this loop is the other place a run spends minutes
+		// with nothing to show for it. The n is the PAGE, not the backlog — the whole point of draining
+		// is that the total is not known in advance (rows leave the filter as they are processed, and
+		// new ones can arrive while it runs), so a page is the largest honest denominator. The
+		// backlog-wide count is what `--dry-run` is for.
+		out.push(...(await batch(fresh, run, "drain")));
 	}
 };

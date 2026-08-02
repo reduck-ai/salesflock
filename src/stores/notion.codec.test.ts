@@ -12,7 +12,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-	authoringOf,
 	bodyOf,
 	compileAuthoring,
 	segmentsOf,
@@ -164,93 +163,57 @@ test("an empty page is an empty document, not an error", async () => {
 	assert.equal(await bodyOf("root", page), "");
 });
 
-// --- the AUTHORING projection -------------------------------------------------------------------
-// The second reader of the same tree. Its whole contract is one property — stripping the markers
-// returns the inference projection byte for byte — so every case below asserts the round-trip, not
-// just the marked-up text: that is what lets an author edit a candidate and an eval judge exactly
-// what a push will publish.
+// --- shared-section markers ----------------------------------------------------------------------
+// These used to serve Notion synced blocks; they now serve the local prompt tree (src/prompts.ts),
+// where a marker names a POOL FILE instead of a block id. The syntax was always the contract and the
+// id's shape never was, so nothing here changed but what the names mean. Two functions, one document:
+// `segmentsOf` says where a shared region begins and ends (the check and the re-inline read it), and
+// `compileAuthoring` drops the markers to give the model the prose alone.
 
-const REF_TREE = {
-	root: [
-		b("head", "heading_2", { rich_text: [rt("Who we are")] }),
-		b("ref", "synced_block", { synced_from: { type: "block_id", block_id: "original" } }, true),
-		b("icp", "heading_2", { rich_text: [rt("ICP")] })
-	],
-	ref: [para("p1", "Reduck makes it trivial."), para("p2", "Reduck already helps vertical leaders.")]
-};
+const MARKED =
+	"## Who we are\n\n" +
+	"<!-- shared:company -->\n" +
+	"Reduck makes it trivial.\n\nReduck already helps vertical leaders.\n" +
+	"<!-- /shared:company -->\n\n## ICP";
 
-test("authoringOf delimits a synced REFERENCE and reports it as a region", async () => {
-	const { page } = transport(REF_TREE);
-	const { markdown, regions } = await authoringOf("root", page, () => '"Company — Reduck"');
-	assert.deepEqual(regions, [{ blockId: "ref", syncedFrom: "original" }]);
+test("compileAuthoring drops the marker lines and nothing else", () => {
 	assert.equal(
-		markdown,
-		"## Who we are\n\n" +
-			'<!-- shared:original — authored on "Company — Reduck"; edit it there, not here -->\n' +
-			"Reduck makes it trivial.\n\nReduck already helps vertical leaders.\n" +
-			"<!-- /shared:original -->\n\n## ICP"
+		compileAuthoring(MARKED),
+		"## Who we are\n\nReduck makes it trivial.\n\nReduck already helps vertical leaders.\n\n## ICP"
 	);
 });
 
-test("stripping the markers returns the inference projection, byte for byte", async () => {
-	const { page } = transport(REF_TREE);
-	const { markdown } = await authoringOf("root", page, () => '"Company — Reduck"');
-	assert.equal(compileAuthoring(markdown), await bodyOf("root", page));
-});
-
-test("the label is cosmetic — any hint round-trips and still names the same region", async () => {
-	const { page } = transport(REF_TREE);
-	const flat = await bodyOf("root", page);
-	for (const label of [undefined, () => undefined, () => "anything at all -- with punctuation!"]) {
-		const { markdown } = await authoringOf("root", page, label as never);
-		assert.equal(compileAuthoring(markdown), flat);
-		assert.deepEqual(
-			segmentsOf(markdown).map((s) => s.shared ?? "own"),
-			["own", "original", "own"]
-		);
-	}
-});
-
-test("a synced ORIGINAL is authored HERE, so it is never marked", async () => {
-	const { page } = transport({
-		root: [para("intro", "You qualify leads."), b("sync", "synced_block", { synced_from: null }, true)],
-		sync: [para("p", "Reduck makes it trivial.")]
-	});
-	const { markdown, regions } = await authoringOf("root", page, () => "x");
-	assert.deepEqual(regions, []);
-	assert.equal(markdown, await bodyOf("root", page));
-});
-
-test("segmentsOf splits the document at its seams, own prose and shared regions in order", async () => {
-	const { page } = transport(REF_TREE);
-	const { markdown } = await authoringOf("root", page);
-	assert.deepEqual(segmentsOf(markdown), [
+test("segmentsOf splits the document at its seams, own prose and shared regions in order", () => {
+	assert.deepEqual(segmentsOf(MARKED), [
 		{ text: "## Who we are\n" },
-		{ shared: "original", text: "Reduck makes it trivial.\n\nReduck already helps vertical leaders." },
+		{ shared: "company", text: "Reduck makes it trivial.\n\nReduck already helps vertical leaders." },
 		{ text: "\n## ICP" }
 	]);
 });
 
-test("a nested region round-trips for reading but refuses to publish", async () => {
-	// TRANSPARENT keeps a synced block inside a list at ONE level of indent, so its markers indent too.
-	// Reading is fine (compileAuthoring trims before matching); writing it back would have to rebuild the
-	// nesting, so segmentsOf refuses rather than hoist shared prose out of the block that framed it.
-	const { page } = transport({
-		root: [bullet("outer", "Context:", true)],
-		outer: [b("ref", "synced_block", { synced_from: { type: "block_id", block_id: "o" } }, true)],
-		ref: [para("p", "Reduck makes it trivial.")]
-	});
-	const { markdown } = await authoringOf("root", page, () => "shared page");
-	assert.equal(compileAuthoring(markdown), await bodyOf("root", page));
-	assert.throws(() => segmentsOf(markdown), /nested \(indented\)/);
+test("the label after the name is cosmetic — a marker still names the same region", () => {
+	const hinted = MARKED.replace(
+		"<!-- shared:company -->",
+		'<!-- shared:company — authored on "prompts/company.md"; edit it there, not here -->'
+	);
+	assert.equal(compileAuthoring(hinted), compileAuthoring(MARKED));
+	assert.deepEqual(segmentsOf(hinted), segmentsOf(MARKED));
 });
 
-test("segmentsOf is loud on mis-delimited documents, never a silent fork", async () => {
-	const id = "3a84d7b7884c81f2a93ffe75f6dbc910";
-	assert.throws(() => segmentsOf(`<!-- shared:${id} -->\nprose`), /never closed/);
-	assert.throws(() => segmentsOf(`<!-- /shared:${id} -->`), /never opened/);
+test("a nested region reads fine but refuses to publish", () => {
+	// An indented marker means the region sits inside another block. Reading is fine (compileAuthoring
+	// trims before matching); re-inlining it would have to rebuild the nesting around it, so segmentsOf
+	// refuses rather than hoist shared prose out of the block that framed it.
+	const nested = "- Context:\n  <!-- shared:company -->\n  Reduck makes it trivial.\n  <!-- /shared:company -->";
+	assert.equal(compileAuthoring(nested), "- Context:\n  Reduck makes it trivial.");
+	assert.throws(() => segmentsOf(nested), /nested \(indented\)/);
+});
+
+test("segmentsOf is loud on mis-delimited documents, never a silent fork", () => {
+	assert.throws(() => segmentsOf(`<!-- shared:company -->\nprose`), /never closed/);
+	assert.throws(() => segmentsOf(`<!-- /shared:company -->`), /never opened/);
 	assert.throws(
-		() => segmentsOf(`<!-- shared:${id} -->\nprose\n<!-- /shared:${id.replace(/^3/, "4")} -->`),
+		() => segmentsOf(`<!-- shared:company -->\nprose\n<!-- /shared:reddit-context -->`),
 		/mismatched markers/
 	);
 });
