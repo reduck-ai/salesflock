@@ -124,7 +124,12 @@ export const seedOf = (row: Row): Seed | null => {
 // is "we looked, nobody replied" (judged, done), an absent key is "we never looked" (not judged at
 // all). Read length instead and every quiet thread is re-fetched forever, and worse, a verdict made
 // on a genuinely empty tree becomes indistinguishable from one made on no evidence.
-const hasCommentTree = (row: Row): boolean => Array.isArray(seedOf(row)?.comments);
+//
+// Stated on the SEED, because two callers ask it and only one of them holds a Row: the funnel's
+// second read (`engage`, which has the row) and `scan`, which has already parsed the seeds of a
+// whole subreddit. One predicate, so the two can never disagree about what "we looked" means.
+export const fetchedComments = (seed: Seed | null): boolean => Array.isArray(seed?.comments);
+const hasCommentTree = (row: Row): boolean => fetchedComments(seedOf(row));
 
 const tierOf = (v: Verdict): string => String((v.output as { tier?: unknown }).tier ?? "");
 const resolveSubject = async (url: string): Promise<Subject> =>
@@ -169,6 +174,23 @@ const linkEntity = async (
 // the subreddit rules, projects the Input, renders the evidence and builds the few-shot block with
 // the case under test excluded. An eval that re-derives any of that is measuring a copy of the code
 // that runs, not the code that runs. Read-only: only `decide` writes, and the eval never calls it.
+// preScreen(input) — the evidence the FIRST of `engage`'s two reads saw: the same projected Input
+// with the comment tree taken out. The eval's seam (src/eval.ts), and the only agent-specific thing
+// a label-graded eval needs, because core cannot know which field a later stage adds.
+//
+// It exists because the pre-screen holds a veto nothing else can catch: a thread it drops is never
+// fetched, so the deciding read never happens and the miss leaves no trace. The verdict may
+// legitimately differ between the two reads — that is why the page is fetched at all — but a
+// pre-screen 'No' on a thread the truth engages is eliminating on the ABSENCE of evidence, frozen
+// forever by a monotonic funnel. null when there is nothing to strip: the two reads are then the
+// same read, so the eval spends nothing.
+export const preScreen = (input: Record<string, string>): Record<string, string> | null => {
+	const seed = parse(input.Thread ?? "") as Seed | null;
+	if (!fetchedComments(seed)) return null;
+	const { comments: _comments, ...post } = seed as Seed;
+	return { ...input, Thread: stringify(post, { lineWidth: 0 }) };
+};
+
 export const decider = createDecider({
 	config,
 	store,
@@ -306,10 +328,21 @@ const select = async (opts: Select): Promise<{ row: Row; seed: Seed | null }[]> 
 // avoid regressing it; the read was a round-trip per scanned thread, and the guard leaked anyway on
 // any status outside the ladder.) Score and comment count are refreshed while we are here: they
 // moved since the last scan, and they are the two numbers the card shows.
+//
+// `fetched` is the ONE thing it must not overwrite, and it is the exception that proves the upsert
+// is pure: the listing carries no comments, so writing the seed over a thread whose PAGE was already
+// read erases the tree `refresh` paid a browser run for — and `hasCommentTree` then reports "we
+// never looked" about a thread we did look at, which is exactly the two negatives fusing. Measured:
+// three threads decided on 2026-08-01 were re-scanned at 04:41 the next morning and lost the comment
+// evidence their verdicts rest on. So the caller hands in which URLs already hold a tree and the
+// seed write is skipped for those; every other column still refreshes, because those the listing
+// genuinely knows better. The lookup is one store query per SUBREDDIT (see `scan`), never the
+// per-thread round-trip this function was written to avoid.
 export const queue = async (
 	t: Threads["threads"][number],
 	subreddit: string,
-	ranAt: string
+	ranAt: string,
+	fetched: ReadonlySet<string> = new Set()
 ): Promise<{ url: string; queued: boolean; reason?: string; thread?: string }> => {
 	const u = threadUrl(t.url);
 	if (OWNER && t.author?.toLowerCase() === OWNER.toLowerCase())
@@ -329,7 +362,11 @@ export const queue = async (
 		// itself evidence: evidence is the snapshot a Decision freezes, and this is the live state the
 		// snapshot is taken OF. The flat columns stay for the Notion table view. Link/image posts have
 		// no text — title-only card.
-		Thread: stringify(
+		//
+		// Omitted entirely (not written as undefined) for a thread whose page has been read: an upsert
+		// writes only the fields it is handed, so leaving it out is how a re-scan leaves the richer seed
+		// exactly as `refresh` wrote it.
+		...(fetched.has(u) ? {} : { Thread: stringify(
 			{
 				subreddit,
 				url: u,
@@ -347,7 +384,7 @@ export const queue = async (
 				op_text: t.body ?? undefined
 			},
 			{ lineWidth: 0 }
-		),
+		) }),
 		"Scanned at": ranAt
 	};
 	const r = await writeThread(u, row);
@@ -430,8 +467,20 @@ export const tools = {
 	scan: async (since = "48h", subreddits: readonly string[] = Object.keys(SUBREDDITS)) =>
 		mapLimit([...subreddits], async (subreddit) => {
 			const ranAt = new Date().toISOString();
-			const { threads } = await getSubredditThreads(subreddit, since, DEVICES.read);
-			const queued = (await mapLimit(threads, (t) => queue(t, subreddit, ranAt))).filter(
+			// The listing and what we already hold, fetched together — a browser run and a store query
+			// on different backends, so they overlap rather than queue. `fetched` is the one thing the
+			// listing must not overwrite (see `queue`): the threads whose PAGE has been read, whose seed
+			// therefore carries a comment tree the listing cannot reproduce. One query per subreddit.
+			const [{ threads }, stored] = await Promise.all([
+				getSubredditThreads(subreddit, since, DEVICES.read),
+				select({ subreddit: [subreddit] })
+			]);
+			const fetched = new Set(
+				stored
+					.filter(({ seed }) => fetchedComments(seed))
+					.map(({ row }) => String(row.fields["Thread URL"]))
+			);
+			const queued = (await mapLimit(threads, (t) => queue(t, subreddit, ranAt, fetched))).filter(
 				(q) => q.queued
 			);
 			return { subreddit, seen: threads.length, queued };

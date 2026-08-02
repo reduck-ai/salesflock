@@ -16,12 +16,18 @@ says what it does. If a fact can drift, it belongs in code, not here.
    contracts, and `sflock docs` — the Writer's documents, which belong to no agent at all; over
    `createReviewer` or the Store seam, no entity bridge) and *calibrates* (`sflock eval`).
    Calibration is the counterpart of authoring: publishing the next version of a judgment's
-   instructions is worth nothing unless something says it is better, and for a judgment whose output
-   is PROSE nothing can — no `===`, no schema. So the scorer is itself a Prompt, authored and
-   versioned like the one it grades, and a run reports which version of it ruled. Its ground truth is
-   the review history and is never written down: a review already freezes the evidence, the model's
-   attempt and the human's word, so the corpus is a QUERY — a checked-in copy would be a second
-   record of rows the CRM already owns, stale the moment anyone reviews again. Review is read-only with exactly two
+   instructions is worth nothing unless something says it is better. **How it is graded follows from
+   the Output, and where its corpus lives follows from whether a human ruled on it** — two questions
+   about the judgment, not two preferences. An Output that is PROSE cannot be checked by `===` or by
+   a schema, so the scorer is itself a Prompt, authored and versioned like the one it grades, and a
+   run reports which version of it ruled; an Output that is CHECKABLE needs no scorer at all, because
+   the label a person recorded IS the answer. And a REVIEWED judgment froze its evidence in a
+   Decision, so its ground truth is the review history and is never written down — the corpus is a
+   QUERY, since a checked-in copy would be a second record of rows the CRM already owns, stale the
+   moment anyone reviews again — whereas a CALIBRATED judgment mints no Decision and froze nothing:
+   its subject's row is live state that a later stage moves under a label written weeks ago, so there
+   the fixture must CARRY its evidence, and the eval reads no store. The two are opposite conventions
+   for the same reason: score against whatever cannot change under you. Review is read-only with exactly two
    exceptions, and both are *prose* exceptions: `sflock docs push` hands a revision of a document
    back — through the app's own save sink, so it lands in the editor a human has open rather than
    behind a reload — and `sflock prompts push` publishes the next version of a judgment's

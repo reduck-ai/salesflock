@@ -21,6 +21,9 @@
 //                                       committed must pass, the draft you overturned must fail
 //   sflock eval reply --agent <id> [candidate.md] [--tier T1 --limit n]   does the DRAFTER satisfy
 //                                       the scorer — over the reviewed corpus, or any threads at all
+//   sflock eval qualify --agent <id> [candidate.md] [--only ids]   does the judgment match your LABEL
+//                                       — no scorer (the Output is an enum), no store read (each case
+//                                       carries its own evidence): the cheap one, run it on every edit
 //   sflock docs list                    the Writer's documents (agent-agnostic — one shared table)
 //   sflock docs show <doc>              one document, its body as markdown
 //   sflock docs push <doc> [file]       a new version of one document — saved AND applied live in the
@@ -35,11 +38,14 @@
 // the app's own save sink, so a revision reaches the open editor. sflock holds no per-store semantics.
 //
 // eval is the CALIBRATION half of `prompts edit/push` — authoring writes the next version of a
-// judgment's instructions, eval says whether it is better. Grading free text needs a model, so the
-// scorer is itself a Prompt (the agent's `judge` spec), improved through the same three verbs as the
-// prompt it grades. Its ground truth is the review history — a query, never a file: every review
-// already froze the evidence, the model's attempt and the human's word, so a checked-in corpus would
-// be a second copy of rows the CRM owns (src/eval.ts).
+// judgment's instructions, eval says whether it is better. HOW a judgment is graded follows from its
+// Output. Free text needs a model, so the scorer is itself a Prompt (the agent's `judge` spec),
+// improved through the same three verbs as the prompt it grades; an enum needs nothing but the label
+// you recorded, which is `qualify`. And WHERE the corpus lives follows from whether a human reviewed
+// it: a reviewed prompt's ground truth is the review history (a query — every review already froze
+// the evidence, the attempt and the human's word, so a copy would be a second record of rows the CRM
+// owns), while a calibrated prompt froze nothing, so its cases carry their own evidence and the run
+// never reads the store at all (src/eval.ts).
 //
 // Review is read-only with TWO exceptions, and both are prose exceptions (README #2): `docs push`
 // hands back a document, and `prompts push` a new version of a judgment's instructions. Text a person
@@ -57,7 +63,7 @@ import { bind } from "./scripts.js";
 import { renderError } from "./errors.js";
 import { STORES } from "./stores/index.js";
 import { createReviewer } from "./decide.js";
-import { pullCases, evalJudge, evalReply } from "./eval.js";
+import { pullCases, evalJudge, evalReply, evalQualify } from "./eval.js";
 import * as writer from "./docs.js";
 import { renderFeedback } from "./review.js";
 import { AGENTS, type Agent } from "../agents/index.js";
@@ -328,6 +334,45 @@ evaluate
 				if (r.mine) console.log(`      yours:   ${JSON.stringify(r.mine).slice(0, 160)}`);
 			}
 		}
+	});
+
+// qualify — the third question, and the only one with no model in the scoring loop: does the
+// judgment produce the LABEL you recorded? For a prompt whose Output is an enum the ground truth IS
+// the answer, so there is nothing for a scorer to rule on. Its corpus is a self-contained file
+// (each case carries its own evidence), so this runs offline and reproducibly — cheap enough for
+// every edit, which is what a filter that nobody reviews needs.
+evaluate
+	.command("qualify")
+	.argument("[candidate]", `markdown from \`prompts edit <prompt>\`; omit to score the LIVE body`)
+	.description("Does the judgment match your label? Each case in the ground truth carries its own evidence and the Output you recorded — no scorer, no store read. Reports exact agreement, agreement on the GATE (does it advance, per the prompt's own `resolve`), and pre-screen kills.")
+	.requiredOption("--agent <id>", "agent under agents/ whose prompt is being graded")
+	.option("--prompt <key>", "the graded prompt's key in config.prompts", "qualify")
+	.option("--only <ids...>", "grade only the cases whose key contains one of these — tune one case without paying for the set")
+	.action(async (candidate: string | undefined, f: { agent: string; prompt: string; only?: string[] }) => {
+		const { label, path, skipped, rows } = await evalQualify(f.agent, f.prompt, candidate, f.only);
+		const scored = rows.filter((r) => !("error" in r) || !r.error);
+		const tally = (p: (r: (typeof rows)[number]) => boolean) => rows.filter(p).length;
+		if (skipped) console.error(`${skipped} case(s) skipped by the ground truth`);
+		console.error(`[eval] ${f.prompt} ${label} — ${path}`);
+		for (const r of rows) {
+			if ("error" in r && r.error) {
+				console.log(`! ${r.f.key}\n      ${r.error}`);
+				continue;
+			}
+			// ☠ before ✗: a pre-screen kill is the worse failure, because in production the read this
+			// row was scored on would never have happened at all.
+			const flag = r.killed ? "☠ " : r.exact ? "  " : "✗ ";
+			const id = r.f.key.match(/comments\/(\w+)/)?.[1] ?? r.f.key;
+			const phase = r.twoPhase ? `pre=${JSON.stringify(r.pre).slice(0, 18).padEnd(18)}` : " ".repeat(18);
+			console.log(
+				`${flag}${id}  want=${JSON.stringify(r.f.expect).padEnd(16)} ${phase} got=${JSON.stringify(r.got).padEnd(16)} ${r.f.note?.split("\n")[0].slice(0, 50) ?? ""}`
+			);
+			if (!r.exact) for (const c of r.claims ?? []) console.log(`      ${c}`);
+		}
+		const unscored = rows.length - scored.length;
+		console.log(
+			`\n=== ${f.prompt}: exact ${tally((r) => !!r.exact)}/${rows.length}, gate ${tally((r) => r.gate !== false)}/${rows.length}, pre-screen kills ${tally((r) => !!r.killed)}${unscored ? `, ${unscored} unscoreable` : ""} ===`
+		);
 	});
 
 program.parseAsync().catch((e: unknown) => {
