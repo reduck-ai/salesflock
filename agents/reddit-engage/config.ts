@@ -49,6 +49,8 @@ export const SUBREDDITS: Record<string, string> = {
 - **Limit self promotion** — Self promotion is fine, but if your posts are all self promotion (including promotion of your projects/products), you will be banned. A good ratio is one out of ten posts/comments.
 - **No Low Effort Posts** — If your post provides no context, or it is simply meant to drive people off the site and somewhere else, it will be removed.`,
 
+	aiautomations: `This community publishes no rules.`,
+
 	automation: `- **Be nice to one another.** — Breach of our be nice rule. Please take a minute to read the reddiquette. https://www.reddithelp.com/hc/en-us/articles/205926439
 - **Blogspam & Self Promotion** — You are allowed to post blogs and self promotional material provided it is not clearly spam and offers something to the sub. Please consider the spam rules on reddit when posting and make sure you follow the 9:1 rule. https://www.reddit.com/wiki/selfpromotion
 - **No referral/affiliate-links.** — We're not here to generate money for you. This will be an immediate ban, no questions asked. Part of this rule will include blocking URL shorteners.`,
@@ -74,6 +76,18 @@ export const SUBREDDITS: Record<string, string> = {
 - **No 'Dev Research' posts** — Posts seeking "pain points," "biggest challenges", app validation ideas, beta testers, app reviews, or feedback on app/software ideas are not allowed
 - **No AI or Suspected AI Slop** — Obvious or suspected AI content is not welcome here. Violations from lower-karma accounts with little contribution history in this sub may result in a ban. This will be at the sole discretion of the group moderators.`,
 
+	hermesagent: `- **Respect others and be civil** — No harassment, hate speech, or toxic behavior. Treat all contributors and members with kindness. We have a mix of advanced developers and first-time local LLM users. Gatekeeping, elitism, or toxic behavior will result in a ban. Attack the problem, not the person.
+- **No Spam, Soliciting, or Unapproved Selling** — No spam, soliciting, or unapproved selling — paid API access, closed-source wrappers, crypto, unrelated AI services. Sharing free open-source Hermes tools/skills is encouraged. Clickbait with generic advice applicable to any AI tool (no Hermes-specific detail, no code/screenshots/real workflow) is spam regardless of formatting.
+- **The 90/10 Self-Promotion Guideline** — The 90/10 self-promo guideline — 1 showcase/promo post requires 9 prior community contributions. Posts framed as help/troubleshooting that recommend the author's own project/service count toward the 10% limit even if flaired differently. Repeat offenders face temporary ban. A compliant Contributor Footer under Rule 12 is permitted and does not, by itself, violate the 90/10 guideline.
+- **Technical Help Requires Context** — Technical help requires context — include OS and version, Python version if applicable, GPU/hardware specs, local model setup (Ollama/oMLX), full error with stack trace, and what troubleshooting was already attempted before asking. "It won't install help!" is unintentional spam.
+- **Keep It Relevant to Hermes Agent** — Posts must be directly related to Hermes Agent, its ecosystem, models that run well with it, or direct comparisons (e.g., Hermes vs. OpenClaw). General "AI news" or off-topic tech discussions will be removed.
+- **Context Required in Posts & Reports** — Don’t post random screenshots, photos, or reposts without explanation. Add relevant details, findings, or discussion points.
+- **Keep Politics to a Minimum** — r/hermesagent is a tech-focused community. Political discussion is welcome when it directly impacts the Hermes Agent ecosystem (e.g., AI regulation, open-source policy, provider bans affecting users). General political posts, geopolitical debates, or tangential chain-reaction threads (e.g., company partnerships with other companies linked to a country or cause) should be kept minimal or flaired as discussion. The focus here is the tool, not the world stage.
+- **Cross-Post Limit** — Same or nearly identical title/content to 3+ subs within 24 hours = auto-remove. Identical copy/paste across subs is removal regardless of count — adapt each post for that community.
+- **New Account Post Approval** — Accounts created within the last 30 days with fewer than 50 total karma across Reddit must have all posts approvedby mods before they appear. Established accounts (30+ days, 50+ karma) may post freely.
+- **Constructive Discussion** — Comments should add value — ask questions, share experience, or offer solutions. Vague complaints, one-liner dismissals, and dramatic takeaways without specifics are fair game for removal. Posts must state what troubleshooting steps were attempted and documentation consulted before asking the community. First-time offenders get an automod reply pointing to docs; repeat bad-faith posts removed.
+- **Moderator Discretion** — These rules serve as a guide to maintain subreddit quality. Posts or comments may be removed at moderator discretion if they violate the spirit of these rules, harm community experience, or fall into gray areas not explicitly covered. Moderators reserve the right to act in the best interest of the community beyond what is written here.`,
+
 	inventorymanagement: `- **Do not post promotional content** — Do not link to your YouTube, Twitter, FB, or other pages. The sub exists to help others, not to help you get likes or subs. Keep all conversation pertaining to the post here so that everyone may benefit from the conversation.
 - **Soliciting, Self-Promotion, or Direct Soliciting via DM** — The purpose of making a submission or comment is to engage in a public discussion with the community. It is not to request a PM/DM from someone. Do not post a notice that you DMed someone. You are more than welcome to engage privately with one another, but it is up to you to take the initiative directly.
 - **Do not link to sites or blogs within your post** — Do not post a link to a service / blog / video / or website.
@@ -98,6 +112,10 @@ export const SUBREDDITS: Record<string, string> = {
 - **Keep it civil** — Be respectful. No personal attacks, harassment, or hostile behavior.`,
 
 	openclaw: `This community publishes no rules.`,
+
+	webscraping: `- **Open Discussions** — Ensure discussions remain public to benefit the entire community
+- **Self-Promotions** — Refer to the wiki for detailed guidelines on promoting services or products
+- **Commercial Products** — Refrain from referring to commercial products or services, including proxy vendors and products with free tiers`,
 
 	woocommerce: `- **Absolutely no promotional material in posts** — POSTS — Promotional posts are NEVER ALLOWED. This includes advertisements, self-promotion, or any content intended to market or sell a product, service, or website. Affiliate, referral, or monetized links are never allowed. COMMENTS — Recommendations, references, and links are ALLOWED when they directly help answer the original post. However, overly promotional comments may be removed at our discretion. Affiliate, referral, or monetized links are never allowed.
 - **No off-topic posts** — This subreddit is focused on WooCommerce, its features, integrations, and best practices. Please ensure that all POSTS and COMMENTS are related to WooCommerce. Off-topic content, including posts about unrelated platforms or general ecommerce topics, may be removed to keep the community focused and helpful. Discussions about WooCommerce and how it compares to other platforms are permitted and encouraged, as long as WooCommerce remains the focus.
