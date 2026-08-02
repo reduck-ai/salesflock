@@ -11,7 +11,8 @@
 //            alone (cheap, drops most threads with no fetch), then — only for a survivor — the
 //            thread's own page via `refresh`, because an OP volunteers under their post what the
 //            post never says ("I'm a broke student"). → if it still advances, a reply draft (the one
-//            Decision) opens a Reddit Backlog row at "Pending approval". No args ⇒ drain everything owed.
+//            Decision) opens a Reddit Backlog row at "Pending approval". The thread filters name WHICH
+//            threads; no args ⇒ everything owed. `pending` describes that same set without draining it.
 //   [human gate] → confirming a draft POSTS it (config.ts `reply.act`) and lands the outreach at
 //            "Waiting for OP". Approving and posting are one act, so there is no state between them.
 //
@@ -200,41 +201,16 @@ export const decider = createDecider({
 	linkEntity
 });
 
-// WHAT IS OWED — the drain's worklist, and it is pure DATA about the thread rather than a rung
-// someone remembered to write: the Tier is what qualification produced, the Backlog relation is what
-// drafting produced. That is what makes it self-healing — a run that dies between the two leaves the
-// thread in exactly the state its own data describes, and the next pass picks it up with nothing to
-// reconcile.
-//
-// ONE filter, not one per stage, because nothing reads it but the drain: what is owed is the
-// machine's queue, never a human's. A person's worklist is the Decisions table (the engine's, read
-// through `sflock decisions`) and, in this agent's own business terms, the Backlog at "Pending
-// approval". Neither is a fact about a thread, so no thread filter offers it — `threads` is the
-// corpus, and asking it "what should I do?" was asking the wrong table.
-//
-// Flat by necessity: Notion caps a filter at TWO levels of nesting, and the previous shape
-// (`{or:[…,{and:[{or:[…]},…]}]}`) was three deep, so the drain over everything owed 400'd on every
-// run — measured against the live table. `and → or → leaf` is two, and it says the same thing.
-//
-// It reads as one sentence: not judged out, and no outreach yet. The second half is why the stages
-// need no separate rules — a thread that HAS an outreach owes nothing, because whatever work it was
-// due already produced a draft and a human is holding it.
-const UNJUDGED = { property: "Tier", select: { is_empty: true } };
-const tierIs = (t: string) => ({ property: "Tier", select: { equals: t } });
-const PENDING = {
-	and: [
-		{ or: [UNJUDGED, tierIs("T1"), tierIs("T2")] },
-		{ property: "Backlog", relation: { is_empty: true } }
-	]
-};
-
-// WHICH threads — the one filter vocabulary, spoken by both projections (`threads get`, `threads
-// dump`), so reading them and saving them can never disagree about the set they describe.
+// WHICH threads — the one filter vocabulary, spoken by every command that names a set of them:
+// the two projections that READ one (`threads get`, `threads dump`) and the one that WORKS on one
+// (`engage`, which narrows it further to what still owes work). So reading a set, saving it and
+// judging it can never disagree about which threads were meant.
 //
 // It selects THREADS, and a thread's own facts are all it offers: which one, which community, how it
 // was judged, when it was posted. Neither what is still OWED on it nor where an OUTREACH stands is
-// among them — the first is the drain's business (PENDING above), the second the Backlog's, and both
-// would be asking this table about something it does not carry.
+// among them — the first is the drain's business (`pendingFilterOf` below, which is these clauses
+// plus its own), the second the Backlog's, and both would be asking this table about something it
+// does not carry.
 // How you name a SET, in the words both tables share — because both key on the canonical Thread URL,
 // so either can be asked about the same threads. Each vocabulary below is this plus its own table's
 // columns, which is exactly the real difference between them.
@@ -278,14 +254,62 @@ const newest = <T>(rows: T[], key: (t: T) => string, limit?: number): T[] => {
 	return limit ? all.slice(0, limit) : all;
 };
 
-// filterOf(opts) — the thread vocabulary compiled to a store filter: the shared identity clauses
-// plus this table's own two columns, each ANDed on, so no option ever widens the set.
-const filterOf = (opts: Select): object => ({
-	and: [
-		...identityClauses(opts),
-		...(opts.tier ? [{ property: "Tier", select: { equals: opts.tier } }] : []),
-		...(opts.since ? [{ property: "Created", date: { on_or_after: sinceIso(opts.since) } }] : [])
-	]
+// The Tier leaves, written once: `tierIs` answers both the vocabulary's own --tier and the OWED
+// clause below, so "judged T1" cannot come to mean two things depending on who is asking.
+const UNJUDGED = { property: "Tier", select: { is_empty: true } };
+const tierIs = (t: string) => ({ property: "Tier", select: { equals: t } });
+
+// threadClauses(opts) — the thread vocabulary compiled to store clauses: the shared identity clauses
+// plus this table's own two columns, each ANDed on, so no option ever widens the set. CLAUSES rather
+// than a finished filter, because the same words answer two questions — the corpus, and what is still
+// owed on it — and sharing the list is what stops the two drifting about what a word selects.
+// `limit` is deliberately not among them: it shapes a READING (`newest` applies it), so it is not a
+// fact about the set, and a filter that honoured it would silently hide work from the drain.
+const threadClauses = (opts: Select): object[] => [
+	...identityClauses(opts),
+	...(opts.tier ? [tierIs(opts.tier)] : []),
+	...(opts.since ? [{ property: "Created", date: { on_or_after: sinceIso(opts.since) } }] : [])
+];
+
+// The CORPUS — every thread the words name.
+const filterOf = (opts: Select): object => ({ and: threadClauses(opts) });
+
+// WHAT IS OWED — the drain's worklist, and it is pure DATA about the thread rather than a rung
+// someone remembered to write: the Tier is what qualification produced, the Backlog relation is what
+// drafting produced. That is what makes it self-healing — a run that dies between the two leaves the
+// thread in exactly the state its own data describes, and the next pass picks it up with nothing to
+// reconcile.
+//
+// It reads as one sentence: not judged out, and no outreach yet. The second half is why the stages
+// need no separate rules — a thread that HAS an outreach owes nothing, because whatever work it was
+// due already produced a draft and a human is holding it.
+//
+// ONE filter, and it is still the DRAIN's: `pending` below only DESCRIBES it. That is exactly what
+// makes a dry run trustworthy — the count and the act compile the same words through this same
+// function, so there is no second definition of "owed" to fall out of step. It stays off the thread
+// vocabulary all the same, because what is owed is not a fact about a thread: `threads` is the
+// corpus, and a person's worklist is the Decisions table (`sflock decisions`) or the Backlog at
+// "Pending approval".
+//
+// Flat by necessity: Notion caps a filter at TWO levels of nesting, and an earlier shape
+// (`{or:[…,{and:[{or:[…]},…]}]}`) was three deep, so the drain over everything owed 400'd on every
+// run — measured against the live table. `and → or → leaf` is two, and every clause here is a leaf
+// or one `or` of leaves, so no combination of options can deepen it.
+const OWED = { or: [UNJUDGED, tierIs("T1"), tierIs("T2")] };
+const NO_OUTREACH = { property: "Backlog", relation: { is_empty: true } };
+const pendingFilterOf = (opts: Select = {}): object => ({
+	and: [...threadClauses(opts), OWED, NO_OUTREACH]
+});
+
+// What an owed thread will COST, which is why the tally splits this way rather than counting rows:
+// an UNJUDGED thread buys a qualify call, and a second one plus a browser fetch if it survives the
+// pre-screen; a T1/T2 with no outreach was judged long ago and owes only the draft. One shape, used
+// at both scopes — the whole queue and each community — so the parts and the total always add up.
+const tally = (rows: Row[]) => ({
+	total: rows.length,
+	unjudged: rows.filter((r) => !r.fields.Tier).length,
+	T1: rows.filter((r) => r.fields.Tier === "T1").length,
+	T2: rows.filter((r) => r.fields.Tier === "T2").length
 });
 
 // WHICH outreaches — the Backlog's OWN vocabulary, and it is separate for the reason the tables are:
@@ -557,12 +581,33 @@ export const tools = {
 		};
 	},
 
-	// engagePending — drain `engage` over everything owed: never judged, plus judged-worth-answering
-	// but never drafted (a crashed run leaves threads exactly there, and a filter on the first alone
-	// would strand them forever). PENDING above is that set, said once. Engaging a thread leaves it,
-	// so the drain pages the queue with no cursor to carry.
-	engagePending: () =>
-		drain(store, config.models.RedditThreads, PENDING, (r) =>
+	// pending — the queue DESCRIBED, and the one thing standing between "which threads?" and a bill:
+	// how many the words name, split by what each of them owes, per community. It is `engagePending`
+	// with the draining left out — same `pendingFilterOf`, same options — so it cannot answer for a
+	// set other than the one that would run. One store query; no LLM, no browser, no write.
+	//
+	// Grouped on the canonical URL's community (`subOf`), never the Subreddit column, for the reason
+	// every other read here does: the column keeps whatever casing a scan was handed, so grouping on
+	// it forks one community into two.
+	pending: async (opts: Select = {}) => {
+		const rows = await queryAll(store, config.models.RedditThreads, pendingFilterOf(opts));
+		const communities = [...new Set(rows.map((r) => subOf(String(r.fields["Thread URL"]))))].sort();
+		return {
+			...tally(rows),
+			bySubreddit: communities.map((subreddit) => ({
+				subreddit,
+				...tally(rows.filter((r) => subOf(String(r.fields["Thread URL"])) === subreddit))
+			}))
+		};
+	},
+
+	// engagePending — drain `engage` over everything the words name and that still owes work: never
+	// judged, plus judged-worth-answering but never drafted (a crashed run leaves threads exactly
+	// there, and a filter on the first alone would strand them forever). `pendingFilterOf` above is
+	// that set, said once. Engaging a thread leaves it, so the drain pages the queue with no cursor
+	// to carry — including rows that only became owed while it ran.
+	engagePending: (opts: Select = {}) =>
+		drain(store, config.models.RedditThreads, pendingFilterOf(opts), (r) =>
 			tools.engage(String(r.fields["Thread URL"]))
 		),
 

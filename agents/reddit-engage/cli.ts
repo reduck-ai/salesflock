@@ -8,7 +8,9 @@
 //   "Waiting for OP"]; plus draft, a manual redraft.
 // TWO nouns to look at, one per table this agent owns: `threads` (what Reddit says, how we judged it)
 // and `backlog` (our outreaches — where each conversation stands, what we posted). Each has its own
-// filters. The third table, Decisions, is the ENGINE's and has an agent-agnostic reader of its own:
+// filters — and `engage` speaks the THREAD ones, so the same words that read a set also select the
+// set it works on; `--dry-run` then prints what that set would cost instead of paying it.
+// The third table, Decisions, is the ENGINE's and has an agent-agnostic reader of its own:
 // `sflock decisions list/show --agent reddit-engage` — what a human must rule on, with the evidence.
 // Every stage is idempotent on the canonical Thread URL and reads what it owes off the thread's own
 // data (no Tier ⇒ judge it; a good Tier and no outreach ⇒ draft it), so any of them re-runs safely
@@ -33,8 +35,13 @@ type Ident = { url?: string[]; subreddit?: string[]; limit?: string };
 const withIdent = (c: Command): Command =>
 	c
 		.option("--url <urls...>", "only these threads, by URL (any Reddit shape; canonicalized)")
-		.option("--subreddit <names...>", "only these subreddits (r/ prefix optional); omit for all")
-		.option("--limit <n>", "keep only the newest <n>");
+		.option("--subreddit <names...>", "only these subreddits (r/ prefix optional); omit for all");
+
+// --limit is its own attachment, because it is a property of a READING and not of a set: it trims
+// the ANSWER, never the work (tools.ts `newest`; no filter honours it). So every command that PRINTS
+// a set takes it — and `engage`, where the answer IS the work, must not, or it would read as a way
+// to spend less when the only honest way to do that is to name a smaller set.
+const withLimit = (c: Command): Command => c.option("--limit <n>", "keep only the newest <n>");
 
 type ThreadFlags = Ident & { tier?: string; since?: string };
 const withThreadFilters = (c: Command): Command =>
@@ -64,11 +71,22 @@ program
 	.description("Discovery: each subreddit's threads newer than --since, recorded with their seed (title + full post). The seed only — no funnel state, no LLM, so re-scanning a thread already deep in the funnel cannot disturb it. Deduped on Thread URL. Judge with `engage`.")
 	.action(async (subreddits: string[], { since }) => out(await tools.scan(since, subreddits.length ? subreddits : undefined)));
 
-program
-	.command("engage")
-	.argument("[threads...]", "thread URLs to engage; omit to drain everything owed (unjudged, plus judged-good but never drafted)")
-	.description("Qualify (a judgment: Tier on the thread, claims as a page comment — no Decision) — the post alone first, then the full thread with its comments for anything that survives → if it still scores well, a reply draft opens an outreach at 'Pending approval'. Batched; no args drains everything owed, page by page.")
-	.action(async (threads: string[]) => out(threads.length ? await batch(threads, tools.engage) : await tools.engagePending()));
+withThreadFilters(
+	program
+		.command("engage")
+		.argument("[threads...]", "thread URLs to engage — sugar for --url; omit to take everything the filters name")
+		.description("Qualify (a judgment: Tier on the thread, claims as a page comment — no Decision) — the post alone first, then the full thread with its comments for anything that survives → if it still scores well, a reply draft opens an outreach at 'Pending approval'. Works on the threads the filters name that still OWE work (never judged, or judged good and never drafted); no filters ⇒ everything owed, page by page.")
+		.option("--dry-run", "describe that queue instead of draining it: how many threads are owed, split by what each owes (a qualify call, or only a draft), per community. Reads the store and nothing else — no LLM, no browser, no write.")
+).action(async (threads: string[], f: ThreadFlags & { dryRun?: boolean }) => {
+	// The positional URLs ARE --url, so there is ONE path through this command: the words name a set,
+	// and the flag says whether to describe it or drain it. Naming a thread therefore no longer
+	// bypasses the owed check — a thread that owes nothing comes back as an empty result instead of
+	// being silently re-drafted, and forcing a redraft is what `draft` is for (it always was; the
+	// positional path was a second, undocumented way to do it). Nothing is ignored, because nothing
+	// is bypassed: every word narrows the same filter.
+	const opts = selectOf({ ...f, url: [...threads, ...(f.url ?? [])] });
+	out(f.dryRun ? await tools.pending(opts) : await tools.engagePending(opts));
+});
 
 // threads — one selector, two projections. The action names what you do with the set (read it /
 // save it); the flags name the set, and they are the same flags either way.
@@ -76,16 +94,20 @@ const threads = program
 	.command("threads")
 	.description("The stored Reddit threads: select with the thread filters, then read them (get) or save them (dump).");
 
-withThreadFilters(
-	threads
-		.command("get")
-		.description("The INDEX: one line per thread — url, subreddit, title, author, created, score, comments, tier. Newest first, JSON on stdout. The post's own text is `dump`'s job.")
+withLimit(
+	withThreadFilters(
+		threads
+			.command("get")
+			.description("The INDEX: one line per thread — url, subreddit, title, author, created, score, comments, tier. Newest first, JSON on stdout. The post's own text is `dump`'s job.")
+	)
 ).action(async (f: ThreadFlags) => out(await tools.threads.get(selectOf(f))));
 
-withThreadFilters(
-	threads
-		.command("dump")
-		.description("The CORPUS: each thread's seed (title + full post, and the comment tree once fetched) plus how it was judged, as YAML on stdout — the raw material to hand-label into a ground truth. Newest first.")
+withLimit(
+	withThreadFilters(
+		threads
+			.command("dump")
+			.description("The CORPUS: each thread's seed (title + full post, and the comment tree once fetched) plus how it was judged, as YAML on stdout — the raw material to hand-label into a ground truth. Newest first.")
+	)
 ).action(async (f: ThreadFlags) => {
 	const rows = await tools.threads.dump(selectOf(f));
 	console.error(`${rows.length} threads`);
@@ -98,10 +120,12 @@ const backlog = program
 	.command("backlog")
 	.description("Our outreaches — one per engaged thread: where the conversation stands and what we posted.");
 
-withBacklogFilters(
-	backlog
-		.command("get")
-		.description("One line per outreach — url, subreddit, name, status, commentUrl, postedAt. Unposted first, then newest, JSON on stdout. The only path to what we actually posted, and the only way to see a 'Waiting for OP' conversation (it has no open Decision, so `sflock decisions list` cannot show it).")
+withLimit(
+	withBacklogFilters(
+		backlog
+			.command("get")
+			.description("One line per outreach — url, subreddit, name, status, commentUrl, postedAt. Unposted first, then newest, JSON on stdout. The only path to what we actually posted, and the only way to see a 'Waiting for OP' conversation (it has no open Decision, so `sflock decisions list` cannot show it).")
+	)
 ).action(async (f: BacklogFlags) => out(await tools.backlog.get(selectOf(f))));
 
 program
