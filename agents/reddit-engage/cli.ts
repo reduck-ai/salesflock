@@ -66,10 +66,18 @@ const program = new Command()
 
 program
 	.command("scan")
-	.argument("[subreddits...]", "subreddits to scan; omit for the config watchlist")
+	.argument("[subreddits...]", "subreddits to scan — sugar for --subreddit; omit for the config watchlist")
+	.option("--subreddit <names...>", "only these subreddits (r/ prefix optional); omit for the whole watchlist")
 	.option("--since <window>", `how far back — ISO date or shorthand ("48h", "7d")`, "48h")
+	.option("--dry-run", "name the communities this would scan and whether their rules are declared (`rules: null` ⇒ no SUBREDDITS entry, so a reply drafted there would be judged with no rules at all). Reads nothing — no browser, no store, no write.")
 	.description("Discovery: each subreddit's threads newer than --since, recorded with their seed (title + full post). The seed only — no funnel state, no LLM, so re-scanning a thread already deep in the funnel cannot disturb it. Deduped on Thread URL. Judge with `engage`.")
-	.action(async (subreddits: string[], { since }) => out(await tools.scan(since, subreddits.length ? subreddits : undefined)));
+	// Positional subreddits ARE --subreddit, the same sugar `engage` gives --url: one word names a
+	// community in every command that takes one, so a set you scanned pastes straight into the set
+	// you engage.
+	.action(async (subreddits: string[], f: { subreddit?: string[]; since: string; dryRun?: boolean }) => {
+		const named = [...subreddits, ...(f.subreddit ?? [])];
+		out(f.dryRun ? tools.watchlist(named.length ? named : undefined) : await tools.scan(f.since, named.length ? named : undefined));
+	});
 
 withThreadFilters(
 	program

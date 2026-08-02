@@ -481,6 +481,27 @@ export const refresh = async (url: string): Promise<Row> => {
 };
 
 export const tools = {
+	// watchlist — WHICH communities a scan would touch, and whether we know what they allow. It
+	// resolves the same argument `scan` does (the names given, else every key of SUBREDDITS), so it
+	// cannot describe a different set than the run — the same reason `pending` shares the drain's
+	// filter. Pure config: no browser, no store, no write.
+	//
+	// `rules: null` is NOT DECLARED, and it is the one thing this is really for. It does not mean the
+	// community allows anything; it means SUBREDDITS has no entry, so a reply drafted there reaches
+	// the judge with no rules field at all and the prompt's strictest reading applies. That is a
+	// different fact from `rules: 0` — a community that publishes none and says so in words, which
+	// the drafter reads. Scanning an undeclared subreddit works fine, which is exactly why the loss
+	// is silent: it surfaces two stages later, in a draft judged against nothing. (Measured: three
+	// communities sat in the store for weeks that way.)
+	watchlist: (subreddits: readonly string[] = Object.keys(SUBREDDITS)) =>
+		subreddits.map((s) => {
+			const rules = SUBREDDITS[subKey(s)];
+			return {
+				subreddit: subKey(s),
+				rules: rules === undefined ? null : (rules.match(/^- /gm)?.length ?? 0)
+			};
+		}),
+
 	// scan — discovery only: each watched subreddit's threads newer than `since` (the script's own
 	// chronological window), recorded with their evidence. No funnel state and no LLM — judging is
 	// `engage`'s job, and it reads what is owed off the Tier rather than off anything written here.
