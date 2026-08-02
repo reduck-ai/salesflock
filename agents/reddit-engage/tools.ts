@@ -38,6 +38,7 @@ import type { Subject, Verdict } from "../../src/decide.js";
 import type { PromptSpec, Row } from "../../src/stores/index.js";
 import type { Threads } from "../../src/clients/reddit/index.js";
 import type { RedditThreads } from "./schema/RedditThreads.js";
+import type { RedditBacklog } from "./schema/RedditBacklog.js";
 
 const store = getStore(config.destination);
 
@@ -75,6 +76,26 @@ const subjectOf = (url: string, row: Row): Subject => {
 };
 const readThread = (url: string): Promise<Row> =>
 	store.read(config.models.RedditThreads, "Thread URL", threadUrl(url));
+
+// The ONE write into each table, and the one place the identity key is minted.
+//
+// The key used to be a FIELD every caller supplied, having remembered to canonicalize it first —
+// four call sites, four chances to forget. Nothing would catch a slip: Notion keys a url by string
+// equality, so a non-canonical spelling does not error, does not overwrite, and does not warn. It
+// CREATES A SECOND PAGE, which every filter in this file (all of them canonical) is then blind to —
+// unreachable by the drain and by the Tier guard, yet still counted in every dump. A fork like that
+// is silent on the way in and permanent once made, which is what makes it worth designing out
+// rather than watching for. (Checked at the time of writing: 3010 stored rows, 0 non-canonical.)
+//
+// So the url is a positional ARGUMENT and the field map's type forbids the key. A caller cannot
+// supply it, therefore cannot mis-spell it; `threadUrl` is idempotent, so minting here costs a
+// re-normalization and nothing else. Convention became construction — the same move `threadUrl`
+// itself makes by throwing on a non-thread string rather than trusting the caller to check.
+const writeThread = (url: string, fields: Omit<Partial<RedditThreads>, "Thread URL">) =>
+	store.upsert(config.models.RedditThreads, { ...fields, "Thread URL": threadUrl(url) }, "Thread URL");
+
+const writeBacklog = (url: string, fields: Omit<Partial<RedditBacklog>, "Thread URL">) =>
+	store.upsert(config.models.RedditBacklog, { ...fields, "Thread URL": threadUrl(url) }, "Thread URL");
 
 // The Thread seed, parsed. null when the field is absent or not the shape `queue` writes —
 // the same tolerance evidence.ts's renderer has. Exported because a caller that wants to know what
@@ -123,18 +144,22 @@ const linkEntity = async (
 	spec: PromptSpec,
 	{ dependsOn }: { dependsOn?: string[] }
 ): Promise<string> => {
-	const url = threadUrl(subject.key);
-	const ref = await store.upsert(
-		config.models.RedditBacklog,
-		{
-			Name: subject.name,
-			"Thread URL": url,
-			Thread: [subject.ref],
-			// A held dependent leaves Status alone — its gate has not been ruled on yet.
-			...(dependsOn?.length ? {} : { Status: spec.pending })
-		},
-		"Thread URL"
-	);
+	// `Subject.ref` is optional on the shared type (not every agent's subject IS a store row), but
+	// here it is the Thread this outreach is about — the relation that lets each be reached from the
+	// other. Absent, the old inline write serialized `relation: [{ id: undefined }]`: an outreach
+	// orphaned from its thread, silently. Loud instead — `subjectOf` always sets it, so this fires
+	// only if that stops being true.
+	if (!subject.ref)
+		throw new Error(`no thread row behind ${subject.key} — cannot open an outreach with no Thread`);
+	const ref = await writeBacklog(subject.key, {
+		Name: subject.name,
+		Thread: [subject.ref],
+		// A held dependent leaves Status alone — its gate has not been ruled on yet.
+		// `spec.pending` is a free string on the shared PromptSpec (core cannot know one agent's
+		// column enum); the generated schema is where that enum actually lives. Same seam as the
+		// Tier write below — config.ts declares the literal, this asserts it against the column.
+		...(dependsOn?.length ? {} : { Status: spec.pending as RedditBacklog["Status"] })
+	});
 	return ref.id;
 };
 
@@ -289,9 +314,8 @@ export const queue = async (
 	const u = threadUrl(t.url);
 	if (OWNER && t.author?.toLowerCase() === OWNER.toLowerCase())
 		return { url: u, queued: false, reason: "owner" };
-	const row: RedditThreads = {
+	const row: Omit<RedditThreads, "Thread URL"> = {
 		Name: nameOf(subreddit, t.title),
-		"Thread URL": u,
 		Subreddit: subreddit,
 		Author: t.author ?? undefined,
 		// No `Preview`: it was the post body a second time, written here and nowhere else — so a
@@ -326,7 +350,7 @@ export const queue = async (
 		),
 		"Scanned at": ranAt
 	};
-	const r = await store.upsert(config.models.RedditThreads, row, "Thread URL");
+	const r = await writeThread(u, row);
 	return { url: u, queued: r.created, thread: r.url };
 };
 
@@ -356,8 +380,7 @@ export const refresh = async (url: string): Promise<Row> => {
 	const t = await getThread(u, DEVICES.read);
 	// Partial, and that is the point: an upsert writes only the fields it is handed, so omitting
 	// Name (required on a full row — it is the Notion title) is how this leaves identity alone.
-	const row: Partial<RedditThreads> = {
-		"Thread URL": u,
+	const row: Omit<Partial<RedditThreads>, "Thread URL"> = {
 		Score: t.score,
 		Comments: t.num_comments,
 		Thread: stringify(
@@ -390,7 +413,7 @@ export const refresh = async (url: string): Promise<Row> => {
 			{ lineWidth: 0 }
 		)
 	};
-	await store.upsert(config.models.RedditThreads, row, "Thread URL");
+	await writeThread(u, row);
 	// Read back rather than merge in memory: the next judgment reads the row, so it must read what
 	// the store actually holds — the same rule `decide("reply", url)` obeys one stage later.
 	return readThread(u);
@@ -459,7 +482,7 @@ export const tools = {
 			// evidence (a reviewer sees what the reply answers AND how hard a fit it was). Being just a
 			// column, the Notion table filters and sorts by it for free.
 			await Promise.all([
-				store.upsert(config.models.RedditThreads, { "Thread URL": u, Tier: tier }, "Thread URL"),
+				writeThread(u, { Tier: tier as RedditThreads["Tier"] }),
 				store.comment(
 					row.id,
 					[
