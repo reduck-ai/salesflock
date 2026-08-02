@@ -15,6 +15,8 @@
 #   1vakiqt / 1vbsvt5   a finite personal errand (a job hunt ends) vs an ongoing personal habit
 #   1v51217 / 1vccyni   same author: he asks the sub, vs he broadcasts at people who are not here
 #   1v5pxxw / 1v5ge3u   automating his own job hunt vs shopping in our aisle on a free tier
+#   1v6wpf0 / 1v8spgc   only wants fewer restrictions vs names the task he needs done
+#   1v9n984 / 1va8ntx   a collection that ends vs a paste round that comes back every day
 - key: https://www.reddit.com/r/ai_agents/comments/1v51217/
   expect:
     tier: T1
@@ -338,7 +340,8 @@
 - key: https://www.reddit.com/r/ai_agents/comments/1v8spgc/
   expect:
     tier: T1
-  note: actively shopping; the desktop half is out of scope but partial scope does not downgrade.
+  note: '"blocks some very simple automations that I need" NAMES the task, which is the whole of what
+    separates it from 1v6wpf0. CONTROL against 1v6wpf0.'
   fields:
     Thread:
       subreddit: ai_agents
@@ -369,8 +372,9 @@
               I'd really appreciate any recommendations. Thanks!
 - key: https://www.reddit.com/r/ai_agents/comments/1v9n984/
   expect:
-    tier: T1
-  note: "a repeatable portal download + file-naming round: the deterministic-script answer."
+    tier: No
+  note: "a one-shot collection: he wants the reports, and when he has them the job is over. Many
+    targets is not a repeat. Was T1 until the one-off rule was written down."
   fields:
     Thread:
       subreddit: ai_agents
@@ -952,8 +956,9 @@
               Would be great to see how others approached it, even if it’s just a basic setup or work in progress.
 - key: https://www.reddit.com/r/hermesagent/comments/1v4rwmc/
   expect:
-    tier: T1
-  note: an operator with a goal on logged-in surfaces (sales/marketing) — his next step is ours.
+    tier: T2
+  note: an operator who names a domain (marketing/sales) and states no pain. Was T1 on the reasoning
+    that he 'might encounter pain' — qualifying on absence, which is the T2 definition.
   fields:
     Thread:
       subreddit: hermesagent
@@ -1364,8 +1369,9 @@
 - key: https://www.reddit.com/r/ai_agents/comments/1vc0moj/
   expect:
     tier: No
-  note: DISTRIBUTION (where to host, how to reach users), and the OP's own comments unmake the buyer.
-    Needs its comment tree to score as intended.
+  note: "DISTRIBUTION (where to host, how to reach users), and the OP's own comments unmake the buyer:
+    \"there's no audience for now\", \"I'm a broke student?\". TWO-PHASE: the post alone is a
+    defensible T1."
   fields:
     Thread:
       subreddit: ai_agents
@@ -1384,10 +1390,64 @@
               What are the other alternatives? I mean, a website would be weird for such an agent.
             
               I'm trying to deploy it on Railway but I can't because of the above problems
+      content_href: https://www.reddit.com/r/AI_Agents/comments/1vc0moj/where_to_run_my_agents_if_im_not_an_app_developer/
+      comments:
+        - author: EuphoricAIKnowledge
+          body: Who’s the audience and how do they use it?
+          score: 1
+          depth: 0
+          created: 2026-07-31T19:28:14.191000+0000
+        - author: Negative-Guard-4487
+          body: Audience will use it through WhatsApp cause it'd be a WhatsApp bot no? And there's no audience
+            for now
+          score: 1
+          depth: 1
+          created: 2026-07-31T19:29:41.528000+0000
+        - author: EuphoricAIKnowledge
+          body: Figure out the use case my guy
+          score: 1
+          depth: 2
+          created: 2026-08-01T02:10:32.453000+0000
+        - author: aiblastoff
+          body: Any reason you don't have Claude Code yet?
+          score: 1
+          depth: 0
+          created: 2026-07-31T21:01:20.292000+0000
+        - author: Negative-Guard-4487
+          body: I'm a broke student?
+          score: 1
+          depth: 1
+          created: 2026-07-31T21:03:50.522000+0000
+        - author: aiblastoff
+          body: |-
+            There's a lot you can do on the $20 / mo plan and it's well worth it
+
+            How did you build the agent btw
+          score: 2
+          depth: 2
+          created: 2026-07-31T21:05:23.211000+0000
+        - author: Negative-Guard-4487
+          body: Myself, and free Claude for bugs and planning together with it. And I don't think I'll be able
+            to use the 20/ per month plan efficiently cause I wasted 200$ worth of free credits in a
+            single day doing something silly
+          score: 1
+          depth: 3
+          created: 2026-07-31T21:09:56.279000+0000
+        - author: farhadnawab
+          body: |-
+            a simple web UI actually makes a lot of sense for a finance agent, more than you'd think. something like Streamlit or Gradio lets you wrap it in a clean interface in maybe an hour, and you can deploy that on Railway or Render without any issues.
+
+            if you want it to feel more like a chat, Chainlit is worth looking at too, it's basically built for this exact use case.
+
+            the messaging app route was never your only option, it just felt like the obvious one. a web interface where you type a query and get a response back is fine for a finance tool, arguably better since you're not fighting platform restrictions.
+          score: 2
+          depth: 0
+          created: 2026-07-31T20:19:08.849000+0000
 - key: https://www.reddit.com/r/claudeai/comments/1v6wpf0/
   expect:
     tier: No
-  note: a wish for a generally more permissive browser agent — no site, no task, no repeat named.
+  note: names neither a task nor a wall — only that the permission popups annoy him. A capability
+    wish. CONTROL against 1v8spgc.
   fields:
     Thread:
       subreddit: claudeai
@@ -1407,8 +1467,8 @@
 - key: https://www.reddit.com/r/claudeai/comments/1v6ye14/
   expect:
     tier: No
-  note: a ONE-OFF lookup he will never run again. Our value is a script worth reusing; run once, by
-    hand wins.
+  note: "a one-off lookup: one list of professors, wanted once. Same rule as 1v9n984, opposite former
+    label."
   fields:
     Thread:
       subreddit: claudeai
@@ -1460,3 +1520,83 @@
       op_text: So i intended to use claude cowork to post on some forums (like patched.to) but he
         mentioned that it's an illegal site so he can t interact with it , so what solutions do u
         people recommend ? and specifically is openclaw capable of that or shitty as claude ?
+- key: https://www.reddit.com/r/ai_agents/comments/1vavu0l/
+  expect:
+    tier: No
+  note: "TWO-PHASE, and the sharpest one: the post names a wall (\"sites that require email/password
+    login\") so it reads T1, and the OP's own comment settles it — \"logging in to my college site
+    and downloading files?\". A student's coursework, and the ceiling has nothing to cap because
+    there is no durable job."
+  fields:
+    Thread:
+      subreddit: AI_Agents
+      url: https://www.reddit.com/r/ai_agents/comments/1vavu0l/
+      title: Hermes sucks
+      author: asaggggg
+      created: 2026-07-30T14:51:16.399000+0000
+      score: 0
+      num_comments: 15
+      post_type: text
+      op_text: I’ve been using Hermes but honestly it feels pretty limiting. It struggles with basic
+        things like connecting to sites that require email/password login, and overall it has a lot
+        of restrictions that make it hard to use for real workflows.I’m looking for a harness or
+        model that’s more flexible and has fewer guardrails
+      comments:
+        - author: dihania_pagana
+          body: |-
+            I was a sysadmin, now a developer, 20 years in the field. However much i learned, can't always keep the pace, especially for a prototype webapp and a home server... had it rebuilt 2 times, did not have time for it.
+
+            Now it's back up, serves homelab, media, all was one day setup, zfs storage, docker, nas, and publishing an app, then fixing/adding features to it.
+
+            All with hermes.... i do check on what he does, he does goofy stuff at times, but all llms do. Mostly using it free, tried some tokens in nous, but sometimes feels cheaper in deepseek connected separately.
+          score: 3
+          depth: 0
+          created: 2026-07-30T20:30:19.069000+0000
+        - author: No_Escape_9716
+          body: idk maybe it's a mileage thing but hermes really does choke on anything that requires actual
+            auth workflows, like even basic session handling gets weirdly inconsistent. feels like
+            it was built for a very specific demo loop and then just stops once you try to pull it
+            into something messier.
+          score: 1
+          depth: 1
+          created: 2026-08-02T04:16:05.448000+0000
+        - author: FinanceMuse
+          body: I agree, I was completely underwhelmed. I realize it could be a skill issue but the whole
+            point of an assistant is for it to assist, not for me to get frustrated because it needs
+            help with everything I ask it to do.
+          score: 1
+          depth: 0
+          created: 2026-07-30T15:56:39.707000+0000
+        - author: asaggggg
+          body: Haha im fighting with him so much
+          score: 1
+          depth: 1
+          created: 2026-07-30T15:59:58.346000+0000
+        - author: TheTyand
+          body: Every tried Pi agent and extend it to what YOU need?
+          score: 1
+          depth: 0
+          created: 2026-07-31T04:04:06.209000+0000
+        - author: Lower-Impression-121
+          body: less guardrails?
+          score: 1
+          depth: 0
+          created: 2026-07-31T05:49:01.773000+0000
+        - author: Worldly_Hunter_1324
+          body: Im a fan of openclaw, more customizable and tweakable.  Half the mess is sorting out its
+            sandbox, I just rent a VPS for $7 a month and that handles it.  Higher time investment /
+            overhead than hermes though.
+          score: 1
+          depth: 0
+          created: 2026-08-01T21:18:15.577000+0000
+        - author: BasisPleasant912
+          body: Try Mistral
+          score: 0
+          depth: 0
+          created: 2026-07-30T16:39:48.100000+0000
+        - author: asaggggg
+          body: Can it log in to sites that require that and take actions? For example logging in to my
+            college site and downloading files?
+          score: 1
+          depth: 1
+          created: 2026-07-31T14:46:36.170000+0000
