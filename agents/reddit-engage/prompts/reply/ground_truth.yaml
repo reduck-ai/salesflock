@@ -619,3 +619,698 @@
       - **Use the Correct Post Flair** — All posts must use the appropriate flair. Posts that use the wrong flair to sidestep rules (e.g., posting a workflow under Meta/News to avoid code-sharing requirements) will be removed.
       - **Low Quality or Off Topic** — Low quality and off-topic posts are subject to removal at moderator discretion.
       - **Keep it civil** — Be respectful. No personal attacks, harassment, or hostile behavior.
+- key: https://www.reddit.com/r/hermesagent/comments/1ve72q9/
+  expect:
+    reply: |-
+      What happened on Autotrader? Did the AI try to take over your browser and got blocked, or is it more a matter of it did not manage to extract it? 
+
+      If you don't want to wait forever (either because it succeeds but slowly as it learns the website from scratch each time or because it straight out fails), best approach is to create a re usable script you can execute, ideally on your extension so you piggyback the logged in state + fingerprints (otherwise with a lot of autonomous browser you get flagged really quick).  
+
+      I have built an MCP exactly for this: it connects to your Chrome extension (so it's logged in, not flagged as a bot), it can write scripts and run them, and to build some it has a tool called 'peek' that takes (x,y) -> information about the elements at that coordinate (can pierce iframe and all) then writes a re usable script it calls as a tool. This has worked great on a lot of adversarial sites like Amazon, Airbnb and all.
+
+      If you are interested, there is a Public Beta and you can try it for free, just DM and happy to share more!
+  reject:
+    reply: |-
+      The reason Gemini failed on Autotrader isn't your prompt. Sites like Autotrader and Sainsbury's use aggressive anti-bot protection (like Cloudflare) and render their content dynamically with JavaScript. When an LLM or a basic scraper tries to fetch the URL, they get blocked by a challenge page or only see an empty HTML shell before the JS loads.
+
+      For the Sainsbury's cart, you also have to deal with session state. You can't easily automate adding to a cart via raw API requests because you need to maintain a logged-in session, cookies, and handle dynamic page updates.
+
+      If you are setting up Hermes, the best approach is to not let the LLM scrape directly. Instead, use a browser automation tool (like Playwright or Puppeteer) to drive a real browser, handle the login/anti-bot, and pass the clean data back to the agent. 
+
+      We built Reduck AI precisely for this—it provides an MCP tool that lets agents write and run browser automation scripts through a real browser to handle login walls and anti-bot sites. It's free to try if you want to see if it helps with your Autotrader or Sainsbury's use cases.
+  fields:
+    Tier: T1
+    Thread: |
+      subreddit: hermesagent
+      url: https://www.reddit.com/r/hermesagent/comments/1ve72q9/
+      title: New Hermes install or not ?
+      author: Shit-Fly
+      created: 2026-08-03T08:02:03.723000+0000
+      score: 5
+      num_comments: 16
+      post_type: text
+      content_href: https://www.reddit.com/r/hermesagent/comments/1ve72q9/new_hermes_install_or_not/
+      op_text: |-
+        Hi,
+            
+              I'm looking to start my Hermes or something else journey and I'm looking for some advice if Hermes is the right solution for my use case,  if not what is and then if it is some suggestions on what tools / skills to use to achieve my goals. I'll then document my journey against my use cases.
+            
+              My use cases and general AI use.
+            
+                
+              
+              Research - Researching any topics and creating reports or datasets from that researching. Typical topics I research today are IT , AI and data strategy, operating models and projects , enterprise solutions comparisons and reviews. Investment research in companies and their markets,
+            
+            
+              
+              Reviewing personal documents and contracts and services, for legal advise, recommendations on clauses, what if scenarios against those, reminders when they expire / renew. Would expect these to be confidential as possible !
+            
+            
+              
+              New Custom app creation for personal use such as
+            
+            
+              
+              New & used car research , checking websites like autotrader , cazoo and direct manufacturer websites like Audi.  Able to compare specifications,  prices , mileage etc... its quite difficult to check them side by side today
+            
+              Home shopping app, allowing me and the wife to co create our shopping list for the week and for an agent to login to sainsbury and put the items in the cart. Will require a product database regularly updated by website scraping on their grocery side to get the right descriptions, SKUs, pack sizes etc...this will help the agent select the right ones into the basket.
+            
+              Will require agent / web scraping capability for general price comparison, product searches , trying to find accommodation on websites such as Airbnb,  vrbo .
+            
+              Approach Im considering using a VPS 4 (4 x vCPU, 4gb ram, 120gb storage)from Fasthosts. Currently have a Gemini pro subscription and Microsoft Copilot
+            
+              Thanks in advance for any replies !
+      comments:
+        - author: frankentriple
+          body: |-
+            Forget the vps, you don’t really need it.  Hermes doesn’t take a lot of juice to run.  An old laptop is fine.  You will need an llm that is not Gemini.  You need api keys, not prompts in a browser and the Gemini subscription doesn’t come with that.  Hermes is a real token burner when you get into serious use.  Keep an eye out for that. Choose your model and thinking depth carefully. 
+                
+                  Oh and it always burns less tokens to do something correctly than to refactor it over and over.  Use your Gemini subscription to write frameworks and plans of attack and give that to your Hermes agent to implement.  So much easier that way.
+          score: 6
+          depth: 0
+          created: 2026-08-03T08:16:08.268000+0000
+        - author: Shit-Fly
+          body: |-
+            Hi, thanks for the reply, I do have a Gemini API via Google AI studio, are you saying that cant be used ?
+                
+                  Appreciate it can run on small hardware, the reasoning for VPS was to have it always on rather than having a old pc / laptop running all the time at home.
+          score: 3
+          depth: 1
+          created: 2026-08-03T08:23:45.757000+0000
+        - author: frankentriple
+          body: |-
+            Ah, gotcha on the vps thing, I forget not everyone is a sysadmin and can spin up a proxmox host with some vms whenever the fancy strikes them :)
+                
+                  Yeah, if you have the api key through google ai studio you're good, just don't go thinking hermes can load up the gemini prompt and give you unlimited usage for 20 bucks a month.
+                
+                  Watch those API credits.  They burn fast.  I recommend a plan from somewhere like ollama that has a usage quota but no cost per token. The lightweights will slightly subsidize your token usage.
+          score: 2
+          depth: 2
+          created: 2026-08-03T08:35:39.767000+0000
+        - author: TheSuggi
+          body: Just use the DeepSeek API and use deepseekv4flash or pro. They are incredibly cheap. Dont use chatgpt or claude if your a beginner. You will only pay alot because you dont know what you are doing. Use DeepSeek, they are very cheap and you can use them as you please without headaches and worrying about cost.
+          score: 2
+          depth: 2
+          created: 2026-08-03T08:59:26.582000+0000
+        - author: kaishi00
+          body: |-
+            for your specific use cases why not just use gemini? they recently started beta on gemini spark that has agentic capabilities hosted on cloud side. it can't reach into your infrastructure, but if it's just scheduled jobs like what you mentioned then it can do it.
+                
+                  alternatively, chatgpt on your machine can reach into your local/cloud infrastructure via chatgpt work.
+          score: 2
+          depth: 0
+          created: 2026-08-03T08:44:04.393000+0000
+        - author: Shit-Fly
+          body: |-
+            Hi, don't have spark in my region / account yet.
+                
+                  I've tried using gemini to scrape autotrader for example and its not been capable to go into the vehicle adverts and summarise them.
+                
+                  Is there a prompt that would help me do it ? Maybe I'm not using the right prompt / language in it ?
+          score: 1
+          depth: 1
+          created: 2026-08-03T08:50:10.336000+0000
+        - author: kaishi00
+          body: That's weird, got some specific links for me to test later after I get off work?
+          score: 1
+          depth: 2
+          created: 2026-08-03T10:19:36.480000+0000
+        - author: No_Image506
+          body: |-
+            Imo, just try hermes local free first and try it. Fast, you will find if you need the VPN, apis etc.
+                
+                  Scraping is NOT free and is something hermes can do it with the correct scrapping subscription. Yes you can find some free scrapping usage but if you need heavy scrapping you will need to add to your grocery list.
+                
+                  If he can make an app magically? Not in your dreams. Sorry but hermes is a good agent but not a great coding agent like codex, pi, claude code, open code, you get the point.
+                
+                  Sure you can do some coding task but long coding you need a better harness. I build one, but still Im working on it. Problem with hermes is the harness needs more guide rails specifically for coding.
+                
+                  So your Betty Crocker (deepseek is just good and cheap), subscription of deepseek is not bueno for big coding (for now). Maybe if you know what you are doing, but charts doesn't come true in real coding work.
+                
+                  So start with your codex subscription, scrapper subscription and hermes free subscription as a starting point.
+                
+                  Learning how to do looping design and learn very well codex using sol and luna. Hermes it is a great tool, but now a magic wang. Doesn't work like hermes do me a app and hermes will ask you if you want it for iPhone or android and magically appears in your phone.
+                
+                  Scrapping work as long as you pay for the right tool. Yes you can get some free use but not for a cron job were hermes is scrapping thousands of pages every day. No muchacho, pero tu quiere a mi bella genio. Lol it what my grandma would says.
+                
+                  Also hermes is free, it's doesn't cost you anything. You are not buying a house, don't need anyone permission, just go for it try it and if hermes is not the answer, there are dozens new offers every day.
+                
+                  Sooner than later you will find your match, like tinder. Hope this helps.
+          score: 2
+          depth: 0
+          created: 2026-08-03T09:36:15.742000+0000
+        - author: Shit-Fly
+          body: Thank you for your advice and response, do you have a suggestion for a web scraper service to use ?
+          score: 1
+          depth: 1
+          created: 2026-08-03T09:43:13.912000+0000
+        - author: No_Image506
+          body: There are many, just do a simple Google search. Firecrawl works for me.
+          score: 1
+          depth: 2
+          created: 2026-08-03T10:40:25.528000+0000
+        - author: Theta0x33
+          body: |-
+            You can try mantlecore.ai you get an actual kernel-isolated VM, not a shared container. Snapshots (even mid-task) and backups are included, so as your agent grows you're never one update or experiment away from breaking it. We're adding a full desktop/GUI option alongside headless soon, all 1-click deploy in under 500ms.
+                
+                  On scraping: there are a lot of good options in this thread already, but for your use case I'd look at reverse engineering the site's API first. It bypasses most of the blockers and cuts your LLM costs dramatically. if that doesn't work, let the agent work out the schema and generate a scraper for you.
+                
+                  The principle either way is the same, don't put the LLM in the scraping loop. Use the agent to figure out the approach, then build the actual scraper and let it run cheap. I've done this for real estate sites, every site has its own quirks, but the agent will do most of the heavy lifting. I have a Scraping Recon skill that evaluates the best route per site, happy to share if it's useful.
+                
+                  I'm the founder, so DM me if you have questions. :)
+          score: 2
+          depth: 0
+          created: 2026-08-03T11:37:59.801000+0000
+        - author: Shit-Fly
+          body: Thank you for the reply and offer of support. Your suggestion to use your service and the scraping recon skill, is that included in your service ?
+          score: 1
+          depth: 1
+          created: 2026-08-03T14:41:43.381000+0000
+        - author: JudgmentConfident984
+          body: |-
+            A vps for $10/month is always up.
+                
+                  Use deepseek v4 flash via deepseek api.
+                
+                  Deepseek v4 flash is a lot of bang for the bucks.
+                
+                  Then ur all set
+          score: 2
+          depth: 0
+          created: 2026-08-03T08:41:03.130000+0000
+        - author: Ctrl-Alt-Panic
+          body: |-
+            My use case is very similar. Lots of research oriented tasks / smaller personalized app creation. Been running it on a spare 8 year old laptop and an $10 a month OpenCode subscription. Set it up this week. It is essentially unlimited and V4 Flash has been awesome. (Plan and write a highly detailed spec with a frontier model like Kimi K3, then let V4 Flash do the grunt work.) V4 Flash has been awesome for non coding tasks too.
+                
+                  Definitely one of those "why didn't I do this sooner" moments. Go for it!
+          score: 1
+          depth: 0
+          created: 2026-08-03T15:31:37.557000+0000
+        - author: EmergencyCelery911
+          body: |-
+            May I suggest trying our one-click install bundle? It rolls out hermes with web ui, and several useful things like mem0 memory etc You can then login to the typical chat interface in your browser, just need an API key to Openrouter or any other provider. Also, it runs in container, so doesn't have full access to vps by design. When installing on VPS, I recommend to pick Tailscale option, so you can connect to your Hermes only from a private VPN. This way it's not exposed to anyone, but you can access it from anywhere (I'm using on my phone a lot).
+                
+                  Feel free to drop a note if you need any help https://foxinthebox.io/
+          score: 0
+          depth: 0
+          created: 2026-08-03T08:34:32.357000+0000
+    Subreddit rules: |-
+      - **Respect others and be civil** — No harassment, hate speech, or toxic behavior. Treat all contributors and members with kindness. We have a mix of advanced developers and first-time local LLM users. Gatekeeping, elitism, or toxic behavior will result in a ban. Attack the problem, not the person.
+      - **No Spam, Soliciting, or Unapproved Selling** — No spam, soliciting, or unapproved selling — paid API access, closed-source wrappers, crypto, unrelated AI services. Sharing free open-source Hermes tools/skills is encouraged. Clickbait with generic advice applicable to any AI tool (no Hermes-specific detail, no code/screenshots/real workflow) is spam regardless of formatting.
+      - **The 90/10 Self-Promotion Guideline** — The 90/10 self-promo guideline — 1 showcase/promo post requires 9 prior community contributions. Posts framed as help/troubleshooting that recommend the author's own project/service count toward the 10% limit even if flaired differently. Repeat offenders face temporary ban. A compliant Contributor Footer under Rule 12 is permitted and does not, by itself, violate the 90/10 guideline.
+      - **Technical Help Requires Context** — Technical help requires context — include OS and version, Python version if applicable, GPU/hardware specs, local model setup (Ollama/oMLX), full error with stack trace, and what troubleshooting was already attempted before asking. "It won't install help!" is unintentional spam.
+      - **Keep It Relevant to Hermes Agent** — Posts must be directly related to Hermes Agent, its ecosystem, models that run well with it, or direct comparisons (e.g., Hermes vs. OpenClaw). General "AI news" or off-topic tech discussions will be removed.
+      - **Context Required in Posts & Reports** — Don’t post random screenshots, photos, or reposts without explanation. Add relevant details, findings, or discussion points.
+      - **Keep Politics to a Minimum** — r/hermesagent is a tech-focused community. Political discussion is welcome when it directly impacts the Hermes Agent ecosystem (e.g., AI regulation, open-source policy, provider bans affecting users). General political posts, geopolitical debates, or tangential chain-reaction threads (e.g., company partnerships with other companies linked to a country or cause) should be kept minimal or flaired as discussion. The focus here is the tool, not the world stage.
+      - **Cross-Post Limit** — Same or nearly identical title/content to 3+ subs within 24 hours = auto-remove. Identical copy/paste across subs is removal regardless of count — adapt each post for that community.
+      - **New Account Post Approval** — Accounts created within the last 30 days with fewer than 50 total karma across Reddit must have all posts approvedby mods before they appear. Established accounts (30+ days, 50+ karma) may post freely.
+      - **Constructive Discussion** — Comments should add value — ask questions, share experience, or offer solutions. Vague complaints, one-liner dismissals, and dramatic takeaways without specifics are fair game for removal. Posts must state what troubleshooting steps were attempted and documentation consulted before asking the community. First-time offenders get an automod reply pointing to docs; repeat bad-faith posts removed.
+      - **Moderator Discretion** — These rules serve as a guide to maintain subreddit quality. Posts or comments may be removed at moderator discretion if they violate the spirit of these rules, harm community experience, or fall into gray areas not explicitly covered. Moderators reserve the right to act in the best interest of the community beyond what is written here.
+- key: https://www.reddit.com/r/ai_agents/comments/1ve3t7i/
+  expect:
+    reply: |-
+      Several components to this: 
+      - First not all harnesses are created equal, you need to use an harness with a model that has been trained to be good at computer use. Claude is the best I know for this as it has deployed a Chrome extension for a while now and is quite battle tested
+      - Second you need to combine both vision and DOM, etc. 
+
+      Vision is the natural way to assess what the right element is, but DOM, etc. is what you want to write a reproducible script that you can execute a lot. 
+
+      I have built an MCP exactly for this for Claude: it connects to your Chrome extension (so it's logged in, not flagged as a bot), it can write scripts and run them, and to build some it has a tool called 'peek' that takes (x,y) -> information about the elements at that coordinate (can pierce iframe and all) then writes a re usable script it calls as a tool. 
+      This has worked great on a lot of adversarial sites like Reddit, LinkedIn and all.
+
+      If you are interested, there is a Public Beta and you can try it for free, just DM and happy to share more!
+  reject:
+    reply: |-
+      The pixel inaccuracy usually comes down to two specific mechanisms:
+
+      1. **Device Pixel Ratio (DPR) mismatch:** If you take a screenshot on a high-DPI screen (like a Retina display), the physical pixels of the image are 2x or 3x the logical pixels your automation tool uses to click. You have to divide the screenshot coordinates by `window.devicePixelRatio` to get the actual click target.
+      2. **Model downscaling:** Most vision models resize images to a standard input size (like 1024x1024) before processing. When they map coordinates back to the original image size, they lose precision, which is why they are often off by 20-40 pixels.
+
+      If you want to stick to visual navigation, the best workaround is to use the vision model to get a bounding box, then use a local OCR or template matching library (like OpenCV) to snap to the exact text or icon within that box.
+
+      But honestly, raw coordinate clicking is incredibly fragile. A much more reliable approach is a hybrid one: use the vision model to identify the text or label of the element, then query the DOM or the accessibility tree to find that element and click it natively. 
+
+      We built Reduck to solve this exact reliability loop. It's an MCP that lets an AI agent write and run browser automation scripts using self-healing selectors, so you don't have to rely on fragile coordinate clicks. You can try it at Reduck AI for free if you want to see how we handle the fallback logic.
+  fields:
+    Tier: T1
+    Thread: |
+      subreddit: AI_Agents
+      url: https://www.reddit.com/r/ai_agents/comments/1ve3t7i/
+      title: Visual Navigation Best Practices?
+      author: SrvLdr
+      created: 2026-08-03T04:58:25.994000+0000
+      score: 2
+      num_comments: 7
+      post_type: text
+      content_href: https://www.reddit.com/r/AI_Agents/comments/1ve3t7i/visual_navigation_best_practices/
+      op_text: |-
+        Anyone found a good solution for visual navigation?
+            
+              Meaning your agent screenshots a page, finds x/y coordinates, the feeds that back to cua or whatever desktop control mechanism to navigate? This seems the most consistently reliable solution vs navigating on DOM, css, etc which often changes.
+            
+              However, I’ve tried several visual engines and they’re not giving accurate results on the pixel location.
+            
+              Am I missing something? Seems like this should be more common but I’m not finding much reference material online…
+      comments:
+        - author: Consistent-Beat4443
+          body: |-
+            yeah i ran into this exact wall building a scraper that needed to interact with a finicky react dashboard. the dom was useless, classes would randomly regenerate, absolute nightmare.
+                
+                  turns out most vision models are trained on photography datasets where precise pixel coordinates are kind of an afterthought. they'll get the general region right but be off by 20-40px almost every time. what worked for me was adding a second pass, i'd have the model draw a bounding box, then use a simple template matcher in opencv to snap to the actual ui element. the model just gets you close enough for the cv to take over.
+          score: 2
+          depth: 0
+          created: 2026-08-03T05:05:33.617000+0000
+        - author: SrvLdr
+          body: Thanks - I’ll give that a try. Do you have a preferred model? Qwen seems to be the closest so far for me.
+          score: 1
+          depth: 1
+          created: 2026-08-03T05:07:37.064000+0000
+        - author: AutoModerator
+          body: |-
+            Thank you for your submission, for any questions regarding AI, please check out our wiki at https://www.reddit.com/r/ai_agents/wiki (this is currently in test and we are actively adding to the wiki)
+                
+                  I am a bot, and this action was performed automatically. Please contact the moderators of this subreddit if you have any questions or concerns.
+          score: 1
+          depth: 0
+          created: 2026-08-03T04:58:26.163000+0000
+        - author: EmergencyCelery911
+          body: I think what you need is to use this model for getting coordinates - I played with the first version, really impressive, curious about v2 https://allenai.org/molmo
+          score: 1
+          depth: 0
+          created: 2026-08-03T08:21:46.469000+0000
+        - author: gabbo-d
+          body: Yeah screenshot → model → x/y → CUA is the usual approach, but fails a lot when coords are in downscaled jpeg space instead of native screen (dpr/dpi, letterboxing, window not at 0,0). reobserve every step and prefer a11y/uia targets when they exist. Built Glasswarp for that loop https://www.glasswarp.com
+          score: 1
+          depth: 0
+          created: 2026-08-03T08:56:39.526000+0000
+        - author: One_Knowledge9254
+          body: Curious to see what approaches people have found reliable for balancing accuracy with changing interfaces.
+          score: 1
+          depth: 0
+          created: 2026-08-03T10:32:38.187000+0000
+    Subreddit rules: |-
+      - **Be respectful** — Treat others how you'd like to be treated
+      - **No spam** — Spammers will be permanently banned.
+      - **Put your links in the comments, not the posts** — This is mainly to prevent spam. If you have a blog post you want to link, link it in the comments. If you have a project you want to show off, link it in the weekly project display thread.
+      - **Limit self promotion** — Self promotion is fine, but if your posts are all self promotion (including promotion of your projects/products), you will be banned. A good ratio is one out of ten posts/comments.
+      - **No Low Effort Posts** — If your post provides no context, or it is simply meant to drive people off the site and somewhere else, it will be removed.
+- key: https://www.reddit.com/r/mcp/comments/1vcvdxm/
+  expect:
+    reply: "Which websites do you use? What's your flow? I think it could be done. "
+  reject:
+    reply: |-
+      Highly unlikely you'll find a pre-built, "legit" one out of the box. 
+
+      Two main reasons why:
+      1. **Security**: No one wants to host a public server that handles real crypto/money transactions for an LLM.
+      2. **Anti-botting**: Crypto casinos use heavy Cloudflare and device fingerprinting. A standard headless browser script will get flagged and banned almost instantly.
+
+      If you want to do this, you'll have to run a local MCP server that drives a real, logged-in browser session on your own machine. That way, you bypass the login/captcha walls because you're already authenticated, and the automation runs from your actual residential IP.
+
+      I'm the founder of Reduck AI, and we built an MCP specifically to handle this kind of browser automation. It lets Claude/GPT write and run scripts through a real Chrome extension (which helps bypass anti-bot detection since it runs in your actual browser). It's free to try if you want to build your own custom script for it.
+  fields:
+    Tier: T1
+    Thread: |
+      subreddit: mcp
+      url: https://www.reddit.com/r/mcp/comments/1vcvdxm/
+      title: Anyone know of an MCP server for crypto gambling?
+      author: RhumNegrita
+      created: 2026-08-01T18:51:29.066000+0000
+      score: 0
+      num_comments: 2
+      post_type: text
+      content_href: https://www.reddit.com/r/mcp/comments/1vcvdxm/anyone_know_of_an_mcp_server_for_crypto_gambling/
+      op_text: |-
+        Looking for something that would let GPT/Claude place bets for me, set a strategy etc.., let it run, check balance. Searched around and found nothing.
+            
+              Does this exist somewhere and legit?
+      comments: []
+    Subreddit rules: |-
+      - **No waitlists** — If you are working on a service, you are welcome to share it with the community after its fully launched. To combat spam, we don't allow links to announcements of future-services until they are barely anything more than a landing page.
+      - **No AI generated slop** — There has been a wave of AI-generated slop used to promote random services, usually disguised as sensational topics like MCP security. Such content will result in a ban.
+      - **No astroturfing** — Self-promotion is allowed with proper disclosure. Anyone caught promoting their product while pretending to be an unaffiliated user will be permanently banned.
+      - **Use showcase tag to share your work** — If you've built something in the MCP ecosystem, use showcase tag to indicate authorship and intent of demonstrating your work to others.
+- key: https://www.reddit.com/r/hermesagent/comments/1ve3tyv/
+  expect:
+    reply: |-
+      Several components to this:
+
+      First not all harnesses are created equal, you need to use an harness with a model that has been trained to be good at computer use. Claude is the best I know for this as it has deployed a Chrome extension for a while now and is quite battle tested
+
+      Second you need to combine both vision and DOM, etc.
+
+      Vision is the natural way to assess what the right element is, but DOM, etc. is what you want to write a reproducible script that you can execute a lot.
+
+      I have built an MCP exactly for this for Claude: it connects to your Chrome extension (so it's logged in, not flagged as a bot), it can write scripts and run them, and to build some it has a tool called 'peek' that takes (x,y) -> information about the elements at that coordinate (can pierce iframe and all) then writes a re usable script it calls as a tool. This has worked great on a lot of adversarial sites like Reddit, LinkedIn and all.
+
+      If you are interested, there is a Public Beta and you can try it for free, just DM and happy to share more!
+  reject:
+    reply: |-
+      If you are building visual navigation for agents, relying purely on raw screenshots and coordinate prediction (x, y) is usually the first thing that breaks. 
+
+      Here are a few practices that make it actually reliable:
+
+      1. **Use interactive element tagging (Vimium-style)**: Instead of asking a VLM to guess coordinates on a raw image, overlay unique alphanumeric tags on all interactive elements first. Then, have the VLM output the tag (e.g., "C1"). This completely bypasses coordinate drift, screen resolution mismatches, and VLM coordinate hallucination.
+      2. **Wait for visual stability**: Don't just wait for `networkidle`. Implement a loop that takes screenshots 100ms apart and compares them. Only let the agent act when the page stops shifting, otherwise it will click on loading states or half-rendered elements.
+      3. **Fallback to the Accessibility Tree**: VLMs are expensive and slow. For 80% of standard pages, parsing the accessibility tree (A11y tree) to find interactive nodes is faster and cheaper. Save the visual model for complex canvas elements, maps, or heavily obfuscated pages where the DOM is useless.
+      4. **Normalize coordinates**: If you absolutely must use raw coordinates, normalize them to a 0-1000 scale on both axes. This makes it independent of the viewport size, but you still have to handle the browser's device pixel ratio (DPI) when translating them back to actual click events.
+
+      If you find visual navigation is too slow or fragile, another approach is to let the agent write and run browser automation scripts directly. We built Reduck AI, which is an MCP that lets an AI agent write and run browser automation scripts, driving a real Chrome session. It's free to try if you want to compare the two approaches.
+  fields:
+    Tier: T1
+    Thread: |
+      subreddit: hermesagent
+      url: https://www.reddit.com/r/hermesagent/comments/1ve3tyv/
+      title: Visual Navigation Best Practices?
+      author: SrvLdr
+      created: 2026-08-03T04:59:37.655000+0000
+      score: 1
+      num_comments: 0
+      post_type: crosspost
+      content_href: /r/AI_Agents/comments/1ve3t7i/visual_navigation_best_practices/
+      comments: []
+    Subreddit rules: |-
+      - **Respect others and be civil** — No harassment, hate speech, or toxic behavior. Treat all contributors and members with kindness. We have a mix of advanced developers and first-time local LLM users. Gatekeeping, elitism, or toxic behavior will result in a ban. Attack the problem, not the person.
+      - **No Spam, Soliciting, or Unapproved Selling** — No spam, soliciting, or unapproved selling — paid API access, closed-source wrappers, crypto, unrelated AI services. Sharing free open-source Hermes tools/skills is encouraged. Clickbait with generic advice applicable to any AI tool (no Hermes-specific detail, no code/screenshots/real workflow) is spam regardless of formatting.
+      - **The 90/10 Self-Promotion Guideline** — The 90/10 self-promo guideline — 1 showcase/promo post requires 9 prior community contributions. Posts framed as help/troubleshooting that recommend the author's own project/service count toward the 10% limit even if flaired differently. Repeat offenders face temporary ban. A compliant Contributor Footer under Rule 12 is permitted and does not, by itself, violate the 90/10 guideline.
+      - **Technical Help Requires Context** — Technical help requires context — include OS and version, Python version if applicable, GPU/hardware specs, local model setup (Ollama/oMLX), full error with stack trace, and what troubleshooting was already attempted before asking. "It won't install help!" is unintentional spam.
+      - **Keep It Relevant to Hermes Agent** — Posts must be directly related to Hermes Agent, its ecosystem, models that run well with it, or direct comparisons (e.g., Hermes vs. OpenClaw). General "AI news" or off-topic tech discussions will be removed.
+      - **Context Required in Posts & Reports** — Don’t post random screenshots, photos, or reposts without explanation. Add relevant details, findings, or discussion points.
+      - **Keep Politics to a Minimum** — r/hermesagent is a tech-focused community. Political discussion is welcome when it directly impacts the Hermes Agent ecosystem (e.g., AI regulation, open-source policy, provider bans affecting users). General political posts, geopolitical debates, or tangential chain-reaction threads (e.g., company partnerships with other companies linked to a country or cause) should be kept minimal or flaired as discussion. The focus here is the tool, not the world stage.
+      - **Cross-Post Limit** — Same or nearly identical title/content to 3+ subs within 24 hours = auto-remove. Identical copy/paste across subs is removal regardless of count — adapt each post for that community.
+      - **New Account Post Approval** — Accounts created within the last 30 days with fewer than 50 total karma across Reddit must have all posts approvedby mods before they appear. Established accounts (30+ days, 50+ karma) may post freely.
+      - **Constructive Discussion** — Comments should add value — ask questions, share experience, or offer solutions. Vague complaints, one-liner dismissals, and dramatic takeaways without specifics are fair game for removal. Posts must state what troubleshooting steps were attempted and documentation consulted before asking the community. First-time offenders get an automod reply pointing to docs; repeat bad-faith posts removed.
+      - **Moderator Discretion** — These rules serve as a guide to maintain subreddit quality. Posts or comments may be removed at moderator discretion if they violate the spirit of these rules, harm community experience, or fall into gray areas not explicitly covered. Moderators reserve the right to act in the best interest of the community beyond what is written here.
+- key: https://www.reddit.com/r/claudeai/comments/1vd8ate/
+  expect:
+    reply: |-
+      It's slow because your Agent has to discover the websites all the time. 
+
+      If there is no API, the Agent will take control of a browser and iterate progressively to do what you want, which is time consuming, expensive and unreliable.
+
+      A better approach is to learn once how the website works, write a script that you can re use (potentially with the ability to accept different arguments so it works in different scenarios), and then use that for your daily tasks.
+
+      Basically it's like creating an API on top of your browser.
+      You do need to maintain it if it breaks, and execute it on a browser with your credentials that is not flagged as a bot. 
+
+      Two options: 
+      - either you use something like a patched version of Playwright for stealth but still you often get flagged as a bot and you need to enter credentials and they might be lost from one session to the another 
+      - or you execute the script against a real Chrome, for instance through an extension, so you look like a human, and you are logged in already. 
+
+      If you are interested, I have worked on an MCP that allows your agent to discover, build and run scripts over an extension for exactly that. We have a Free beta (like you can 5k scripts for free) so if you are interested feel free to DM me! 
+  reject:
+    reply: |-
+      It has nothing to do with Windows vs Mac. The bottleneck is the screenshot-action loop of OS-level computer use. Every single action (clicking, scrolling, typing) requires the model to take a screenshot, analyze it, decide on the next coordinate, and execute. That loop takes 10-15 seconds per step, so even a simple scrape easily takes 5 minutes.
+
+      The workaround is to change how the agent interacts with the browser. Instead of letting it drive the GUI step-by-step, have it write a script (like Playwright or Puppeteer) to do the scraping, run it, and return the JSON. A script executes in seconds because it bypasses the visual reasoning loop entirely. You can just ask Claude to write a Python script with Playwright, run it on your machine, and it will get the data in seconds.
+
+      If you want Claude to do this directly within its environment, you can use an MCP. We built an MCP at Reduck AI (free to try) that lets Claude write and run browser automation scripts directly through a real Chrome browser, which avoids the slow screenshot loop.
+  fields:
+    Tier: T1
+    Thread: |
+      subreddit: ClaudeAI
+      url: https://www.reddit.com/r/claudeai/comments/1vd8ate/
+      title: Simple task on Co-work takes a lot of time.
+      author: Exotic_Accountant565
+      created: 2026-08-02T04:31:40.632000+0000
+      score: 0
+      num_comments: 11
+      post_type: text
+      content_href: https://www.reddit.com/r/ClaudeAI/comments/1vd8ate/simple_task_on_cowork_takes_a_lot_of_time/
+      op_text: So I tell it to open YouTube, go to a channel name, extract some ideas, and save it to JSON, and then it takes about around five minutes to do that. I understand it's not much time, but still, these tasks are pretty simple. I have been told that because I'm on Windows, that's the reason it's significantly faster on Mac. If that's true, what's the workaround for Windows?
+      comments:
+        - author: Toastti
+          body: How is parsing the contents of a large number of videos made up of tens of thousands of individual frames into Json a simple task?
+          score: 7
+          depth: 0
+          created: 2026-08-02T04:46:50.280000+0000
+        - author: Exotic_Accountant565
+          body: Nothing to do with frames, i am extracting yt titles, link and views thats all. It doesnt even open individual videos
+          score: 1
+          depth: 1
+          created: 2026-08-02T05:46:12.708000+0000
+        - author: Rare-Hotel6267
+          body: "Then you are probably doing it wrong. A solution: see what it actually does all that time, what it gets hung on etc. you know, actually read what it has done.."
+          score: 1
+          depth: 2
+          created: 2026-08-02T06:38:27.125000+0000
+        - author: welcome-overlords
+          body: You probably need to build specific skills to complete tasks more efficiently + use faster subagents for simple subtasks. There's a learnint curve to this stuff
+          score: 2
+          depth: 0
+          created: 2026-08-02T04:56:34.296000+0000
+        - author: Fearless-Daikon5763
+          body: Scraping the web can be challenging if the html format is always changing. For YouTube, aren’t the closed caption transcripts way off? Is claude forced to think about how to transcribe complex audio.
+          score: 2
+          depth: 0
+          created: 2026-08-02T05:00:46.193000+0000
+        - author: Agitated_Industry128
+          body: agent logic is not suitable in this type of scenario
+          score: 2
+          depth: 0
+          created: 2026-08-02T05:04:54.216000+0000
+        - author: SashaLechovitskaya2
+          body: not a windows/mac thing. it's slow because every step is screenshot -> think -> click -> screenshot, and that task is like 15 of those loops. give it the direct channel url instead of "go find it", or better tell it to pull the data with yt-dlp and write the json. one script vs 15 loops.
+          score: 2
+          depth: 0
+          created: 2026-08-02T05:53:27.006000+0000
+        - author: Ok_Mathematician6075
+          body: co-work with a hyphen
+          score: 1
+          depth: 0
+          created: 2026-08-02T05:08:44.002000+0000
+        - author: padetn
+          body: Are you telling it to process subtitles? Otherwise all it can do is play the videos at max speed and STT the audio afaik
+          score: 1
+          depth: 0
+          created: 2026-08-02T05:15:08.447000+0000
+        - author: drydondapipebomb
+          body: everything cowork does Claude code is better at. everything.
+          score: 1
+          depth: 0
+          created: 2026-08-02T05:29:13.117000+0000
+        - author: Next-Cod-5758
+          body: OP u overreacting it's literally 5 min as u said
+          score: 1
+          depth: 0
+          created: 2026-08-02T06:57:36.824000+0000
+    Subreddit rules: |-
+      - **Be respectful** — Diversity of opinion is welcome. Controversial opinions are welcome. Personal attacks and harassment are not. Ask Claude for a definition of "good faith discussion for a subreddit" if you're unsure what's acceptable.
+      - **Be relevant** — Stay relevant to the Claude and Claude Code technology and users. We generally don't accept posts of more general AI interest here.
+      - **Be constructive. Don't come here to agitate others.** — Is your post/comment likely to add positively to the knowledge or experience of other readers here? Has it already been shared recently? Is it just designed to agitate others? Cancellation announcements and unsupported rants are not constructive. We also do not allow the organization of legal action on the subreddit.
+      - **Use the Megathreads for your recent Claude performance and bug reports/complaints** — Help us keep track of Claude system performance, limits and bugs by keeping your experiences and reports on the relevant Megathread https://www.reddit.com/r/ClaudeAI/comments/1s7fepn/rclaudeai_list_of_ongoing_megathreads/. This also frees the feed from performance incident flooding. We make occasional exceptions for well substantiated and helpful posts including useful questions. Check first if your issue has been discussed recently.
+      - **Do not come here to fix your Anthropic account problem** — Community replies to individual account issues have often caused confusion. We have no way of fixing the problem with your account and Anthropic does not respond to account help requests on this subreddit. Try their normal support channels. If you believe you were incorrectly charged, talk to your bank about a chargeback.
+      - **Competitor posts must contain sufficient homework and evidence.** — Competitor posts must satisfy ALL of the following criteria: a) cannot merely ask for a comparison without offering the author's own insights, research, genuine experiences, or evidence of investigation; b) cannot presume one model is better than another without providing detailed, novel evidence demonstrating this in specific instances; c) cannot cite comparative benchmarks without a source d) it cannot use inflammatory language. Basically you have to give before you can take.
+      - **Showcase your project in a way that helps educate and inspire others** — Promoting your project or paid service is encouraged if it fit the following criteria: be clear the project was built with Claude/Claude Code or specifically for Claude BY YOU include a clear description of what was built, how Claude helped, and what it does project must be free to try and say so (paid tiers/features OK) promotional language minimal do not use referral links (link to the project is ok) no job seeking requests or resumes Posts on the feed now require OP karma> 50
+      - **Read the Megathreads before you subscribe to Claude** — We strongly advise you visit the Performance Megathread before purchasing a plan. It is here https://www.reddit.com/r/ClaudeAI/comments/1s7fepn/rclaudeai_list_of_ongoing_megathreads/. Be aware of some of the issues you may face. Claude is a fast evolving technology.
+      - **Use relevant post flair** — Claude has vast amounts of diverse use cases. As a result, often the problems/questions/praise you have for Claude are not shared by others. Help others filter posts by their area of interest by choosing the flair most related to its usage group. If none fit, or you feel it is of more general interest, choose the flair most relevant.
+      - **Don't manipulate upvotes** — Undermining the Reddit voting system is an immediate permanent ban offence. This includes the use of bots. This subreddit has bots in place looking for suspicious activity.
+      - **Stay grounded** — If you post narratives about AI consciousness and experiences, they must be based in grounded research with references OR be clearly marked in the title as fiction to avoid misguiding people in vulnerable mental states AND use the Writing flair.
+      - **Be Reddit-compliant** — This subreddit uses Reddit's default harassment and abuse filters. In addition, you may find yourself or your content removed by Reddit if you don't follow their policies. These can be found below. Reddit content policy: https://www.redditinc.com/policies/content-policy Those discussing the use of Claude for creative writing should pay particular attention to Rules 6, 7 and 4. Reddit user agreement: https://www.redditinc.com/policies/user-agreement-september-25-2023
+- key: https://www.reddit.com/r/ai_agents/comments/1vavu0l/
+  expect:
+    reply: |-
+      What are you trying to accomplish? It's pretty good but when you have no API it can suck a bit as it will then have to drive a browser. 
+      There are ways to improve it, like creating re usable browser scripts but it can be time consuming. 
+
+      Happy to share more tips with more details.
+  reject:
+    reply: 100% agree, but the bottleneck usually isn't the model itself—it's how the agent handles
+      session persistence and dynamic login flows. If you run the browser session separately and
+      pass the authenticated state (or an MCP tool) to the agent, it becomes way more reliable. I'm
+      actually building a platform that does exactly this, feel free to DM me if you want to chat!
+  fields:
+    Tier: T2
+    Thread: |
+      subreddit: AI_Agents
+      url: https://www.reddit.com/r/ai_agents/comments/1vavu0l/
+      title: Hermes sucks
+      author: asaggggg
+      created: 2026-07-30T14:51:16.399000+0000
+      score: 0
+      num_comments: 13
+      op_text: I’ve been using Hermes but honestly it feels pretty limiting. It struggles with basic things like connecting to sites that require email/password login, and overall it has a lot of restrictions that make it hard to use for real workflows.I’m looking for a harness or model that’s more flexible and has fewer guardrails
+      comments:
+        - author: dihania_pagana
+          body: |-
+            I was a sysadmin, now a developer, 20 years in the field. However much i learned, can't always keep the pace, especially for a prototype webapp and a home server... had it rebuilt 2 times, did not have time for it.
+                
+                  Now it's back up, serves homelab, media, all was one day setup, zfs storage, docker, nas, and publishing an app, then fixing/adding features to it.
+                
+                  All with hermes.... i do check on what he does, he does goofy stuff at times, but all llms do. Mostly using it free, tried some tokens in nous, but sometimes feels cheaper in deepseek connected separately.
+                
+                  I think it takes time and patience with any llm, chat, vscode, opencode, tui, zui, cli, bli, bla.
+                
+                  Could openclaw work? Sure.... what this one has and works for me ? Kanboard... i keep chaining tasks, but thats the catch, chaining them, while he does one, i create others as childs, so it doesn't work over the same stuff twice, touching same files in different sessions.
+                
+                  I think it's great for what it is and for how mich time I'd spend manually building and debugging docker services, settings, configurations, apps. Idk
+          score: 3
+          depth: 0
+        - author: PickleBabyJr
+          body: he?
+          score: 1
+          depth: 1
+        - author: dihania_pagana
+          body: |-
+            Hahaha, you got me there. 'totally legit reasons': Not a native speaker Slip of the tongue Was in a hurry Autotype on Adhd
+                
+                  But yeah, when people name chatbots Bob, or a company calls a llm Hermes (which is a personified name) it's easy to assign a gender to it gramatically. Especially as a romanian, our language does not have neutrals, we tend to assign genders naturally. I guess.
+                
+                  Tho sometimes it also feels familiar/human because you do have conversations, sometimes you have emotions, like happy it understood what you asked, or angry because it didn't ? Does it make sense ? Am I making sense ? What is sense, now I'm spiraling just like a llm ... see ? Familiar
+          score: 1
+          depth: 2
+        - author: AutoModerator
+          body: |-
+            Thank you for your submission, for any questions regarding AI, please check out our wiki at https://www.reddit.com/r/ai_agents/wiki (this is currently in test and we are actively adding to the wiki)
+                
+                  I am a bot, and this action was performed automatically. Please contact the moderators of this subreddit if you have any questions or concerns.
+          score: 1
+          depth: 0
+        - author: TheTyand
+          body: Every tried Pi agent and extend it to what YOU need?
+          score: 1
+          depth: 0
+        - author: Lower-Impression-121
+          body: less guardrails?
+          score: 1
+          depth: 0
+        - author: RuRuInReal
+          body: Try Agent Zero it's pretty amazing 👌
+          score: 1
+          depth: 0
+        - author: FinanceMuse
+          body: I agree, I was completely underwhelmed. I realize it could be a skill issue but the whole point of an assistant is for it to assist, not for me to get frustrated because it needs help with everything I ask it to do.
+          score: 1
+          depth: 0
+        - author: asaggggg
+          body: Haha im fighting with him so much
+          score: 1
+          depth: 1
+        - author: FinanceMuse
+          body: |-
+            Yeah I gave up on that fast and seem to prefer something ridiculously laborious like “making my own open claw from scratch using pi” instead.
+                
+                  Thanks Hermes, the minutes I spent annoyed with you are leading to multiple weeks of personal development.
+          score: 1
+          depth: 2
+        - author: BasisPleasant912
+          body: Try Mistral
+          score: 0
+          depth: 0
+        - author: asaggggg
+          body: Can it log in to sites that require that and take actions? For example logging in to my college site and downloading files?
+          score: 1
+          depth: 1
+    Subreddit rules: |-
+      - **Be respectful** — Treat others how you'd like to be treated
+      - **No spam** — Spammers will be permanently banned.
+      - **Put your links in the comments, not the posts** — This is mainly to prevent spam. If you have a blog post you want to link, link it in the comments. If you have a project you want to show off, link it in the weekly project display thread.
+      - **Limit self promotion** — Self promotion is fine, but if your posts are all self promotion (including promotion of your projects/products), you will be banned. A good ratio is one out of ten posts/comments.
+      - **No Low Effort Posts** — If your post provides no context, or it is simply meant to drive people off the site and somewhere else, it will be removed.
+- key: https://www.reddit.com/r/ai_agents/comments/1va08fz/
+  expect:
+    reply: |-
+      What's your issue with TikTok? Happy to help on that one. 
+
+      Regarding my stack: 
+      - Notion for backlog of content. 
+      - Custom web app for writing content with autocomplete using Gemini that is wired to previous posts for relevant autocomplete 
+      - Posting: I have built an MCP that is connected to my Chrome extension to write scripts to automate reading / posting on LinkedIn / Twitter, works as well as an API, no auth issue, no fingerprint issue and I pay no one :D 
+  reject:
+    reply: Awesome breakdown! For TikTok and X, the only way to reliably bypass sandbox audits and
+      paywalls is to skip official APIs and run browser automation on real logged-in sessions. We
+      use paired-browser sessions to avoid captcha triggers and post directly as a human would. I'm
+      building a tool that does exactly this for social platforms, feel free to DM if you want to
+      swap notes.
+  fields:
+    Tier: T1
+    Thread: |
+      subreddit: AI_Agents
+      url: https://www.reddit.com/r/ai_agents/comments/1va08fz/
+      title: Best way to schedule social media posts from Claude in 2026, full MCP setup tested
+      author: Purple_Network3016
+      created: 2026-07-29T15:55:35.182000+0000
+      score: 1
+      num_comments: 11
+      op_text: |-
+        Tested 6 ways to schedule social posts straight from Claude over the past months, direct MCP connectors beat the Zapier bridge on cost and reliability every time. Sharing the breakdown since half the guides on this push whichever tool wrote them.
+            
+              The lineup with verified July 2026 numbers. Blotato at $29/mo covers 9 platforms via mcp.blotato.com/mcp, most polished MCP of the bunch and no per-post fees, but no free tier, no Google Business Profile, no Telegram, and the AI-credit model makes costs jump if you generate heavy volume ($97 Creator tier). Buffer quietly shipped a hosted MCP at mcp.buffer.com/mcp this year with OAuth, included on every plan even free, the catch is your plan caps API requests (3,000/mo free, 7,500 Essentials) and your agent's exploratory calls burn that budget fast. Metricool's MCP at ai.metricool.com/mcp ($22/mo) has the strongest analytics, clunkier posting flow through chat. PostFast at €10/mo covers 11 platforms including Google Business Profile and Telegram, OAuth 2.1 connector so no API key pasting, works on Claude Free/Pro/Max, setup took ~2 min. Postiz is open source, hosted trial or self-host with MCP support, free if you run the infra yourself. SocialClaw at $15/mo is the newest one, meters accounts and volume instead of credits.
+            
+              The Zapier MCP bridge (Claude → Zapier → your scheduler) works with anything but adds latency, a Zapier sub on top, and one more auth layer that breaks.
+            
+              Workflow once wired: write a week of content in one Claude conversation, say "schedule these across LinkedIn and X, one per day at 9am", done. Claude Code users can push further, mine reads git log weekly and drafts LinkedIn posts from shipped features.
+            
+              Honest cons. PostFast analytics are thin, I pair Metricool for reporting which adds $22. Blotato doubles PostFast's price for fewer platforms but wins on built-in AI content (trained templates, voiceovers). Buffer's request caps make it weak for agent-heavy use despite the free entry. Postiz eats savings in self-hosting time. And platform limits hit everyone equally: X API is pay-per-use now ($0.20 per post with a URL through direct API), LinkedIn approval is restrictive, TikTok forces sandbox audits, IG caps at 50 posts/24hr on Business accounts.
+            
+              What's your setup for posting from Claude?? Especially interested if anyone solved TikTok properly!
+      comments:
+        - author: Calm-Dimension3422
+          body: |-
+            The connector choice matters, but the part I would not skip is the approval boundary around the agent.
+                
+                  At Fabren, I would treat "schedule these posts" as two separate workflows: content drafting and calendar writeback. Drafting can be loose and creative. Calendar writeback should be boring: target channel, final text, media, scheduled time, campaign/context, and the account it will post from all captured in a receipt before anything is queued.
+                
+                  For social specifically, I would add three gates:
+                
+                  no post can be scheduled if the agent changed the channel, audience, or date window from the prompt
+                
+                  anything with a claim, metric, customer name, pricing, or legal/compliance-sensitive phrase gets human review
+                
+                  anything that failed to publish should be read back from the platform before the agent retries, so it does not create duplicate posts
+                
+                  The lowest-friction connector is not always the safest one. The useful test is whether you can reconstruct exactly why a post was queued, who approved it, and how to stop it before it goes live.
+          score: 2
+          depth: 0
+        - author: Purple_Network3016
+          body: Is it an AI reply or what
+          score: 1
+          depth: 1
+        - author: Square_Meat_9490
+          body: we wired claude to buffer's API for scheduling and it works fine, but the bottleneck was always writing the posts not scheduling them. (i work on Cricket AI, it generates the drafts daily so claude just has to push them out.)
+          score: 2
+          depth: 0
+        - author: Purple_Network3016
+          body: is it cheap??
+          score: 1
+          depth: 1
+        - author: joaop_2004
+          body: Para mim, a melhor divisão é automatizar pesquisa, rascunho e agendamento, mas manter uma etapa explícita de aprovação antes da publicação. Isso reduz bastante o risco sem transformar todo o fluxo em trabalho manual e ainda ajuda na confiabilidade do que está sendo feito
+          score: 2
+          depth: 0
+        - author: Purple_Network3016
+          body: english plssss, we speak english here
+          score: 1
+          depth: 1
+        - author: AutoModerator
+          body: |-
+            Thank you for your submission, for any questions regarding AI, please check out our wiki at https://www.reddit.com/r/ai_agents/wiki (this is currently in test and we are actively adding to the wiki)
+                
+                  I am a bot, and this action was performed automatically. Please contact the moderators of this subreddit if you have any questions or concerns.
+          score: 1
+          depth: 0
+        - author: daviswbaer
+          body: |-
+            Did you try OneUp? We have an API and MCP
+                
+                  let me know if you need anything, I am the co-founder :)
+          score: 0
+          depth: 0
+        - author: Purple_Network3016
+          body: Nope, Postriz and PostFast so far
+          score: 1
+          depth: 1
+        - author: daviswbaer
+          body: come on over then :)
+          score: 1
+          depth: 2
+        - author: Purple_Network3016
+          body: may try it ! thx!
+          score: 1
+          depth: 3
+    Subreddit rules: |-
+      - **Be respectful** — Treat others how you'd like to be treated
+      - **No spam** — Spammers will be permanently banned.
+      - **Put your links in the comments, not the posts** — This is mainly to prevent spam. If you have a blog post you want to link, link it in the comments. If you have a project you want to show off, link it in the weekly project display thread.
+      - **Limit self promotion** — Self promotion is fine, but if your posts are all self promotion (including promotion of your projects/products), you will be banned. A good ratio is one out of ten posts/comments.
+      - **No Low Effort Posts** — If your post provides no context, or it is simply meant to drive people off the site and somewhere else, it will be removed.

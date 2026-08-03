@@ -2285,3 +2285,50 @@
             
               
               Anyone else finding WhatsApp specifically the flakiest channel compared to Discord/Telegram in their setup?
+- key: https://www.reddit.com/r/ai_agents/comments/1vdbcx7/
+  expect:
+    tier: No
+  note: Trash this is just some competitor post.
+  fields:
+    Thread: |
+      subreddit: AI_Agents
+      url: https://www.reddit.com/r/ai_agents/comments/1vdbcx7/
+      title: Polar raised $5.7M and claims 98.0 on its benchmark vs 75.5 for the next best browser agent. The more interesting stat is buried.
+      author: schneida_vie
+      created: 2026-08-02T07:18:25.437000+0000
+      score: 1
+      num_comments: 3
+      post_type: text
+      content_href: https://www.reddit.com/r/AI_Agents/comments/1vdbcx7/polar_raised_57m_and_claims_980_on_its_benchmark/
+      op_text: |-
+        That is a fundamentally different product than “AI browser replaces your browser,” and I think it is the more defensible position. The category graveyard is full: OpenAI’s Atlas faded, The Browser Company sold to Atlassian for Dia, Firefox’s AI push got a user backlash. Every one of those tried to win the daily driver slot.
+            
+              Polar is effectively a task runner with a browser wrapped around it, and the browser matters for one technical reason worth understanding: it inherits the user’s logins. API-based agents never get that access. That is the moat, not the benchmark.
+            
+              The open question, and the thing that decides the outcome: does anyone graduate from “tool I open for one task” to “the thing I live in”? Task runners have a low ceiling on retention and a nasty habit of getting absorbed as a feature. They say they have run tasks unsupervised for 15+ hours, which is impressive and also exactly the sort of number that degrades on messy real-world sites.
+            
+              Anyone actually using it in production? Curious whether the 15-hour runs hold up outside curated tasks.
+      comments:
+        - author: schneida_vie
+          body: https://schneida.substack.com/p/polar-raised-57m-after-a-customer
+          score: 1
+          depth: 0
+          created: 2026-08-02T07:26:55.392000+0000
+        - author: AutoModerator
+          body: |-
+            Thank you for your submission, for any questions regarding AI, please check out our wiki at https://www.reddit.com/r/ai_agents/wiki (this is currently in test and we are actively adding to the wiki)
+                
+                  I am a bot, and this action was performed automatically. Please contact the moderators of this subreddit if you have any questions or concerns.
+          score: 1
+          depth: 0
+          created: 2026-08-02T07:18:25.661000+0000
+        - author: Constant-Invite-5037
+          body: |-
+            benchmarks are a good party trick but the login inheritance is the real thing here. all the api agents i tried hit a wall the moment a site needed an actual session from my browser
+                
+                  still skeptical about the 15 hour claim though. real world sites are messy and it takes one unexpected popup or captcha to wreck a long run
+                
+                  curious if anyone got it to work on something annoying like filling multi page government forms or dealing with a site that randomly logs you out
+          score: 1
+          depth: 0
+          created: 2026-08-02T07:41:07.405000+0000

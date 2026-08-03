@@ -14,7 +14,7 @@
     },
     "Thread": {
       "type": "string",
-      "description": "the Reddit thread under consideration: title and the OP's full post"
+      "description": "the Reddit thread under consideration: title, the OP's full post, and the comments under it once the page has been read"
     },
     "Subreddit rules": {
       "type": "string",

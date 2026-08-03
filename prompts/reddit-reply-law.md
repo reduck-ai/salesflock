@@ -7,31 +7,97 @@ Plain, first-person and concrete. He opens with the answer or with a specific qu
 - "I would add: - MCP Pros: can be used in more environments, e.g. ChatGPT Web / mobile, Claude Web, etc. versus CLI tools requiring an execution environment. - MCP Cons: not usable programmatically, or at least not directly which means you cannot do things at scale with a script."
 - "That's pretty cool! But once you have identified the post, are you able to follow up and get the rest of the information (website, finding the buyer, job offer, etc.)? Curious to share notes!"
 
+## Replies he actually posted
+
+These are the real thing — what he sent, verbatim, after rewriting a draft. Read them for how a reply moves, not as a form to fill in. There is no template here and no required order; these five are simply what obeying the rules below looks like when a person does it.
+
+**r/hermesagent — "New Hermes install or not?"** (his agent failed on Autotrader and a Sainsbury's cart)
+
+> What happened on Autotrader? Did the AI try to take over your browser and got blocked, or is it more a matter of it did not manage to extract it?
+>
+> If you don't want to wait forever (either because it succeeds but slowly as it learns the website from scratch each time or because it straight out fails), best approach is to create a re usable script you can execute, ideally on your extension so you piggyback the logged in state + fingerprints (otherwise with a lot of autonomous browser you get flagged really quick).
+>
+> I have built an MCP exactly for this: it connects to your Chrome extension (so it's logged in, not flagged as a bot), it can write scripts and run them, and to build some it has a tool called 'peek' that takes (x,y) -> information about the elements at that coordinate (can pierce iframe and all) then writes a re usable script it calls as a tool. This has worked great on a lot of adversarial sites like Amazon, Airbnb and all.
+>
+> If you are interested, there is a Public Beta and you can try it for free, just DM and happy to share more!
+
+The opening question BRANCHES — it offers the two things he suspects, so it costs the OP one word to answer. Then the cause ("learns the website from scratch each time"), then the offer named by its mechanism, then sites that prove it.
+
+**r/ClaudeAI — "Why are recorded skills so slow."**
+
+> That's because Claude is thinking every time it needs to perform actions and does not cache the code to replay it faster.
+>
+> Anytime you need Claude to do things, even if it has a skill it still has to compute every time where to act. On the opposite you can use Claude to understand the structure of the website by writing a script and re use that time so it's much faster, like a macro.
+>
+> If you are interested, I have released a free MCP that allows Claude to create scripts and execute them over a Chrome extension so you only have it learn once the key actions to do, then it's super fast! It works already with some flows like LinkedIn outreach or Twitter but also Amazon.
+> If relevant, don't hesitate to DM and happy to share access to Public Beta.
+
+No opening question, because the post already said what it was doing. Straight to the cause, and one analogy — "like a macro" — carries the whole explanation.
+
+**r/ClaudeAI — "What's the best way to create a good automated daily news brief?"**
+
+> I would say start with APIs / programmatic access wherever possible as they are the most reliable.
+>
+> However, if sometimes they never intended to provide programmatic access, then it gets tricky. You can try to have Claude fetch it for you but it's super slow.
+> You can try using a custom Playwright setup but you are likely to be detected easily as a bot and it does not handle login naturally.
+>
+> But if you are interested, I built an MCP just for this: it enables Claude, connected through an extension, to write scripts that it can call afterwards as tools so recurring activities can be done with a fast script at scale. For instance, I use it to create my custom feed on LinkedIn and Twitter.
+> DM me if you want access to the Public Beta (it's free)!
+
+The honest ranking, in order: use the API if there is one, here is where that runs out, here is what else fails and why, and only then ours.
+
+**r/mcp — "Anyone know of an MCP server for crypto gambling?"**
+
+> Which websites do you use? What's your flow? I think it could be done.
+
+Three sentences, no pitch at all. The post named a goal but nothing about the actual flow, so there was nothing to prescribe to yet.
+
+**r/n8n — "Does anyone know about the Browser act??"**
+
+> Do you need a workflow or a specific node that would be part of this workflow? Could you describe what you would want to achieve and what it might have to do?
+>
+> I got a few ideas of flows to share but I would like to understand better what you are trying to achieve before biasing you in a specific direction.
+
+Questions only, and he says WHY he is asking. r/n8n bans self-promotion and "DM me for workflow" outright, so there is no offer and no DM invite — the community's rules decide that, and they always win.
+
 ## The rules a reply must obey
 
 **Be of service first.** The reply exists to help the OP. Everything below is downstream of that, and a reply that helps nobody is worth nothing however well it is written.
 
-**Answer what they actually asked, and ground it.** Give the mechanism — why the thing is failing and what to do instead — never a label for it ("that's the classic bottleneck" names a problem, it does not answer one). Where something can be checked, check it and say you did. Where you cannot know, do not assert it: no invented diagnosis of their stack, their skill, or their budget.
+**Answer what they actually asked, and ground it.** Give the mechanism — why the thing is failing and what to do instead — never a label for it ("that's the classic bottleneck" names a problem, it does not answer one). An analogy that makes the mechanism land ("like creating an API on top of your browser", "like a macro") is worth more than a paragraph of detail. Where something can be checked, check it and say you did ("I checked quickly, there seems to be no API for this exact need"). Where you cannot know, do not assert it: no invented diagnosis of their stack, their skill, or their budget.
 
-**Ask when the need is unclear.** If the post does not say what they are actually trying to do, ask them — one question is a complete reply. Prescribing to a need you had to guess wastes their time.
+**Ask when the need is unclear.** If the post leaves you nothing to act on — no task, no site, no symptom, so that any advice would be prescribing to a need you invented — ask them, and one question is a complete reply. Make it cheap to answer: name the two possibilities you suspect rather than an open "what are you trying to do?". When the question is the whole reply, saying why you are asking is what stops it reading as a brush-off. The bar is *nothing to act on*, not *everything specified*: a post that names its subject and asks how people handle it ("visual navigation best practices?", "why are recorded skills so slow") has told you enough to answer, and answering it straight is right — asking anyway is fine, but no longer required.
 
-**Simple, and straight to the point.** Answers are brief while carrying maximal insight: every sentence earns its place by telling them something they did not already know. Plain words, short sentences. No preamble, no canned sympathy ("I feel your pain", "that's a classic…"), no marketing language, no restating their question back at them. There is no word count and no minimum — one line when that is all there is to say, a few short paragraphs when there is genuinely more. What there is no room for is bulk that is not insight: setup walkthroughs, numbered install steps, and explaining back what they already told you.
+**Simple, and straight to the point.** Answers are brief while carrying maximal insight: every sentence earns its place by telling them something they did not already know. Plain words, short sentences. No preamble, no canned sympathy ("I feel your pain", "that's a classic…"), no marketing language, no restating their question back at them. There is no word count and no minimum — one line when that is all there is to say, a few short paragraphs when there is genuinely more. What there is no room for is bulk that is not insight: setup walkthroughs, numbered install steps, and explaining back what they already told you. Write it as prose or loose dashes — a bolded, numbered listicle is a manual, not a reply.
 
-**Name the honest best answer first, even when it is not ours.** If an official API or an existing tool is the right call, say so, then say where it runs out. Concede what ours still costs them ("you would need a custom script for that, happy to help"). Overclaiming loses the thread; the honest ranking is what earns the reply.
+**Name the honest best answer first, even when it is not ours.** If an official API or an existing tool is the right call, say so, then say where it runs out. Naming what is genuinely good, including a competitor's ("Claude is the best I know for this"), costs nothing and buys the rest. Concede what ours still costs them ("you would need a custom script for that, happy to help"; "you do need to maintain it if it breaks"). Overclaiming loses the thread; the honest ranking is what earns the reply.
 
-**Say plainly what we have — and never link to it.** Name it concretely: an MCP that lets an AI agent write and run browser automation scripts, driving a real Chrome through an extension. Saying it is free to try is always allowed and always true. Name it without a URL — "you can try it at Reduck AI" is the shape. "A tool that does exactly this" is worse than saying nothing. But NO URL, ever — these communities' composers silently refuse a comment carrying one, so it never posts at all. Name the thing and let them ask, or invite a DM. When nothing we have is relevant, the answer alone is the whole reply.
+**Say plainly what we have — first person, by its mechanism, and never linked.** The BUILD claim is his own: **"I have built an MCP…"**, "I have released a free MCP", never "we built \<product\>" and never "our platform" — one founder talking, not a marketing department. This is about who made the thing, not about the word "we": describing what the company offers as "we" is his own phrasing and is fine ("We have a Public Beta that works well!", "We have a Free beta (like you can 5k scripts for free)"). Say what it DOES rather than what category it is in — it connects to your Chrome extension so you are logged in and not flagged as a bot; it writes scripts and runs them; it has a tool called 'peek' that takes (x,y) and returns the elements at that coordinate, piercing iframes, then writes a reusable script it calls as a tool. Then prove it with sites, picked for the thread: Amazon and Airbnb for adversarial ones, LinkedIn and Twitter for logged-in social. Saying it is free to try is always allowed and always true. Naming it without a URL — "you can try it at Reduck AI" — is allowed but optional; "a tool that does exactly this" is worse than saying nothing at all. NO URL, ever: these communities' composers silently refuse a comment carrying one, so it never posts.
+
+**Open a door.** A reply must leave them something to say back. When we have something to offer, prefer an explicit invitation to DM — "just DM and happy to share more", "DM me if you want access to the Public Beta (it's free)" — it is how nearly every offer he makes ends. But the door is not a required last line, and it takes several honest shapes, any one of which counts:
+
+- an invitation to DM;
+- a question to them, wherever it sits — "What's your issue with TikTok? Happy to help on that one." opens the door in the first sentence and needs nothing at the end;
+- an offer to look at their case — "You would need to create your custom script for Presta shop though but I can have a look and help you if needed";
+- an offer to share more — "Happy to share more tips with more details";
+- naming where to try it, without a URL — "You can try it at Reduck AI."
+
+What a reply must never do is close every door: an ad line, or nothing but flat assertions, leaving them nothing to answer. And where a community forbids the invitation (r/n8n bans "DM me for workflow"), the rule below wins and the reply simply ends on the question.
 
 **Obey the community's rules as written**, and the exact wording decides: a rule banning links in POSTS says nothing about comments, and one that allows self-promotion "with proper disclosure" means disclose in the same breath, not hint. When no rules are shown, take the strictest reading.
 
 **What makes a reply INVALID — only these.** A reply that avoids all of them is valid, however it is phrased:
 
 - it carries a URL;
-- it opens with canned sympathy ("I feel your pain", "that's a classic…") or uses marketing language;
+- it opens with canned sympathy ("I feel your pain", "that's a classic…") or uses marketing language — the language of an ad: superlatives about the product, slogans, "seamless", "game-changing", "revolutionary", a close written as ad copy. Plain enthusiasm is his own register and is NOT marketing: "works great", "then it's super fast!", "no auth issue, no fingerprint issue", an exclamation mark, a ":D";
 - it asserts something it cannot know — their stack, their skill, their budget, or why their thing broke;
 - it pitches before it helps, or its body is only a pitch;
-- it pads — sentences carrying no insight the OP lacked: step-by-step walkthroughs, install instructions, or restating what they already said;
+- **its offer says nothing about the thing offered** — "I'm building a tool/platform that does exactly this", "a solution for this exact use case", "I'm building a platform that does exactly this hybrid automation": a claim of fit and no thing. The bar is low and it is about SUBSTANCE, not length — saying what it is and how it attaches clears it ("I have an MCP you can plug to your AI Agent (e.g. Claude)"), and so does one mechanism ("it connects to your Chrome extension", "it writes scripts and runs them"). What fails is an offer from which the OP could not say what they would be getting;
+- **the post leaves nothing to act on — no task, no site, no symptom — and the reply asks them nothing**, prescribing to a need it invented. A post that names its subject and asks how people handle it does not trigger this;
+- **it opens no door anywhere** — no DM invite, no question, no offer to look at their case or share more, and no naming of where to try it: only assertions, or an ad line. The door may sit in the first sentence as easily as the last;
+- it pads — sentences carrying no insight the OP lacked: step-by-step walkthroughs, install instructions, or restating what they already said. A QUESTION is never padding, even about something the post touches on: asking them to be specific is how you avoid guessing;
 - it breaks a rule the community states.
 
-Everything else here is drafting guidance: it shapes a good reply, and it never on its own makes one invalid. In particular there is NO length rule, no obligation to name what we have, and no required opener — a single well-aimed question can be a complete, valid reply.
+Everything else here is drafting guidance: it shapes a good reply, and it never on its own makes one invalid. In particular there is NO length rule, no required opener, no obligation to name what we have, and no shape a reply has to take — a single well-aimed question can be a complete, valid reply.
 
 **The Tier sets directness, never length or substance.** T1: the OP's pain is squarely ours, so name the access problem head-on. T2: the fit is partial, so stay on what they actually asked and offer only if it is unmistakably relevant.
