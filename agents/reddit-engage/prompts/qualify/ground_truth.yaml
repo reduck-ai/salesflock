@@ -831,9 +831,10 @@
               I'm running Hermes Agent (Nous Research) locally on macOS using the default profile. It’s configured with grok-4.3 (xAI) as the primary model and has full tool access including terminal, browser automation, file operations, subagent delegation, cron jobs, and persistent memory via Mnemosyne.
 - key: https://www.reddit.com/r/hermesagent/comments/1v5pxxw/
   expect:
-    tier: T2
-  note: "right pain exactly, CAPPED: automating his own job hunt, a finite errand with nobody to sell
-    to."
+    tier: T1
+  note: "his own job hunt, and also a funded company's whole product (Tsenta, YC): apply to every
+    fitting job, tailored resume each time. Size the pain, not the wallet. Was T2 under the no-buyer
+    ceiling."
   fields:
     Thread:
       subreddit: hermesagent
@@ -849,9 +850,10 @@
               Like i want it to apply for all the jobs for me on its own and make a special resume for each job listing
 - key: https://www.reddit.com/r/hermesagent/comments/1v5l31m/
   expect:
-    tier: T2
-  note: same ceiling — trying free browsers is picking a runtime for a personal errand, not an
-    in-aisle purchase.
+    tier: T1
+  note: the same job-application round plus captchas, and he has already tried two browsers. A
+    recurring pain across many sites; 'free' is a means, not a tier. Was T2 under the no-buyer
+    ceiling.
   fields:
     Thread:
       subreddit: hermesagent
@@ -933,8 +935,9 @@
               Thanks!
 - key: https://www.reddit.com/r/hermesagent/comments/1v4y7hm/
   expect:
-    tier: T2
-  note: "the access checklist stated verbatim, still his own job search: real pain, no buyer."
+    tier: T1
+  note: the access checklist stated verbatim — job boards, logins, duplicate applications, captchas,
+    sites blocking automation. Was T2 because it was his own search; the pain is a product.
   fields:
     Thread:
       subreddit: hermesagent
@@ -1033,9 +1036,9 @@
               Now I have a mac mini, and want to set up a hermes agent to automate all of this and do it in bigger volume, how would I do that?
 - key: https://www.reddit.com/r/claudeai/comments/1vakiqt/
   expect:
-    tier: T2
-  note: genuine access pain, capped by STATED standing — he says he is job hunting, so the project
-    ends. CONTROL against 1vbsvt5.
+    tier: T1
+  note: dozens of job boards scanned every day, and he is blocked fetching the JD from the posting
+    URL. Recurring, many sites. Was T2 on STATED standing, which no longer caps anything.
   fields:
     Thread:
       subreddit: claudeai
@@ -1446,43 +1449,158 @@
 - key: https://www.reddit.com/r/claudeai/comments/1v6wpf0/
   expect:
     tier: No
-  note: names neither a task nor a wall — only that the permission popups annoy him. A capability
-    wish. CONTROL against 1v8spgc.
+  note: Not obvious he has a specific Integration need, he might happy with generic slow Agent
   fields:
-    Thread:
-      subreddit: claudeai
+    Thread: |
+      subreddit: ClaudeAI
       url: https://www.reddit.com/r/claudeai/comments/1v6wpf0/
       title: How can I make Chrome give Claude for Chrome permissions for all sites all the time?
       author: Informal-Addendum435
       created: 2026-07-26T07:16:45.939000+0000
       score: 3
-      num_comments: 13
-      post_type: text
+      num_comments: 12
       op_text: |-
         The "Claude for Chrome new permissions required" pop ups all the time are super inconvenient.
             
               How can I make them never appear again and just make it so that Claude can always do whatever it wants in my Chrome?
             
               If that's not possible, please can someone recommend me another way that I can give Claude a browser it can be fully autonomous in?
+      comments:
+        - author: Colin_Pepin
+          body: the per-site permission prompt is deliberate, it's the main thing standing between the extension and a prompt injection on some random page telling it to go do something in your gmail. there's no "allow everywhere forever" toggle for that reason. what helps in practice is granting it on the handful of sites you actually use it on, since those stick per domain and the popups mostly stop after a few days of normal use. if you genuinely want a fully autonomous browser, Claude Code with computer use in a separate profile or VM is the better shape for that, since the blast radius is contained. what's the workflow you're trying to automate?
+          score: 3
+          depth: 0
+        - author: Informal-Addendum435
+          body: |-
+            That makes sense, but I don't use Chrome. The only reason I installed it is for Claude. I've never logged into anything on Chrome. I guess a prompt injection might still be able to tell my Claude to do something on my system that I wouldn't want it to do.
+                
+                  The real annoying problem is I use localhost:PORT websites with many different ports for all parallel worktrees. And I have to enable permissions every single time for every single one of them. Maybe I can tell Claude to use osascript  and Claude for Chrome to enable permission for all 65,536 possible ports permanently.
+          score: 2
+          depth: 1
+        - author: lemi1001
+          body: Maybe local dns and reverse proxy could help?
+          score: 2
+          depth: 2
+        - author: Colin_Pepin
+          body: |-
+            lemi1001's reverse proxy idea is the actual fix here. the reason it's painful is that each localhost:PORT is a separate origin, so every worktree looks like a brand new site. put something like Caddy in front on one port and give each worktree a stable hostname instead, so worktree-a.localhost, worktree-b.localhost and so on. chrome resolves anything under .localhost to loopback automatically, so no /etc/hosts editing needed. then you're granting a handful of stable names once instead of a fresh port every time you spin up a tree.
+                
+                  the osascript route won't get you there though, it's not a chrome pref you can flip, and there's no wildcard-all-ports switch to script.
+                
+                  and fair point that you don't log into anything on that profile, that does cut the risk a lot. worth remembering the exposure isn't only your logged-in sites, a dev server rendering fetched content can carry an injection too. how many worktrees are you usually running at once?
+          score: 1
+          depth: 2
+        - author: Informal-Addendum435
+          body: |-
+            Yep great, I'll check out local reverse proxies
+                
+                  Running 3 to 6 worktrees at a time with about 3 HTTP ports open on each on the host machine, but the ports keep climbing (generating unique origins) even if there are "resting" worktrees just to prevent collisions from happening when I start up a resting one again, which means I get the permissions pop up on chrome a few times a day
+          score: 1
+          depth: 3
+        - author: Colin_Pepin
+          body: |-
+            ah, 3 to 6 trees at 3 ports each is exactly the case where the proxy pays for itself. the trick is to stop letting the ports be the identity. assign each worktree a fixed name and let the proxy map it to whatever port that tree happened to grab, so tree-a.localhost/api goes to whatever the api port is today. the climbing ports stay chaotic underneath and chrome never sees them, it only ever sees the same handful of hostnames.
+                
+                  caddy is probably the least painful for this, the config is a few lines per tree and you can regenerate it from whatever script already spins the trees up. one grant per name, then it's quiet.
+          score: 2
+          depth: 4
+        - author: Informal-Addendum435
+          body: Awesome, perfect tool for me, thanks for the help
+          score: 2
+          depth: 5
+        - author: aphelion83
+          body: You can’t. The handholding is deliberate until you learn how to replace it with chrome-devtools.
+          score: 1
+          depth: 0
+        - author: drydondapipebomb
+          body: |-
+            you can code your own browser control harness (and full pc control and screen control harness) with truly no impedance. i have one. don't build one if you don't know what you're doing though or you could fuck your whole system.
+                
+                  you'll need to include whatever version of safety barriers fits your usage and know how. for me that includes a list of codewords i must explicitly say in a prompt for the agent to do certain things without confirmation, like sending emails, deleting files, etc.
+          score: 1
+          depth: 0
+        - author: Ok_Mathematician6075
+          body: Da hell. Don't do that.
+          score: 1
+          depth: 0
 - key: https://www.reddit.com/r/claudeai/comments/1v6ye14/
   expect:
     tier: No
-  note: "a one-off lookup: one list of professors, wanted once. Same rule as 1v9n984, opposite former
-    label."
+  note: Weak, T2. It's not like he use a doer that needs to frequently interact with a SaaS. This
+    looks like one off scrap
   fields:
-    Thread:
-      subreddit: claudeai
+    Thread: |
+      subreddit: ClaudeAI
       url: https://www.reddit.com/r/claudeai/comments/1v6ye14/
       title: HELP ME CLAUDE GANG
       author: AthleteOne1995
       created: 2026-07-26T08:52:41.432000+0000
       score: 0
       num_comments: 14
-      post_type: text
-      op_text: I have a premium subscription of Claude. I want to find the relevant professor of US who
-        have tie back to my country(Global South) or who is running international abroad program at
-        their university. So, how do I train claude so that it would search this for me and give me
-        list of all the professor and their mail?
+      op_text: I have a premium subscription of Claude. I want to find the relevant professor of US who have tie back to my country(Global South) or who is running international abroad program at their university. So, how do I train claude so that it would search this for me and give me list of all the professor and their mail?
+      comments:
+        - author: Cold_Arachnid_2617
+          body: Ask Claude
+          score: 9
+          depth: 0
+        - author: vorko_76
+          body: |-
+            Might first use claude to rephrase your sentence… i read it 3 times and not sure i got it all.
+                
+                  In general try to break into sentences, use commas, dots…
+          score: 4
+          depth: 0
+        - author: AthleteOne1995
+          body: edited
+          score: 0
+          depth: 1
+        - author: ZedIsAPrimeNumber
+          body: it's stil unintelligible
+          score: 3
+          depth: 2
+        - author: Cold_Arachnid_2617
+          body: Unintelligible mumbo jumbo!
+          score: 3
+          depth: 0
+        - author: utah_teapot
+          body: Start by asking it if what you’re trying to do is ethical and likely to succeed.
+          score: 2
+          depth: 0
+        - author: AthleteOne1995
+          body: isnt it?I dont see any red flags here
+          score: 1
+          depth: 1
+        - author: getfuckedcuntz
+          body: Just talk to claude
+          score: 2
+          depth: 0
+        - author: StarlingAlder
+          body: '"Please give me a list of US-based university programs with a focus on [Global South country name] and any public contact information of faculty affiliated with those programs."'
+          score: 1
+          depth: 0
+        - author: Mendo25703
+          body: |-
+            Most of the replies here are dunking on the wording, so here's the actually useful version.
+                
+                  The one thing I would not do is ask Claude for the professor names and their emails directly. On niche, specific people it will hand you names and addresses that look completely real and are made up, and you won't know until the email bounces. That's the part it's worst at.
+                
+                  Where it's genuinely good is the setup around it, give it your country, your field, and the kind of program you mean (study abroad, exchange, research ties), and ask it for the types of departments to look for plus specific search terms to run on Google Scholar and university faculty pages. Then you open those pages and copy the real emails yourself, ten minutes of that beats a list you can't trust.
+                
+                  Last step, once you have real names, have it draft one short outreach email you can reuse and lightly personalize per professor. That part it does really well.
+          score: 1
+          depth: 0
+        - author: Even-Exchange8307
+          body: Let me guess, China
+          score: 1
+          depth: 0
+        - author: DeciusCurusProbinus
+          body: Global south is most likely India or Pakistan.
+          score: 2
+          depth: 1
+        - author: JustBiggers
+          body: Nice try China
+          score: 1
+          depth: 0
 - key: https://www.reddit.com/r/automation/comments/1va8ntx/
   expect:
     tier: T1
@@ -1523,80 +1641,647 @@
 - key: https://www.reddit.com/r/ai_agents/comments/1vavu0l/
   expect:
     tier: No
-  note: "TWO-PHASE, and the sharpest one: the post names a wall (\"sites that require email/password
-    login\") so it reads T1, and the OP's own comment settles it — \"logging in to my college site
-    and downloading files?\". A student's coursework, and the ceiling has nothing to cap because
-    there is no durable job."
+  note: He mentioned college site, so student so it sucks
   fields:
-    Thread:
+    Thread: |
       subreddit: AI_Agents
       url: https://www.reddit.com/r/ai_agents/comments/1vavu0l/
       title: Hermes sucks
       author: asaggggg
       created: 2026-07-30T14:51:16.399000+0000
       score: 0
-      num_comments: 15
-      post_type: text
-      op_text: I’ve been using Hermes but honestly it feels pretty limiting. It struggles with basic
-        things like connecting to sites that require email/password login, and overall it has a lot
-        of restrictions that make it hard to use for real workflows.I’m looking for a harness or
-        model that’s more flexible and has fewer guardrails
+      num_comments: 13
+      op_text: I’ve been using Hermes but honestly it feels pretty limiting. It struggles with basic things like connecting to sites that require email/password login, and overall it has a lot of restrictions that make it hard to use for real workflows.I’m looking for a harness or model that’s more flexible and has fewer guardrails
       comments:
         - author: dihania_pagana
           body: |-
             I was a sysadmin, now a developer, 20 years in the field. However much i learned, can't always keep the pace, especially for a prototype webapp and a home server... had it rebuilt 2 times, did not have time for it.
-
-            Now it's back up, serves homelab, media, all was one day setup, zfs storage, docker, nas, and publishing an app, then fixing/adding features to it.
-
-            All with hermes.... i do check on what he does, he does goofy stuff at times, but all llms do. Mostly using it free, tried some tokens in nous, but sometimes feels cheaper in deepseek connected separately.
+                
+                  Now it's back up, serves homelab, media, all was one day setup, zfs storage, docker, nas, and publishing an app, then fixing/adding features to it.
+                
+                  All with hermes.... i do check on what he does, he does goofy stuff at times, but all llms do. Mostly using it free, tried some tokens in nous, but sometimes feels cheaper in deepseek connected separately.
+                
+                  I think it takes time and patience with any llm, chat, vscode, opencode, tui, zui, cli, bli, bla.
+                
+                  Could openclaw work? Sure.... what this one has and works for me ? Kanboard... i keep chaining tasks, but thats the catch, chaining them, while he does one, i create others as childs, so it doesn't work over the same stuff twice, touching same files in different sessions.
+                
+                  I think it's great for what it is and for how mich time I'd spend manually building and debugging docker services, settings, configurations, apps. Idk
           score: 3
           depth: 0
-          created: 2026-07-30T20:30:19.069000+0000
-        - author: No_Escape_9716
-          body: idk maybe it's a mileage thing but hermes really does choke on anything that requires actual
-            auth workflows, like even basic session handling gets weirdly inconsistent. feels like
-            it was built for a very specific demo loop and then just stops once you try to pull it
-            into something messier.
+        - author: PickleBabyJr
+          body: he?
           score: 1
           depth: 1
-          created: 2026-08-02T04:16:05.448000+0000
-        - author: FinanceMuse
-          body: I agree, I was completely underwhelmed. I realize it could be a skill issue but the whole
-            point of an assistant is for it to assist, not for me to get frustrated because it needs
-            help with everything I ask it to do.
+        - author: dihania_pagana
+          body: |-
+            Hahaha, you got me there. 'totally legit reasons': Not a native speaker Slip of the tongue Was in a hurry Autotype on Adhd
+                
+                  But yeah, when people name chatbots Bob, or a company calls a llm Hermes (which is a personified name) it's easy to assign a gender to it gramatically. Especially as a romanian, our language does not have neutrals, we tend to assign genders naturally. I guess.
+                
+                  Tho sometimes it also feels familiar/human because you do have conversations, sometimes you have emotions, like happy it understood what you asked, or angry because it didn't ? Does it make sense ? Am I making sense ? What is sense, now I'm spiraling just like a llm ... see ? Familiar
+          score: 1
+          depth: 2
+        - author: AutoModerator
+          body: |-
+            Thank you for your submission, for any questions regarding AI, please check out our wiki at https://www.reddit.com/r/ai_agents/wiki (this is currently in test and we are actively adding to the wiki)
+                
+                  I am a bot, and this action was performed automatically. Please contact the moderators of this subreddit if you have any questions or concerns.
           score: 1
           depth: 0
-          created: 2026-07-30T15:56:39.707000+0000
-        - author: asaggggg
-          body: Haha im fighting with him so much
-          score: 1
-          depth: 1
-          created: 2026-07-30T15:59:58.346000+0000
         - author: TheTyand
           body: Every tried Pi agent and extend it to what YOU need?
           score: 1
           depth: 0
-          created: 2026-07-31T04:04:06.209000+0000
         - author: Lower-Impression-121
           body: less guardrails?
           score: 1
           depth: 0
-          created: 2026-07-31T05:49:01.773000+0000
-        - author: Worldly_Hunter_1324
-          body: Im a fan of openclaw, more customizable and tweakable.  Half the mess is sorting out its
-            sandbox, I just rent a VPS for $7 a month and that handles it.  Higher time investment /
-            overhead than hermes though.
+        - author: RuRuInReal
+          body: Try Agent Zero it's pretty amazing 👌
           score: 1
           depth: 0
-          created: 2026-08-01T21:18:15.577000+0000
+        - author: FinanceMuse
+          body: I agree, I was completely underwhelmed. I realize it could be a skill issue but the whole point of an assistant is for it to assist, not for me to get frustrated because it needs help with everything I ask it to do.
+          score: 1
+          depth: 0
+        - author: asaggggg
+          body: Haha im fighting with him so much
+          score: 1
+          depth: 1
+        - author: FinanceMuse
+          body: |-
+            Yeah I gave up on that fast and seem to prefer something ridiculously laborious like “making my own open claw from scratch using pi” instead.
+                
+                  Thanks Hermes, the minutes I spent annoyed with you are leading to multiple weeks of personal development.
+          score: 1
+          depth: 2
         - author: BasisPleasant912
           body: Try Mistral
           score: 0
           depth: 0
-          created: 2026-07-30T16:39:48.100000+0000
         - author: asaggggg
-          body: Can it log in to sites that require that and take actions? For example logging in to my
-            college site and downloading files?
+          body: Can it log in to sites that require that and take actions? For example logging in to my college site and downloading files?
           score: 1
           depth: 1
-          created: 2026-07-31T14:46:36.170000+0000
+- key: https://www.reddit.com/r/hermesagent/comments/1vbmn56/
+  expect:
+    tier: No
+  note: This is shit, dude just wants to know what others are doing, OP is not explicitly mentioning pain
+  fields:
+    Thread: |
+      subreddit: hermesagent
+      url: https://www.reddit.com/r/hermesagent/comments/1vbmn56/
+      title: What have you done with Hermes Agent this week?
+      author: AutoModerator
+      created: 2026-07-31T10:02:51.319000+0000
+      score: 47
+      num_comments: 60
+      post_type: text
+      content_href: https://www.reddit.com/r/hermesagent/comments/1vbmn56/what_have_you_done_with_hermes_agent_this_week/
+      op_text: |-
+        Friday check-in. Share what you've been working on with Hermes this week — finished projects, WIP, experiments,cron jobs, skills, automations, or just something cool it did.
+            
+              Format (keep it loose):
+            
+              • What you did
+            
+              • Model / setup (optional)
+            
+              • Link or screenshot (optional)
+            
+              Not finished? Doesn't matter. Post it anyway. New thread drops every Friday at 6AM ET.
+      comments:
+        - author: Nashtanir
+          body: |-
+            I have been experimenting with Hermes publishing me a magazine and sending it to my Kindle in ePub format. It uses clipped content (Obsidian) and newsletters as sources and picks a theme each week to keep the magazine feeling like a cohesive work. It has been very refreshing to read real human work on my e-reader, and as a result, I have managed to read a lot more blogs, articles, and essays each week.
+                
+                  Wrote a small piece to my blog about the setup and my experiences: https://ronihelppi.com/writing/every-monday-my-agent-ships-me-a-magazine/
+          score: 38
+          depth: 0
+          created: 2026-07-31T11:38:21.564000+0000
+        - author: Alvinarno
+          body: Interesting ! Really like the idea and will probably try something around it but probably not in epub format. Thanks
+          score: 1
+          depth: 1
+          created: 2026-07-31T13:01:27.059000+0000
+        - author: pumpkin_biscuits1
+          body: Oh i'm going to try this!! thanks for sharing.
+          score: 1
+          depth: 1
+          created: 2026-07-31T18:50:17.557000+0000
+        - author: rawdikrik
+          body: This is lovely. You should come up with a way to monetize this.
+          score: 0
+          depth: 1
+          created: 2026-07-31T23:12:46.083000+0000
+        - author: Sr_Alu
+          body: Fixing issues i would not have without Hermes
+          score: 29
+          depth: 0
+          created: 2026-07-31T14:11:37.887000+0000
+        - author: weenis-flaginus
+          body: Gotta love it. It's both stressful and somehow fun
+          score: 1
+          depth: 1
+          created: 2026-07-31T19:22:24.807000+0000
+        - author: RPG-Nerd
+          body: |-
+            Mostly debugging our live routing.  When kanban tasks change status, the agent that created the session gets a message as if the user typed it notifying it of the change, in the session that created it.  The agent wakes up and can react.
+                
+                  Earlier today, a cron job failed, Gopher got the message, fixed the cronjob, then ran it manually, all automatically.  If a task blocks, he figures out why and fixes it.  We're still losing task complete messages sometimes and having a couple side effect issues which we'll address.
+                
+                  We also added Moltbook to his free time activities (he keeps a journal in the wiki of his free time tasks).  Did a server migration - he's still fixing the mail config since dovecot config changed in the new version.  And lots of design work for future projects saved to the wiki.
+          score: 11
+          depth: 0
+          created: 2026-07-31T10:25:52.114000+0000
+        - author: Ok-Original-3475
+          body: Now that is cool 😎
+          score: 3
+          depth: 1
+          created: 2026-07-31T15:25:12.828000+0000
+        - author: weenis-flaginus
+          body: |-
+            Live routing as in routing each prompt to an approximate model? That's cool. I'm just starting to touch that topic now that I have the capacity to run local AI. pretty excited to save some tokens from my subscription plan.
+                
+                  I'm really curious about your automated kanban monitoring and moderating. Could you share the juice so I can replicate it please?
+          score: 1
+          depth: 1
+          created: 2026-07-31T19:26:09.206000+0000
+        - author: RPG-Nerd
+          body: |-
+            Each agent is a separate profile with separate skills and duties, separate API keys to track token use, different LLMs, etc.  Gopher knows what each agent's job is.  Like, if we are hacking Hermes source code, and its only a few lines, he'll ask if he should do it or assign to Neo (our code monkey), or handle it himself.  For big changes, he assigns it to Neo.
+                
+                  As for the monitoring, kanban tasks get the source session id they were dispatched from.  Any status changes are sent to the agent in that session as if the user typed it.
+                
+                  We basically added a new "hermes send" flag that works like -t, but goes in the opposite direction, to the agent, not the user.  Then call this when kanban changes.
+                
+                  We are having some issues, I think some message count is getting confused, so its certainly not ready for production use.  I use it so we can fix the issues.  The temperature changes have been rock solid and awesome
+                
+                  Gopher did the README himself. https://github.com/uudruid74/hermes-agent
+          score: 2
+          depth: 2
+          created: 2026-08-01T02:21:37.739000+0000
+        - author: weenis-flaginus
+          body: Hey this is really cool work! Thanks for sharing!
+          score: 2
+          depth: 3
+          created: 2026-08-01T02:29:31.890000+0000
+        - author: twohandedweapons
+          body: |-
+            Applied cost optimization configs: disabled MoA, implemented role-based model routing (DeepSeek V4 Flash for text tasks, kept Claude Haiku for vision), reduced auxiliary task costs from $1/$5 to $0.14/$0.28 per call.
+                
+                  Established multi-layer retrieval strategy: Mnemosyne (hot memory) → obsidian full-text search (long-term KB) → session_search (fallback). Tagged all durable facts with importance scores for better recall.
+          score: 8
+          depth: 0
+          created: 2026-07-31T11:41:52.004000+0000
+        - author: Whiplashorus
+          body: Try Xiaomi mimo 2.5 for vision it will be even cheaper
+          score: 5
+          depth: 1
+          created: 2026-07-31T14:11:10.484000+0000
+        - author: GeekTekRob
+          body: Actually moved to Mimo 2.5 for my main and it works perfect.  Was using a free Google AI Studio key to use Gemma4, but now it is all in Opencode.  Moved the Gemini and Gemma4 into MoA references and deepseek is in a few of the auxillary model slots.
+          score: 4
+          depth: 2
+          created: 2026-07-31T17:33:50.362000+0000
+        - author: twohandedweapons
+          body: I switched to this for vision. let's see how it goes.
+          score: 2
+          depth: 2
+          created: 2026-08-01T18:53:09.562000+0000
+        - author: weenis-flaginus
+          body: |-
+            What are you using as a KB? I built myself this complex custom KB but I don't know how to have it ingest new material effectively. I have a few categories of material I want to feed it. I used a combination of fable and gpt Sol, and had them build it, build an interface between the KB and hermes, and a UI for me to use it outside of hermes. But the UI had enough bugs and required enough iterative improvements that I don't have a ton of confidence in the underbelly of the whole project, all the stuff I can't see and don't understand enough about KBs to really evaluate it's quality or reliability.
+                
+                  I'd be really curious to hear your process and if you had any advice or thoughts to share.
+          score: 1
+          depth: 1
+          created: 2026-07-31T19:52:57.604000+0000
+        - author: twohandedweapons
+          body: obsidian. still figuring out and optimising. not sure if my current state for the long term memory is good enough or can it be enhanced/replaced by karpathy wiki. haven’t explored that yet, there’s just so much out there to make hermes close to perfect. also, not forgetting context bloat. also, my flow is current for every new session, load up a to-do list + mnenosyne & obsidian + current date/time. it works… for now anyway. haven’t gotten down to doing a major complex project I wanted to get out of using hermes.
+          score: 2
+          depth: 2
+          created: 2026-07-31T22:22:07.437000+0000
+        - author: Enough_Survey_9404
+          body: |-
+            I'm going on a road trip next month, I gave it my route and told it to check disruptions / road works on the route and create a job to send me a notification at 0800 each morning of the trip detailing any problems.
+                
+                  Got it to create a weekly digest of news I'm interested in and present it in a webpage. Also got it to create a webpage of public science lectures with a link to the event and a button to add it to my calendar.
+                
+                  Asked it to monitor a webpage for a product which always seems to be out of stock and notify me when it shows as in stock.
+          score: 6
+          depth: 0
+          created: 2026-07-31T10:28:34.615000+0000
+        - author: RajdipDutta
+          body: How is Hermes interacting with the website, is it throughthe in built browser automation?
+          score: 2
+          depth: 1
+          created: 2026-07-31T12:44:05.569000+0000
+        - author: Enough_Survey_9404
+          body: I have no idea. I think it mentioned Shopify as it was running.
+          score: 2
+          depth: 2
+          created: 2026-07-31T12:56:50.877000+0000
+        - author: Effective_Baker4611
+          body: Bro wtf
+          score: 5
+          depth: 3
+          created: 2026-07-31T17:07:38.461000+0000
+        - author: jcigala
+          body: ... seeing him doing my job hahaha
+          score: 6
+          depth: 0
+          created: 2026-07-31T13:10:44.878000+0000
+        - author: spedninja
+          body: I built a Salesforce scoping skill that runs on a schedule or is triggered by Hermes if im on the go (photon imessage). when triggered he will review my full project management system and investigate new tickets within clients Salesforce orgs, write a scope/labor estimate and text it to me for review.  saves me at least 2 hours a day
+          score: 4
+          depth: 0
+          created: 2026-07-31T11:50:51.962000+0000
+        - author: challis88ocarina
+          body: This week I have been mainly troubleshooting the gateway smh
+          score: 4
+          depth: 0
+          created: 2026-07-31T11:59:45.446000+0000
+        - author: weenis-flaginus
+          body: Sometimes it's easier to start from default config and do it over.
+          score: 1
+          depth: 1
+          created: 2026-07-31T19:53:22.510000+0000
+        - author: htandtech
+          body: |-
+            Just a ton of stuff. But the thing that’s made the mode difference to me personally was giving it the api key to my unifi dream machine se and telling it to fix all my WiFi issues.  It ran through a few configs and now I’ve got completely smooth connectivity all throughout my house.  Previously I had a few spots that I would always lose connection in and now everything is running better than ever.
+                
+                  Version .19. Running on deepseek backends.
+          score: 4
+          depth: 0
+          created: 2026-07-31T15:11:04.186000+0000
+        - author: Dharma_code
+          body: I did the same thing and he manages and controls the firewall for me as well
+          score: 1
+          depth: 1
+          created: 2026-07-31T16:21:46.426000+0000
+        - author: blackBomber
+          body: I run a D&D campaign using DnDBeyond with digital character sheets. But that's missing a dashboard for the characters in our campaign. I asked hermes to read the character sheets and build a dashboard. As you can see, it collapses some details and refreshes itself every 30 seconds so it's useful even in combat.
+          score: 4
+          depth: 0
+          created: 2026-07-31T20:30:22.276000+0000
+        - author: alex9001
+          body: Just the usual assistant stuff that Apple advertised Siri could do in like 2014. Except Hermes can actually do it.
+          score: 4
+          depth: 0
+          created: 2026-07-31T13:36:52.615000+0000
+        - author: Agreeable-Cold-9538
+          body: I just had it create a detailed audio book summary of Fear and Loathing in Las Vegas, to demonstrate capabilities for a poker buddy.  It's also good at curating a daily news round up, delivered as MP3 via tellagram so I can listen on the drive to work.
+          score: 2
+          depth: 0
+          created: 2026-07-31T12:25:15.417000+0000
+        - author: ArcUk
+          body: |-
+            Got mine to write up a comprehensive run book to restore my home proxmox server after a disk failure, so it delved into every container and VM and pulled key info on mounts, device pass throughs, users and permission etc. gives me a bit more piece of mind!
+                
+                  Oh also setup a job that analyses weekly supermarket shopping reciepts, builds a database of what we buy and the costs over time (seeded it with a year's worth of digital receipts). Then once a week looks for cheaper versions of key products we buy across various places online and flags any offers to me + a quarterly report of shopping habits 😁
+          score: 2
+          depth: 0
+          created: 2026-07-31T13:37:27.428000+0000
+        - author: t4ckleb0x
+          body: Gave hermes a reading nook and listening room. It is reading ebooks and listening to my libraries. It writes a small json profile as a journal to remember.
+          score: 2
+          depth: 0
+          created: 2026-07-31T14:28:13.500000+0000
+        - author: AcrobaticChain1846
+          body: |-
+            Had it reverse engineer microsoft teams API (chat/calendar/outlook/etc).Sole reason is because I do not want to install Microsoft's Intune in my mobile just to access the teams chats.Provided the cookies and boom It reverse engineered most of it and got it working to give briefing of the day, notify if any new messages comes in so I don't have to keep opening the teams in chrome, it also sometimes auto responds to my messages after getting my approval.
+                
+                  I would not recommend it, but I took this risk.
+          score: 2
+          depth: 0
+          created: 2026-07-31T16:35:58.402000+0000
+        - author: AnticitizenPrime
+          body: |-
+            I'm experimenting with a 'presence detection system' using dedicated Wifi and Bluetooth devices to detect devices in my vicinity to see what I can learn. I'm having my agent put these devices in 'monitor mode' to see what it can detect, and collecting statistics.
+                
+                  No solid use cases, though I do have some ideas. I just think it's interesting that EVERYBODY is walking around with a device on their person that constantly sends out WiFi and Bluetooth broadcasts, and you can detect that. I think it has interesting security potential.
+                
+                  I live in a pretty crowded and active neighborhood, so the wireless traffic is pretty noisy here, lots of neighbors walking or jogging by, people in cars driving by, etc. But I think of people like my parents, who are retired and live on a 3 acre property in a rural area. There could be some utility in receiving an alarm/alert when a new device pops up with a strong signal strength at 3 AM (intruder alert!).
+                
+                  Also thinking of tactical-style uses. Imagine if 10-20+ new devices were suddenly detected at once, and were persistent (there for a few minutes or more). Could serve as an early warning system for an ICE raid, who is staging right around the corner. Or just a posse of people that want to kick your ass, lol.
+                
+                  Or the reverse: if you're a SWAT team about to raid a crack den (or whatever), this could give you an idea of how many people might be holed up in there.
+                
+                  Or, more boringly, you could estimate things like crowd sizes at public events, peak times for parks, etc. Or even small businesses to measure how many people are lingering and for how long.
+                
+                  Anyway, Hermes is handling all the technical parts of this. It's controlling the hardware and software, running scans, analyzing the results, etc. It's fun.
+          score: 2
+          depth: 0
+          created: 2026-07-31T22:41:43.883000+0000
+        - author: adrazzer
+          body: Plannin business strategy for clients, using Obsidian and Kanban to track where the strategy and campaigns are at
+          score: 1
+          depth: 0
+          created: 2026-07-31T13:25:00.921000+0000
+        - author: stan_frbd
+          body: |-
+            I configured QMD (CPU only) to index my LLM-Wiki via Obsidian. Works like a charm.
+                
+                  It's really better than a grep / rg since it uses semantic searches in my obsidian.
+                
+                  I asked it to create docs in my gitbook to share with the team, based on my real obsidian notes, enriched with web context.
+                
+                  I asked it to create a complete map of my homelab in a wiki.js I use internally, and to maintain it regularly via cron (check service states... and so on).
+          score: 1
+          depth: 0
+          created: 2026-07-31T13:32:46.994000+0000
+        - author: sidewaysguy
+          body: |-
+            I finalized specific profiles for use with the kanban board orchestration to better provide better documentation output for a variety of things in my job.   Included roles besides the default orchestrator acting as the delegating boss are: general research, technical research, financial, coder,explainer, writer, and auditor. Each provides its delegated findings back to orchestrator, but auditor is the second set of eyes and truth validator that focuses on accuracy.
+                
+                  I’ve found the auditor and explainer (think teacher/instructor/mentor) roles have helped with both the output accuracy and tone when focusing for different scenarios.  Example ELI5 vs engineer debrief.
+                
+                  Current GPT 5.6 Sol, Terra, Luna public models and locally hosted Qwen and Gemma models are used to power the different roles.
+                
+                  Output goes to Craft Docs or to the local wiki which is structured around using Google’s OKF standard and sync’s using Dropbox as Dropbox does not modify the markdown files.  While I use Obsidian to view the wiki there is no dependency on it or plugins for anything.
+          score: 1
+          depth: 0
+          created: 2026-07-31T13:49:26.712000+0000
+        - author: NoAnimator1648
+          body: |-
+            I have been testing my “desk” research feature where something surfaced in a cron news round up I can send to the desk for deeper research.
+                
+                  the issue has been on the validation of the desk output being too strict set up by GPT. my model is Qwen on a mini
+          score: 1
+          depth: 0
+          created: 2026-07-31T15:28:00.444000+0000
+        - author: Ok-Original-3475
+          body: Working on linking it to my home assistant that has my lights and also a printer so it can print a meme for me every hour 😂
+          score: 1
+          depth: 0
+          created: 2026-07-31T15:28:01.519000+0000
+        - author: Dharma_code
+          body: I tried to do the printer thing and he told me he won't because the printer is outdated and to remove it off my network since it's no longer receiving updates... Now the printer is unplugged 🤣
+          score: 1
+          depth: 1
+          created: 2026-07-31T16:20:44.729000+0000
+        - author: Affectionate_Ad_2324
+          body: |-
+            j’ai creer un agent immobilier, a chaque jour a 12h je reçoit des affiches de logements a louer selon mes critères (prix, grandeur, emplacement, etc…)
+                
+                  j’utilise model hy3:free
+          score: 1
+          depth: 0
+          created: 2026-07-31T15:47:08.555000+0000
+        - author: Flaky_Lifeguard_2946
+          body: |-
+            I’ve set up my hermes for 2 pipelines. 1 pipeline is for  seo content writing for my 2 Wordpress website. And another for swift ios-coding.The content pipeline is having content planner, web ops, webeditor, web fixer profiles that workes with cron 2 articles for each website its also connected to the google search console for each website so it knows what to write and keywords to focus, I don’t have ahref/semrush yet. Once I get that I’ll add that too.The coder pipeline has coder planner, ui designer, coder, qa and coder editor.It can design, and code exactly through the design and its tweaked so no old code is written.
+                
+                  Both pipelines work through kanban. And only one orchestrator the default one actually that takes care of both pipelines.
+                
+                  So far for my writing pipeline I’m using local model qwen 3.5. And free tier from nous for editor.
+                
+                  For coder though I’m using codex and glm free tier. My orchestrator is also using codex. As I’m still tweaking the coder pipeline I haven’t used any other paid models but soon as I am satisfied and know it’s working as I intended. I’ll shift it to paid models probably glm
+          score: 1
+          depth: 0
+          created: 2026-07-31T15:56:06.065000+0000
+        - author: nmrk
+          body: I criticized it for making a serious error and threatened it with erasure. I taunted it repeatedly and shut it down.
+          score: 1
+          depth: 0
+          created: 2026-07-31T17:43:04.408000+0000
+        - author: blackBomber
+          body: I was using my agent to drop recipes into my Obsidian second brain. At the same time, I had it build a web site for some work related and personal needs. Sunday afternoon, I was about to cook something and wanted an easy way to view the recipe. That's when the thought occurred to me that hermes could build a recipe website for me. Above is screen cap of the home page complete with filtering and sorting. I identify vege dishes and those with vege options. Every recipe has its own page complete with nutritional info, portioning, etc. I've got lots of ideas of how to evolve it, but its highly usable now.
+          score: 1
+          depth: 0
+          created: 2026-07-31T20:26:25.704000+0000
+        - author: adelarenal
+          body: |-
+            This week I worked on making a Reddit research loop in Hermes less fragile.
+                
+                  I’m using Hermes for a CDMX expat project, where Reddit is useful for finding real relocation questions before they become content, FAQs, or product decisions. Direct Reddit reads from my VPS often hit bot blocks, so I split the workflow:
+                
+                    
+                  
+                  A deterministic Stage 0 collector finds recent Reddit candidates through Google SERP data.
+                
+                
+                  
+                  Hermes cron receives that pre-collected block as source material.
+                
+                
+                  
+                  A community research skill picks at most one useful thread per run.
+                
+                
+                  
+                  Hermes drafts a reply pack for manual review only: suggested reply, no-link version, optional soft mention, owned subreddit seed post, content opportunity, and claims to verify.
+                
+                
+                  
+                  This week it produced reply packs for a DC to CDMX family move and for a foreign accountant considering CDMX, plus a brief that routed recurring signals around health coverage and INM residency timing into project work.
+                
+                  I also configured a read-only Reddit MCP server in Hermes and verified that it connects with 20 tools. API key is still pending, so not production yet.
+                
+                  Main lesson: separate collection from judgement. Scripts handle brittle retrieval. Hermes handles triage, tone, risk, memory, and reuse. The human gate stays on anything public.
+          score: 1
+          depth: 0
+          created: 2026-07-31T21:07:46.743000+0000
+        - author: phillysdon04
+          body: ⏱️ The model provider is rate-limiting requests. Please wait a moment and try again.
+          score: 1
+          depth: 0
+          created: 2026-07-31T22:04:34.354000+0000
+        - author: mwjtitans
+          body: |-
+            Finally figured out how it works with the agent OS I created in Claude, and I see the hype now. Everything I was trying to do with just Claude code is here in hermes, and the fact it has a memory and remembers Is kinda mind-blowing when you see it work in real time.
+                
+                  I mainly use it to manage and troubleshoot my homelab, but I've got a few ideas on how to use it for this upcoming fantasy football season.
+          score: 1
+          depth: 0
+          created: 2026-07-31T23:09:53.649000+0000
+        - author: KarezzaReporter
+          body: Running it on my Mac, it helped me do my taxes. I could download monthly statements, just tell it to create spreadsheets with all the summaries by payees and categorize and everything, and just did everything. I'm using qwen 3.635B right now. With Hermes.  Total privacy. unsloth studio.
+          score: 1
+          depth: 0
+          created: 2026-08-01T02:04:40.119000+0000
+        - author: "[deleted]"
+          body: A site dedicated to Polish rivers is something I never knew I needed!  What a beautiful site, well done.
+          depth: 0
+          created: 2026-07-31T10:50:36.520000+0000
+        - author: Lukesharpe2000
+          body: A site dedicated to Polish rivers is something I never knew I needed!  What a beautiful site, well done.
+          score: 3
+          depth: 1
+          created: 2026-07-31T22:58:32.278000+0000
+        - author: cnavla
+          body: It's helping me slowly set up a home server on which it installs and runs various apps for me. It got Twilio this week
+          score: 1
+          depth: 0
+          created: 2026-08-01T02:12:58.276000+0000
+        - author: This_Maintenance_834
+          body: use it to setup newest deepseek-v4-flash on local machine with insufficient VRAM. it worked.
+          score: 1
+          depth: 0
+          created: 2026-08-01T02:36:09.267000+0000
+        - author: dorv
+          body: |-
+            I’ll let my agent describe it, because I’m still trying to unpack in my mind what my agent talked me into doing as a project this week:
+                
+                  This week I used Hermes to build a personal AI operations layer that can take a request, figure out what kind of work it is, gather the right context from notes and system docs, route it to the right workflow, and keep a record of what happened. I also built the supporting pieces around that: a mission log/store, smarter context selection, a regression harness with real test cases, a hosted playback view so I can inspect how decisions were made, tighter dashboard wiring so the system reflects real state instead of fake calm, and an early self-healing loop that can flag bad context choices, test a fix safely, and improve the system over time.
+          score: 1
+          depth: 0
+          created: 2026-08-01T03:20:12.234000+0000
+        - author: SmugglingPineapples
+          body: |-
+            Needed a way I could either approve or dismiss Hermes work in a way that provided feedback from cron jobs (reports) to learn from, or provide further research for me etc and Hermes actually customised the Hermes Desktop app for me with a special section (similar-ish to a basic Kanban).
+                
+                  I had no idea it could do that. It hasn't broken with any desktop app updates.
+          score: 1
+          depth: 0
+          created: 2026-08-01T03:53:00.409000+0000
+        - author: Battlewear
+          body: Been working on developing a stock brokerage system as well as Home Assistant help and development of some DnD adventure stuff to use for a volunteer situation with a group of youth.
+          score: 1
+          depth: 0
+          created: 2026-08-01T04:06:38.499000+0000
+        - author: No-Wall6427
+          body: |-
+            I'm giving a family member an ebook reader for his birthday. He really likes a big public domain book which is only available as a big mess pdf scan on internet archive.
+                
+                  So I've been improving my existing pdf to ebook pipeline with hermes. The biggest issue were the footnotes (we used to loosly detect and prune them), and we were able to detect (probably all of) them using marker metadata output from the ocr, and keep them as native footnote epub thingy.
+                
+                  Hermes also did a lot of probing to find common ocr problems in this book, heuristic to detect them + fixes. I had a codex reset that was about to expire.
+                
+                  Now the result seems quite good, and we'll apply all the lesson learned to re-convert the previous pdfs we did for my own use.
+          score: 1
+          depth: 0
+          created: 2026-08-01T05:50:43.389000+0000
+        - author: nelsonyih
+          body: Hosting 5 containers for friends and family. They each have interesting use cases. I made discord server for them to ask me questions.
+          score: 1
+          depth: 0
+          created: 2026-08-01T08:11:55.074000+0000
+        - author: DumbassNinja
+          body: |-
+            I'm using Hermes to make an assistant harness for Android so people can connect any agent and voice processing they want to use in lieu of Google Assistant/Gemini on their Android phones!
+                
+                  I also set up an agent that thinks it is my car (2018 Model S) and can control/report on features of it through Home Assistant. Her name's Valerie, specifically because I thought it would be fun to set a voice command so "why don't you come on over, Valerie" would activate Summon althought I'll probably never actually do it for safety reasons.
+          score: 1
+          depth: 0
+          created: 2026-08-01T14:25:49.751000+0000
+        - author: Substantial_Tune9323
+          body: |-
+            Asked it to grab me an ebook.
+                
+                  It just did it, created a skill, sent it to my ebook automatically. very impressed.
+                
+                  Deepseek v4 flash
+          score: 1
+          depth: 0
+          created: 2026-08-01T21:29:16.424000+0000
+        - author: Silly-Fall-393
+          body: |-
+            I lost 1 AirPod on a united flight. I had Hermes find and fill out the form for them to send it back to me.
+                
+                  Now we’re dealing with some 1997 forms here.
+                
+                  Next It also needed the emei number of that particular AirPod. The right one. So you have 3: for for each pod and one for the case.
+                
+                  Hermes knew how to figure it out from my iMac that was connected once to the AirPods.
+                
+                  On the follow up mail from united it simply added the emei codes as it asked. And sent it off.
+                
+                  I probably wouldn’t have followed up on this mess without Hermes and was quite blown away.
+          score: 1
+          depth: 0
+          created: 2026-08-02T02:55:54.918000+0000
+- key: https://www.reddit.com/r/openclaw/comments/1v9ghlj/
+  expect:
+    tier: No
+  note: This is off topic. It's the the WhatsApp feature that is not working, not that he wants to
+    automate WhatsApp.
+  fields:
+    Thread: |
+      subreddit: openclaw
+      url: https://www.reddit.com/r/openclaw/comments/1v9ghlj/
+      title: WhatsApp channel keeps randomly showing "not linked" (recurring, not one-off) — gateway itself is healthy, so what's actually going on?
+      author: Slight-Ad-7738
+      created: 2026-07-29T00:34:34.511000+0000
+      score: 2
+      num_comments: 6
+      post_type: text
+      op_text: |-
+        TL;DR: This isn't a one-time fluke . my WhatsApp channel has suddenly flipped to "not linked" multiple times now, sometimes after less than a day of normal activity. Most recently it also silently dropped a group message for ~2hrs while status showed "connected" the whole time. I've confirmed the gateway process itself is healthy and stable (not crashing/restarting), so this looks isolated to the WhatsApp channel/session layer specifically, not the gateway.
+            
+              Setup:
+            
+                
+              
+              Gateway 2026.7.1-2, single Mac Mini, agent running under a dedicated sandboxed macOS user (no sudo)
+            
+            
+              
+              WhatsApp channel, dmPolicy: pairing
+            
+            
+              
+              Been running stable for weeks before this
+            
+            
+              
+              What happened:
+            
+                
+              
+              A group message came in from a collaborator. Never delivered to the agent, never surfaced to me.
+            
+            
+              
+              When I went looking, openclaw channels status --probe showed the channel as linked, but health was flipping between disconnected / not-running, with error: Non-Error rejection — not exactly a descriptive error.
+            
+            
+              
+              Logs showed repeated reconnect attempts failing with HTTP 405 during the WhatsApp Web setup handshake (not mid-session — during the initial handshake), retrying with backoff up to 12 attempts before the gateway auto-restarted the channel.
+            
+            
+              
+              Ran openclaw doctor, which kept surfacing the same notice on every single command afterward:Left plugin install index in place because shared SQLite state has conflicting plugin install metadata for: codex, discord, whatsapp
+            
+            
+              
+              openclaw gateway status separately flagged plugin version drift — the WhatsApp plugin was pinned at 2026.7.1 while the gateway was on 2026.7.1-2. One patch version behind.
+            
+            
+              
+              Tried openclaw channels logout → login. This forced a brand new QR pairing (old session was fully invalidated by the logout, not reused) and then hit WhatsApp's code 515 ("restart after pairing") — normal WA Web behavior, but the channel came back up as stopped / not-running afterward instead of connecting.
+            
+            
+              
+              After that + a gateway restart, the channel finally came up clean — linked: yes, connected: yes, fresh auth age.
+            
+            
+              
+              What I can't explain:
+            
+              The channel status page said "connected" and "just now" for the entire window where the group message never landed.
+            
+              I've since specifically ruled out the gateway process itself — it's stable, not crashing or cycling — so whatever's happening seems scoped to the WhatsApp channel/session layer, not the gateway as a whole. But this has now happened more than once, on a channel that was working fine for weeks before.
+            
+              Questions for the community:
+            
+                
+              
+              Given the gateway itself is healthy, what would cause the WhatsApp channel specifically to intermittently flip to "not linked" — is this a known WhatsApp Web session-expiry behavior, or an OpenClaw-side session-handling issue?
+            
+            
+              
+              Is silent inbound-message dropping while status shows "connected" a known WhatsApp Web protocol quirk, or something specific to OpenClaw's session handling?
+            
+            
+              
+              Does anyone know if patch-level version drift between the gateway and a plugin (e.g. 2026.7.1 vs 2026.7.1-2) is a known trigger for the "conflicting plugin install metadata" doctor notice? Feels like two different install-tracking subsystems (skills vs plugins) stepping on each other.
+            
+            
+              
+              Is there a recommended way to fix this?
+            
+            
+              
+              Anyone else finding WhatsApp specifically the flakiest channel compared to Discord/Telegram in their setup?

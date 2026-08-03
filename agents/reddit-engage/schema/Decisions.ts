@@ -9,7 +9,6 @@ export interface Decisions {
   Feedback?: string;
   "Final output"?: string;
   "Final reasoning"?: string;
-  "Include as example"?: boolean;
   Input?: string;
   "Instructions hash"?: string;
   Kind?: "Reddit Thread Qualification" | "Reddit Reply" | "Reddit Reply Judge";
@@ -33,6 +32,7 @@ export interface Decisions {
    * relation → 287eec98-859f-4a64-a50d-75da2e965488
    */
   "Reddit Thread"?: string[];
+  Subject?: string;
   /**
    * relation → eddcfaaf-e6f1-4cea-a112-2b9d98426eb4
    */

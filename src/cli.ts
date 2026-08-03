@@ -5,19 +5,16 @@
 //   sflock pull --agent <id>            an agent's destination models → agents/<id>/schema/<Model>.ts
 //   sflock bind --client <name>         a reduck source's manifest     → src/clients/<name>/schema.ts
 //   sflock decisions list --agent <id>  the review queue (or --reviewed/--all), each flagged hasFeedback/overturned
-//   sflock decisions list --agent <id> --feedback   every decision I have given feedback on, with the feedback
+//   sflock decisions list --agent <id> --feedback   the WORKLIST: every decision carrying a note,
+//                                       with the note — `learn` clears them, so this list drains
 //   sflock decisions show --agent <id> <decision> [--feedback]   one decision, or just its feedback
 //   sflock prompts [--check]            re-inline every prompt's shared sections from prompts/*.md
 //                                       (--check reports drift instead, and exits 1)
-//   sflock eval cases --agent <id>      refresh a prompt's ground_truth.yaml from your reviews
-//                                       (additive — hand edits, comments and `skip:` reasons survive)
-//   sflock eval judge --agent <id> [candidate.md]   does the SCORER agree with you — the output you
-//                                       committed must pass, the draft you overturned must fail
-//   sflock eval reply --agent <id> [candidate.md] [--tier T1 --limit n]   does the DRAFTER satisfy
-//                                       the scorer — over the reviewed corpus, or any threads at all
-//   sflock eval qualify --agent <id> [candidate.md] [--only ids]   does the judgment match your LABEL
-//                                       — no scorer (the Output is an enum), no store read (each case
-//                                       carries its own evidence): the cheap one, run it on every edit
+//   sflock learn <decision> --agent <id> [--prompt <key>] [--expect <json>]   a decision becomes a
+//                                       ground-truth CASE: your note is the rule, the frozen evidence
+//                                       the fixture, and the row stops asking
+//   sflock eval --agent <id> --prompt <key> [candidate.md] [--only ids]   score a prompt against that
+//                                       corpus — one verb, the grading derived from the Output
 //   sflock docs list                    the Writer's documents (agent-agnostic — one shared table)
 //   sflock docs show <doc>              one document, its body as markdown
 //   sflock docs push <doc> [file]       a new version of one document — saved AND applied live in the
@@ -36,18 +33,20 @@
 // a commit. What files cannot do for themselves is keep a shared section in step with its source, so
 // that — and only that — is a command (src/prompts.ts).
 //
-// eval is the CALIBRATION half of editing a prompt: a commit changes a judgment's instructions, eval
-// says whether it is better. HOW a judgment is graded follows from its Output. Free text needs a
-// model, so the scorer is itself a prompt (the agent's `judge` folder), authored and versioned like
-// the one it grades; an enum needs nothing but the label you recorded, which is `qualify`. And WHERE
-// the corpus lives follows from whether a human reviewed it: a reviewed prompt's ground truth is the
-// review history (a query — every review already froze the evidence, the attempt and the human's
-// word, so a copy would be a second record of rows the CRM owns), while a calibrated prompt froze
-// nothing, so its cases carry their own evidence and the run never reads the store (src/eval.ts).
+// learn and eval are INVERSES, and together they are the whole calibration loop: `learn` turns a
+// Decision into a case, `eval` turns cases into a score. One writes the corpus, one reads it, and
+// nothing else touches it. A corpus is SELF-CONTAINED — every case carries the evidence it was
+// labelled on — which is what lets `learn` retire the row it came from and `eval` run offline.
 //
-// Review is read-only with ONE exception, and it is a prose exception (README #2): `docs push` hands
-// a document back. Prompt text used to be the other, because it lived in a CRM row; it is a file now,
-// so editing it is editing a file and `sflock` has nothing to say about it.
+// HOW a prompt is graded follows from its Output, and that is now derived rather than named: a
+// checkable Output (an enum, a boolean) is compared to your label, prose is ruled on by the agent's
+// scorer, and which is which comes from one declaration — the scorer says what it `grades`
+// (config.ts). Hence one `eval` verb where there were three (src/eval.ts).
+//
+// Review is read-only with TWO exceptions, and both write PROSE, never pipeline state (README #2):
+// `docs push` hands a document back, and `learn` moves a note out of the CRM and into git. Prompt
+// text used to be a third, because it lived in a CRM row; it is a file now, so editing it is editing
+// a file and `sflock` has nothing to say about it.
 
 import "./env.js";
 import { Command } from "commander";
@@ -59,7 +58,7 @@ import { bind } from "./scripts.js";
 import { renderError } from "./errors.js";
 import { STORES } from "./stores/index.js";
 import { createReviewer } from "./decide.js";
-import { pullCases, evalJudge, evalReply, evalQualify } from "./eval.js";
+import { learn, evaluate } from "./eval.js";
 import { syncPrompts } from "./prompts.js";
 import * as writer from "./docs.js";
 import { renderFeedback } from "./review.js";
@@ -121,7 +120,7 @@ decisions
 	.requiredOption("--agent <id>", "agent under agents/ whose config.ts names the Decisions table")
 	.option("--reviewed", "only reviewed decisions (Final output set)")
 	.option("--all", "both pending and reviewed")
-	.option("--feedback", "only decisions carrying human feedback, each with the feedback itself — spans both states unless you narrow the scope")
+	.option("--feedback", "only decisions carrying a NOTE — the worklist, because a note is a TODO and `sflock learn` clears it. Spans both states unless you narrow the scope.")
 	.action(async ({ agent, reviewed, all, feedback }: { agent: string; reviewed?: boolean; all?: boolean; feedback?: boolean }) => {
 		const reviewer = createReviewer(loadAgent(agent));
 		// Feedback lives in BOTH states — a Save carries a note with no Final output, a commit carries
@@ -218,119 +217,87 @@ docs
 		console.log(JSON.stringify(await writer.push(doc, { markdown, title }), null, 2));
 	});
 
-// eval — the calibration half of editing a prompt file: a commit writes the next version of a
-// judgment's instructions, this says whether it is better. Read-only, agent-agnostic, and asked in
-// a fixed order — first whether the SCORER agrees with you, then whether the DRAFTER satisfies the
-// scorer. Grading free text needs a model, so the scorer is itself a Prompt (the agent's `judge`
-// spec), improved through the very same three verbs as the prompt it grades.
+// learn — a Decision becomes a CASE, and the two verbs below are inverses: this writes the corpus,
+// `eval` reads it. It is the one write `sflock` has beside `docs push`, and it is a write to GIT —
+// the row it reads is only ever retired.
 //
-// The corpus is a QUERY, not a file (src/eval.ts): every review already froze the whole example, so
-// a ground-truth file would be a second copy of rows the CRM owns. `cases` prints it — redirect it
-// for a snapshot. Report goes to stdout because for an eval the report IS the answer.
-const evaluate = program
+// The loop it closes: I see a bad draft in the review app and leave a note. That note is a TODO —
+// "this regressed, do something". `learn` is the something: the note becomes the `note` of a
+// ground-truth case, carrying the evidence it was ruled on, and the Decision stops asking. So a
+// complaint is recorded exactly once, in the place that can hold a machine to it.
+//
+// --prompt is the one thing a human must supply and a machine cannot infer: WHICH judgment this
+// teaches. It defaults to the decision's own kind — but the sharpest case is the other one, because
+// a note left on a REPLY ("this thread is off topic", "he's a student") is a complaint about
+// QUALIFY, and until now the only way to handle it was to drop the case with a `skip:`. Now it is
+// routed: `projectInput` reduces the frozen evidence to exactly the fields that judgment sees.
+program
+	.command("learn")
+	.argument("<decision>", "Decision id, Notion URL, or app URL")
+	.description("Turn a decision into a ground-truth case: your note becomes the rule, the frozen evidence becomes the fixture, and the row stops asking. An APPROVED decision stays (it is history — only the note moves); one you never approved is archived and its entity dropped.")
+	.requiredOption("--agent <id>", "agent under agents/ whose Decisions table holds it")
+	.option("--prompt <key>", "which judgment this teaches (default: the decision's own kind) — use it to route a qualification complaint left on a reply")
+	.option("--expect <json>", `the Output that SHOULD have come out, e.g. '{"tier":"No"}' — required when --prompt is not the decision's own kind`)
+	.action(async (decision: string, f: { agent: string; prompt?: string; expect?: string }) => {
+		const expect = f.expect ? (JSON.parse(f.expect) as Record<string, unknown>) : undefined;
+		console.log(JSON.stringify(await learn(f.agent, decision, { prompt: f.prompt, expect }), null, 2));
+	});
+
+// eval — the calibration half of editing a prompt file: a commit writes the next version of a
+// judgment's instructions, this says whether it is better. ONE verb, because every eval is one
+// sentence — run a prompt over its cases, reduce each output to a verdict, compare the verdict to
+// what was expected — and only the REDUCTION varies. Which reduction applies is DERIVED from one
+// declaration, the scorer's `grades` (config.ts):
+//
+//   --prompt qualify   nothing grades it   → the Output is the verdict: `===`, no model, offline
+//   --prompt reply     `judge` grades it   → draft it, then the scorer rules on the draft
+//   --prompt judge     it grades `reply`   → its cases are DERIVED from reply's corpus, each read
+//                                            twice: `expect` must be ruled valid, `reject` invalid
+//
+// Read-only. The report goes to stdout because for an eval the report IS the answer.
+program
 	.command("eval")
-	.description("Calibrate an agent's prompts: does the judge agree with you, does the drafter satisfy the judge.");
-
-evaluate
-	.command("cases")
-	.description("Refresh the ground-truth YAML beside the agent from your reviews. ADDITIVE: an entry already in the file is left untouched — your edits, your comments and your `skip:` reasons all survive, which is why this is a file and not a query. Only unseen decisions are appended.")
-	.requiredOption("--agent <id>", "agent under agents/ whose Decisions carry the reviews")
-	.option("--prompt <key>", "the graded prompt's key in config.prompts", "reply")
-	.action(async ({ agent, prompt }: { agent: string; prompt: string }) => {
-		const { path, added, kept, total } = await pullCases(agent, prompt);
-		console.log(`${path}: ${added} added, ${kept} kept, ${total} total`);
-	});
-
-evaluate
-	.command("judge")
-	.argument("[candidate]", `a copy of the judge's PROMPT.md; omit to score the committed one`)
-	.description("Does the SCORER agree with you? Each reviewed decision is one or two assertions: the output you committed MUST pass, the draft you overturned MUST fail. Nothing is re-generated — these are the texts you actually ruled on.")
-	.requiredOption("--agent <id>", "agent under agents/ whose config.ts declares a `judge` prompt")
-	.option("--prompt <key>", "the graded prompt's key in config.prompts", "reply")
-	.action(async (candidate: string | undefined, { agent, prompt }: { agent: string; prompt: string }) => {
-		const { label, positives, negatives, errored, rows } = await evalJudge(agent, prompt, candidate);
-		const ok = (g: { valid: boolean; expect: boolean }) => g.valid === g.expect;
-		const tally = (g: { valid: boolean; expect: boolean }[]) => `${g.filter(ok).length}/${g.length}`;
-		console.log(`\n=== judge ${label} — agrees ${tally([...positives, ...negatives])}${errored ? `, ${errored} unscoreable` : ""}`);
-		console.log(`    committed  ${tally(positives)}  (must pass)`);
-		console.log(`    overturned ${tally(negatives)}  (must fail)`);
-		for (const r of rows)
-			for (const g of r.got) {
-				// An unscoreable case is neither agreement nor disagreement — flagged apart, never tallied.
-				if (!("valid" in g)) {
-					console.log(`! ${g.text.padEnd(10)} ${"—".padEnd(7)}  ${r.c.name}\n      ${g.error}`);
-					continue;
-				}
-				console.log(`${ok(g) ? "  " : "✗ "}${g.text.padEnd(10)} ${g.valid ? "valid  " : "invalid"}  ${r.c.name}`);
-				if (!ok(g)) for (const w of g.why) console.log(`      ${w}`);
-			}
-	});
-
-evaluate
-	.command("reply")
-	.argument("[candidate]", `a copy of the prompt's PROMPT.md; omit to score the committed one`)
-	.description("Does the DRAFTER satisfy the judge? Re-drafts each thread under the candidate instructions and rules on the result. With no filters it uses the reviewed corpus (frozen evidence, so runs compare); --tier/--limit grade any threads at all — that is what having a judge buys.")
+	.argument("[candidate]", "a copy of the prompt's PROMPT.md; omit to score the committed one")
+	.description("Score a prompt against its ground truth. How it is graded follows from the Output — a checkable one is compared to your label, prose is ruled on by the agent's scorer — so there is one command for all three questions.")
 	.requiredOption("--agent <id>", "agent under agents/ whose prompt is being graded")
-	.option("--prompt <key>", "the graded prompt's key in config.prompts", "reply")
-	.option("--tier <tier>", "grade stored threads at this tier instead of the reviewed corpus")
-	.option("--subreddit <names...>", "narrow those threads to these subreddits")
-	.option("--limit <n>", "keep only the newest <n>")
-	.action(async (candidate: string | undefined, f: { agent: string; prompt: string; tier?: string; subreddit?: string[]; limit?: string }) => {
-		const select = f.tier || f.subreddit || f.limit ? { tier: f.tier, subreddit: f.subreddit, limit: f.limit ? Number(f.limit) : undefined } : undefined;
-		const { label, judge, rows } = await evalReply(f.agent, f.prompt, candidate, select);
-		const scored = rows.filter((r) => "valid" in r);
-		const bad = rows.length - scored.length;
-		console.log(`\n=== ${f.prompt} ${label}, judged by ${judge} — valid ${scored.filter((r) => r.valid).length}/${scored.length}${bad ? `, ${bad} unscoreable` : ""}`);
+	.requiredOption("--prompt <key>", "the prompt's key in config.prompts")
+	.option("--only <ids...>", "grade only the cases whose key contains one of these — tune one case without paying for the set")
+	.option("--tier <tier>", "grade live subjects at this tier instead of the corpus (scorer-graded prompts only — that is what having a judge buys)")
+	.option("--subreddit <names...>", "narrow those live subjects")
+	.option("--limit <n>", "keep only the newest <n> of them")
+	.action(async (candidate: string | undefined, f: { agent: string; prompt: string; only?: string[]; tier?: string; subreddit?: string[]; limit?: string }) => {
+		const { label, path, mode, skipped, rows } = await evaluate(f.agent, f.prompt, candidate, {
+			only: f.only,
+			tier: f.tier,
+			subreddit: f.subreddit,
+			limit: f.limit ? Number(f.limit) : undefined
+		});
+		if (skipped) console.error(`${skipped} case(s) skipped by the ground truth`);
+		console.error(`[eval] ${f.prompt} ${label} — ${mode} — ${path}`);
 		for (const r of rows) {
-			if (!("valid" in r)) {
+			if (r.error) {
 				console.log(`! ${r.name}\n      ${r.error}`);
 				continue;
 			}
-			console.log(`${r.valid ? "  " : "✗ "}${r.name}`);
-			if (!r.valid) {
-				for (const w of r.why) console.log(`      ${w}`);
-				console.log(`      drafted: ${JSON.stringify(r.drafted).slice(0, 160)}`);
-				if (r.mine) console.log(`      yours:   ${JSON.stringify(r.mine).slice(0, 160)}`);
-			}
-		}
-	});
-
-// qualify — the third question, and the only one with no model in the scoring loop: does the
-// judgment produce the LABEL you recorded? For a prompt whose Output is an enum the ground truth IS
-// the answer, so there is nothing for a scorer to rule on. Its corpus is a self-contained file
-// (each case carries its own evidence), so this runs offline and reproducibly — cheap enough for
-// every edit, which is what a filter that nobody reviews needs.
-evaluate
-	.command("qualify")
-	.argument("[candidate]", `a copy of the prompt's PROMPT.md; omit to score the committed one`)
-	.description("Does the judgment match your label? Each case in the ground truth carries its own evidence and the Output you recorded — no scorer, no store read. Reports exact agreement, agreement on the GATE (does it advance, per the prompt's own `resolve`), and pre-screen kills.")
-	.requiredOption("--agent <id>", "agent under agents/ whose prompt is being graded")
-	.option("--prompt <key>", "the graded prompt's key in config.prompts", "qualify")
-	.option("--only <ids...>", "grade only the cases whose key contains one of these — tune one case without paying for the set")
-	.action(async (candidate: string | undefined, f: { agent: string; prompt: string; only?: string[] }) => {
-		const { label, path, skipped, rows } = await evalQualify(f.agent, f.prompt, candidate, f.only);
-		const scored = rows.filter((r) => !("error" in r) || !r.error);
-		const tally = (p: (r: (typeof rows)[number]) => boolean) => rows.filter(p).length;
-		if (skipped) console.error(`${skipped} case(s) skipped by the ground truth`);
-		console.error(`[eval] ${f.prompt} ${label} — ${path}`);
-		for (const r of rows) {
-			if ("error" in r && r.error) {
-				console.log(`! ${r.f.key}\n      ${r.error}`);
-				continue;
-			}
 			// ☠ before ✗: a pre-screen kill is the worse failure, because in production the read this
-			// row was scored on would never have happened at all.
-			const flag = r.killed ? "☠ " : r.exact ? "  " : "✗ ";
-			const id = r.f.key.match(/comments\/(\w+)/)?.[1] ?? r.f.key;
-			const phase = r.twoPhase ? `pre=${JSON.stringify(r.pre).slice(0, 18).padEnd(18)}` : " ".repeat(18);
+			// case was scored on would never have happened at all.
+			const flag = r.killed ? "☠ " : r.ok ? "  " : "✗ ";
+			const brief = (v: unknown) => (v === undefined ? "" : JSON.stringify(v).slice(0, 60));
 			console.log(
-				`${flag}${id}  want=${JSON.stringify(r.f.expect).padEnd(16)} ${phase} got=${JSON.stringify(r.got).padEnd(16)} ${r.f.note?.split("\n")[0].slice(0, 50) ?? ""}`
+				`${flag}${r.name.replace(/^https:\/\/www\.reddit\.com/, "")}  ` +
+					`want=${brief(r.expect).padEnd(16)} ${r.pre !== undefined ? `pre=${brief(r.pre).padEnd(14)}` : ""} ` +
+					`got=${brief(r.got).padEnd(16)} ${r.note?.split("\n")[0].slice(0, 48) ?? ""}`
 			);
-			if (!r.exact) for (const c of r.claims ?? []) console.log(`      ${c}`);
+			if (!r.ok) for (const w of r.why) console.log(`      ${w}`);
 		}
-		const unscored = rows.length - scored.length;
+		const scored = rows.filter((r) => !r.error);
+		const n = (p: (r: (typeof rows)[number]) => unknown) => rows.filter(p).length;
 		console.log(
-			`\n=== ${f.prompt}: exact ${tally((r) => !!r.exact)}/${rows.length}, gate ${tally((r) => r.gate !== false)}/${rows.length}, pre-screen kills ${tally((r) => !!r.killed)}${unscored ? `, ${unscored} unscoreable` : ""} ===`
+			`\n=== ${f.prompt}: ${n((r) => r.ok)}/${rows.length} agree` +
+				(rows.some((r) => r.gate !== undefined) ? `, gate ${n((r) => r.gate !== false)}/${rows.length}` : "") +
+				(rows.some((r) => r.killed) ? `, pre-screen kills ${n((r) => r.killed)}` : "") +
+				(rows.length - scored.length ? `, ${rows.length - scored.length} unscoreable` : "") +
+				" ==="
 		);
 	});
 

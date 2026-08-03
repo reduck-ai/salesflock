@@ -1,360 +1,60 @@
-// The calibration surface — agent-agnostic, read-only, and the counterpart of editing a prompt file:
-// a commit changes a judgment's instructions, this says whether it is any better. Two evals, because
-// there are two questions and they must be asked in this order:
+// The calibration loop, and it is two verbs that are inverses: `learn` turns a Decision into a
+// CASE, `evaluate` turns cases into a SCORE. One writes the corpus, one reads it, nothing else
+// touches it.
 //
-//   evalJudge  — does the SCORER agree with the human?   (its ground truth is the review history)
-//   evalReply  — does the DRAFTER satisfy the scorer?    (needs no labels, so it runs anywhere)
+// ONE CORPUS SHAPE, and it is SELF-CONTAINED (`Fixture`, below). A case carries the evidence it was
+// labelled on, so a run reads no store, works offline and is reproducible. The corpus used to come
+// in two shapes — a pointer at the Decision for a reviewed prompt, a self-contained fixture for a
+// calibrated one — and the pointer was justified by the Decision living forever. `learn` retires the
+// Decision, so that premise is gone and with it the additive re-pull, the `seen` set and the store
+// join every eval used to pay for.
 //
-// Free text cannot be scored by `===`, so the scorer is a prompt like everything else (the agent's
-// `judge` folder): authored, fingerprinted and diffed exactly as the prompt it grades. A hand-written
-// checker would drift from the instructions it checks; a prompt cannot, because a run reports the
-// fingerprint that scored it. Every eval refuses to run at all on a prompt whose shared sections have
-// drifted from the pool (`load`, below) — scoring text nobody committed proves nothing.
+// ONE GRADER, because every eval is the same sentence: run a prompt over cases, reduce each output
+// to a verdict, compare the verdict to what was expected. Only the REDUCTION varies, and it has two
+// forms — the output IS the verdict (a checkable Output: an enum, a boolean), or a scorer prompt
+// rules on it (prose, which `===` cannot grade). Which one applies is not inferred: a scorer
+// declares what it `grades` (config.ts), and three behaviours follow from that one string:
 //
-// THE CORPUS IS A QUERY, NOT A FILE. Every review already freezes the whole example — the evidence
-// (`Input`), the model's attempt (`Output`) and the human's word (`Final output`) — so a ground-truth
-// file would be a second copy of rows the CRM owns, out of date the moment anyone reviews again.
-// `cases()` derives it instead, and `sflock eval cases` prints it for eyeballing (redirect it for a
-// snapshot). That holds because a review FROZE the evidence; a calibrated prompt freezes nothing, so
-// its corpus obeys the opposite rule — see `evalQualify` at the bottom of this file.
+//   eval qualify   nothing grades it        → the output is the verdict, compared to `expect`
+//   eval reply     `judge` grades it        → draft, then the scorer reduces the draft
+//   eval judge     it grades `reply`        → its cases are DERIVED from reply's corpus:
+//                                             `expect` must be ruled valid, `reject` invalid
 //
-// An overturn yields a PAIR on one decision — the committed text is a positive, the draft it
-// replaced a negative — same evidence, opposite verdict, which is the sharpest thing a binary judge
-// can be held to. A decision confirmed verbatim yields one positive that is MODEL-written, and that
-// class matters: a corpus whose positives are all human-written calibrates a style detector, not a
-// rule checker.
-//
-// FAITHFUL BY CONSTRUCTION, twice over. The re-judge goes through the agent's own decider
-// (`judgmentContext`), swapping only the instructions — so subject resolution, the Input projection,
-// the evidence render and the few-shot block are the runtime's, not a copy. And a case is re-judged
-// against its FROZEN Input rather than a fresh read of the row: the human labelled THAT evidence,
-// and the thread has moved on since (more comments, a different score). Scoring against today's
-// thread would grade the candidate on evidence nobody ever ruled on.
+// FAITHFUL BY CONSTRUCTION: the projection is the runtime's own (`projectInput` against the live
+// Input schema, then the agent's `renderEvidence`), and a drafted case goes through the agent's own
+// `judgmentContext`, swapping only the instructions — so an eval measures the code that runs, never
+// a copy of it.
 
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { isSeq, parse, parseDocument, stringify } from "yaml";
+import { parse, stringify } from "yaml";
 import { AGENTS, type Agent } from "../agents/index.js";
 import { createReviewer, runJudgment, type Subject } from "./decide.js";
 import { promptDir, syncPrompts, type Contract } from "./prompts.js";
 import { compileAuthoring } from "./stores/notion.codec.js";
-import { feedbackOf } from "./review.js";
 import { projectInput } from "./project.js";
-import { getStore, queryAll, type PromptSpec, type Store } from "./stores/index.js";
+import { getStore, type PromptSpec, type Store } from "./stores/index.js";
 import { mapLimit } from "./concurrency.js";
 import { schemaError } from "./output.js";
 import { renderError } from "./errors.js";
 
-// A labelled example, derived from one reviewed Decision. `good` is what the human committed (they
-// would post it: the judge must pass it); `bad` is the draft they replaced, present only on an
-// overturn (the judge must fail it). Both are whole Output objects, not one field, because that is
-// what the judge's Input takes — the reply's Output spliced onto the reply's Input.
-export interface Case {
-	id: string;
-	name: string;
-	input: Record<string, string>; // the FROZEN evidence map the human ruled on
-	good: Record<string, unknown>;
-	bad?: Record<string, unknown>;
-	note?: string; // the human's own stated criterion, when they left one
-}
+// ─── the corpus ──────────────────────────────────────────────────────────────────────────────────
 
-// The agent's funnel module — the ONE thing core cannot derive: how to resolve a subject into
-// judgeable evidence, and how to name a set of them. Structural, not a registration: it is reached
-// by dynamic import on the one path that needs it, so the roster stays static-import-only and the
-// review app's bundle never pulls in tools.ts (which imports the reduck runner and the store).
-interface AgentFunnel {
-	decider: {
-		judgmentContext: (
-			key: string,
-			handle: string | Subject
-		) => Promise<{
-			system: string;
-			examples?: string;
-			evidence: string;
-			input: Record<string, string>;
-			outputSchema: Record<string, unknown>;
-		}>;
-	};
-	tools: { threads: { get: (select: object) => Promise<{ url: string; title: unknown }[]> } };
-}
-
-// The agent + the pieces every eval needs from it, resolved once.
-interface Ctx {
-	agent: Agent;
-	store: Store;
-	reviewer: ReturnType<typeof createReviewer>;
-	kind: string; // the graded prompt's Prompt Name
-	spec: PromptSpec; // the graded prompt's semantics — `resolve` is what "this outcome advances" means
-}
-
-const load = async (id: string, prompt: string): Promise<Ctx> => {
-	const agent = AGENTS[id];
-	if (!agent) throw new Error(`no agent "${id}" — register it in agents/index.ts.`);
-	const { config } = agent;
-	const spec = config.prompts?.[prompt];
-	if (!spec) throw new Error(`agent "${id}" declares no prompt "${prompt}"`);
-	// A drift check before anything is scored: a prompt whose inlined section no longer matches its
-	// source is not the prompt anyone thinks they are calibrating, so a green run on it certifies
-	// nothing. Local and cheap, and it is the same function `sflock prompts --check` and the test call.
-	const drifted = (await syncPrompts()).filter((p) => p.drifted.length);
-	if (drifted.length)
-		throw new Error(
-			`refusing to score a drifted prompt: ${drifted
-				.map((p) => `${p.agent}/${p.key} (${p.drifted.join(", ")})`)
-				.join("; ")} — run \`sflock prompts\` to re-inline from the pool.`
-		);
-	return {
-		agent,
-		store: getStore(config.destination),
-		reviewer: createReviewer(agent),
-		kind: spec.name,
-		spec
-	};
-};
-
-// The SCORER's live contract, resolved only by the evals that need a model to grade. `evalQualify`
-// does not: its Output is an enum, so the ground truth IS the answer and `===` settles it. Demanding
-// a `judge` prompt there would make a calibrated stage declare a scorer it never runs.
-const scorerOf = async ({ agent, reviewer }: Ctx): Promise<Contract> => {
-	const judge = agent.config.prompts?.judge;
-	if (!judge) throw new Error(`this agent declares no "judge" prompt to score with`);
-	return reviewer.prompt("judge");
-};
-
-// The instructions under test: a candidate file, or the committed one. A candidate is just a copy of
-// a PROMPT.md — shared-section markers in, or already flat — and `compileAuthoring` drops them exactly
-// as the loader does, so what is scored is what committing that file would ship. Which is also why
-// editing a prompt needs no tool at all now: cp, edit, eval, cp back, commit.
-const instructions = async (live: Contract, candidate?: string): Promise<{ system: string; label: string }> =>
-	candidate
-		? { system: compileAuthoring(await readFile(candidate, "utf8")), label: candidate }
-		: { system: live.body, label: `committed (${live.hash})` };
-
-// gtPath(id, prompt) — where a graded prompt's ground truth lives: IN its own folder, beside the
-// instructions it grades and the schemas they are held to. Convention, not config — one judgment is
-// one directory, so nothing needs declaring. What is INSIDE differs by whether a human ruled on the
-// prompt (a pointer vs a self-contained fixture); where it sits does not.
-const gtPath = (id: string, prompt: string): string => join(promptDir(id, prompt), "ground_truth.yaml");
-
-const HEADER = `# Ground truth for the reply judge — one entry per REVIEWED decision, refreshed by
-#   sflock eval cases --agent <agent> --prompt <prompt>
-# which UPSERTS on \`id\` and never touches an entry that is already here: your edits and comments
-# survive every re-pull, which is the whole reason this is a file and not a query.
-#
-# \`good\` is the output you committed (the judge must pass it); \`bad\` is the draft you replaced
-# (it must fail). The EVIDENCE is not copied here — it is read from the Decision itself, so a case
-# is scored against the row, exactly as the qualification eval does.
-#
-# A case that is not ground truth gets a \`skip:\` naming why, rather than being deleted — a
-# deletion is silently undone by the next pull, and the reason is worth keeping.
-`;
-
-// harvest(ctx) — the corpus AS THE CRM HAS IT: every reviewed Decision of the graded kind.
-// `feedbackOf` is the one extractor of the human delta, so an overturn's `from` (the judge's
-// original) IS the negative and its `to` the positive; with no overturn the committed output is the
-// model's own, which is the model-written positive the set needs. This is the SOURCE; the file
-// below is the curated artifact, and the eval reads the file.
-const harvest = async ({ store, reviewer, agent, kind }: Ctx): Promise<Case[]> => {
-	const rows = await queryAll(store, agent.config.models.Decisions, {
-		property: "Final output",
-		rich_text: { is_not_empty: true }
-	});
-	return rows.flatMap((r) => {
-		const name = String(r.fields.Name ?? r.id);
-		if (reviewer.kindOf(r.fields) !== kind) return [];
-		const fb = feedbackOf(r.fields);
-		return {
-			id: r.id,
-			name,
-			input: JSON.parse(String(r.fields.Input)) as Record<string, string>,
-			good: JSON.parse(String(r.fields["Final output"])) as Record<string, unknown>,
-			...(fb?.outputChange ? { bad: fb.outputChange.from as Record<string, unknown> } : {}),
-			...(fb?.note ? { note: fb.note } : {})
-		};
-	});
-};
-
-// pullCases — refresh the ground-truth file from the CRM, ADDITIVELY. An entry already in the file
-// is left exactly as it is (its text, its `skip`, its comments); only decisions the file has never
-// seen are appended. That is what makes the file curatable: reviewing more never overwrites the
-// judgement you already recorded about a case, and a `skip` can never be silently resurrected.
-// Comments survive because the merge edits the parsed DOCUMENT, not a re-serialised object tree.
-export const pullCases = async (id: string, prompt: string) => {
-	const ctx = await load(id, prompt);
-	const path = gtPath(id, prompt);
-	const existing = await readFile(path, "utf8").catch(() => "");
-	const doc = existing.trim() ? parseDocument(existing) : parseDocument(`${HEADER}[]`);
-	const seq = doc.contents as unknown as { items: unknown[]; add: (v: unknown) => void };
-	const seen = new Set((doc.toJS() as { id: string }[] | null)?.map((e) => e.id) ?? []);
-	const fresh = (await harvest(ctx)).filter((c) => !seen.has(c.id));
-	// The frozen Input is deliberately NOT written: it lives on the Decision, and copying it here
-	// would be a second record of evidence the CRM owns — stale the moment a renderer improves.
-	for (const c of fresh)
-		seq.add(doc.createNode({ id: c.id, name: c.name, good: c.good, ...(c.bad ? { bad: c.bad } : {}), ...(c.note ? { note: c.note } : {}) }));
-	// Block style, always — a seeded `[]` parses as a FLOW sequence and every appended entry inherits
-	// it, producing one unreadable line per case. The file exists to be hand-edited; that is the point.
-	if (isSeq(doc.contents)) doc.contents.flow = false;
-	if (fresh.length || !existing) await writeFile(path, doc.toString({ lineWidth: 0, blockQuote: "literal" }));
-	return { path, added: fresh.length, total: seen.size + fresh.length, kept: seen.size };
-};
-
-// casesOf(ctx) — the ground truth the eval actually scores: the FILE, joined to each Decision's
-// frozen evidence. Labels are the file's (so a hand correction is authoritative and diffable);
-// evidence is the row's (so it is never a stale copy) — the same split reddit_qualified_threads.yaml
-// already uses. A `skip`ped entry is reported and never scored.
-const casesOf = async (ctx: Ctx, id: string, prompt: string): Promise<{ cases: Case[]; skipped: number }> => {
-	const path = gtPath(id, prompt);
-	const raw = await readFile(path, "utf8").catch(() => {
-		throw new Error(`no ground truth at ${path} — run \`sflock eval cases --agent ${id} --prompt ${prompt}\` first`);
-	});
-	const entries = (parse(raw) ?? []) as (Omit<Case, "input"> & { skip?: string })[];
-	const live = entries.filter((e) => !e.skip);
-	const cases = await mapLimit(live, async (e) => ({
-		...e,
-		input: JSON.parse(String((await ctx.store.get(e.id)).fields.Input)) as Record<string, string>
-	}));
-	return { cases, skipped: entries.length - live.length };
-};
-
-// rule(ctx, system, input, output) — the SCORER, run once. The judge's evidence is the graded
-// prompt's own Input with its Output spliced on, which is why no new renderer exists: it is just
-// another field map, so the agent's `renderEvidence` draws it (the Thread as its Reddit card, the
-// reply as prose). Held to the judge's declared Input schema first — a drift between what the
-// judge asks for and what we hand it must be loud, not silently judged on a missing field.
-const rule = async (
-	{ agent }: Ctx,
-	judge: Contract,
-	system: string,
-	input: Record<string, string>,
-	output: Record<string, unknown>
-): Promise<{ valid: boolean; why: string[] }> => {
-	const evidence = { ...input, ...Object.fromEntries(Object.entries(output).map(([k, v]) => [k, String(v)])) };
-	const err = schemaError(judge.inputSchema, evidence);
-	if (err) throw new Error(`the judge's evidence violates its Input schema: ${err}`);
-	// One retry, and only for the step-budget miss: temperature 0 does not make a tool loop
-	// deterministic, and a scorer that drops a whole run because one call wandered is measuring the
-	// weather. A retry that fails again throws — the caller reports it as an ERRORED case, never as
-	// a verdict, because "we could not score this" and "this is invalid" are different facts.
-	const ruled = () =>
-		runJudgment(
-			{ system, evidence: agent.renderEvidence(evidence), outputSchema: judge.outputSchema },
-			agent.config.model
-		);
-	const v = await ruled().catch(() => ruled());
-	// `{valid}` alone is the whole Output schema — the WHY rides free on every judgment, as the
-	// quote-anchored statements `runJudgment` already returns. A rubric field would be a second
-	// place for the reasoning to live, and a score that drifts between judge versions.
-	return { valid: !!(v.output as { valid?: boolean }).valid, why: v.statements.map((s) => s.claim) };
-};
-
-// cases(id, prompt) — the corpus as the CLI asks for it: by agent + prompt key, no Ctx to build.
-// evalJudge — does the scorer agree with the human? Each case is one or two assertions: the
-// committed output MUST pass, the overturned draft MUST fail. Nothing here re-generates anything;
-// the texts are the ones a person actually ruled on.
-export const evalJudge = async (id: string, prompt: string, candidate?: string) => {
-	const ctx = await load(id, prompt);
-	const judge = await scorerOf(ctx);
-	const { system, label } = await instructions(judge, candidate);
-	const { cases: corpus, skipped } = await casesOf(ctx, id, prompt);
-	if (skipped) console.error(`${skipped} case(s) skipped by the ground truth`);
-	if (!corpus.length) throw new Error(`no reviewed "${ctx.kind}" decisions — nothing to calibrate against`);
-	const rows = await mapLimit(corpus, async (c) => {
-		const checks: { text: string; expect: boolean }[] = [{ text: "committed", expect: true }];
-		if (c.bad) checks.push({ text: "overturned", expect: false });
-		return {
-			c,
-			got: await mapLimit(checks, async (k) => {
-				// A case that cannot be scored is reported, never counted — `batch`'s rule (surface an
-				// error AS DATA, never substitute a fake result). Folding it into either column would
-				// silently move the number the whole loop is read off.
-				const v = await rule(ctx, judge, system, c.input, k.text === "committed" ? c.good : c.bad!).catch(
-					(e: unknown) => ({ error: renderError(e) }) as const
-				);
-				return { ...k, ...v };
-			})
-		};
-	});
-	const all = rows.flatMap((r) => r.got);
-	const scored = all.filter((g): g is typeof g & { valid: boolean } => "valid" in g);
-	return {
-		label,
-		// The two classes, reported apart: a judge that passes everything scores well on a corpus of
-		// positives alone, which is exactly the corpus a young review history produces.
-		positives: scored.filter((g) => g.expect),
-		negatives: scored.filter((g) => !g.expect),
-		errored: all.length - scored.length,
-		rows
-	};
-};
-
-// evalReply — does the drafter satisfy the scorer? Two case sources, and the difference is what
-// they cost: the labelled corpus (frozen evidence, so a run is reproducible and the human's own text
-// prints beside the candidate's), or live threads picked by the agent's own selector (unlabelled,
-// unlimited — the point of having a judge at all is that grading no longer needs a label).
-export const evalReply = async (
-	id: string,
-	prompt: string,
-	candidate?: string,
-	select?: { tier?: string; limit?: number; subreddit?: string[] }
-) => {
-	const ctx = await load(id, prompt);
-	const judge = await scorerOf(ctx);
-	const graded = await ctx.reviewer.prompt(prompt);
-	const { system, label } = await instructions(graded, candidate);
-	// The agent's own funnel module — the ONE thing core cannot derive: how to resolve a subject and
-	// how to name a set of them. Imported dynamically, and only on the path that needs it, so the
-	// roster stays static-import-only and the app's bundle never sees tools.ts. Same convention
-	// `sflock bind` uses for a source's script manifest (src/cli.ts).
-	const { decider, tools } = (await import(`../agents/${id}/tools.js`)) as AgentFunnel;
-	const subjects: { name: string; subject: string | Subject; mine?: Record<string, unknown> }[] = select
-		? (await tools.threads.get(select)).map((t) => ({ name: String(t.title ?? t.url), subject: t.url }))
-		: (await casesOf(ctx, id, prompt)).cases.map((c) => ({
-				name: c.name,
-				// A Subject synthesised from the FROZEN Input — the evidence the human ruled on, handed
-				// to the runtime's own context builder rather than re-read from a thread that has moved.
-				subject: { key: c.id, name: c.name, fields: c.input },
-				mine: c.good
-			}));
-	if (!subjects.length) throw new Error("nothing selected — no threads to grade");
-	const rows = await mapLimit(subjects, async (s) => {
-		const jc = await decider.judgmentContext(prompt, s.subject);
-		const drafted = await runJudgment({ ...jc, system }, ctx.agent.config.model);
-		// `jc.input` — the very map the drafter was shown, so the judge rules on the same evidence
-		// rather than on a second projection that could differ. An unscoreable thread is reported,
-		// never counted: a sweep loses its whole answer otherwise, for one wandering tool loop.
-		const v = await rule(ctx, judge, judge.body, jc.input, drafted.output).catch(
-			(e: unknown) => ({ error: renderError(e) }) as const
-		);
-		return { ...s, drafted: drafted.output, ...v };
-	});
-	return { label, judge: judge.hash, rows };
-};
-
-// ─── evalQualify — the third question, and the one that needs no model to answer ────────────────
-//
-// Does the judgment produce the LABEL you recorded? For a prompt whose Output is checkable — an
-// enum, a boolean, a number — the ground truth IS the answer, so `===` settles it and no scorer
-// exists. That is the whole difference from evalJudge/evalReply, and it is why this one is cheap
-// enough to run on every edit.
-//
-// Its corpus is a FILE and it is SELF-CONTAINED, which is the opposite of the reply corpus and for
-// a reason that is not taste. A reviewed prompt has a Decision that FROZE the evidence, so pointing
-// at the row is safe. A calibrated prompt has no Decision: the row is live state, and a re-scan
-// moves it under a label a human wrote weeks ago (measured — three threads lost the comment trees
-// their verdicts rested on overnight). So the fixture carries its own evidence, the eval never
-// touches the store, and a run is reproducible, diffable and offline.
-//
-// Faithful anyway, because the two functions that turn a row into evidence are the runtime's own:
-// `projectInput` against the live Input schema, then the agent's `renderEvidence`. A fixture is
-// just the field map a row would have presented.
-
+// One labelled case, carrying its own evidence. `expect` is the Output that should come out (the
+// one a human recorded); `reject` is the one that must not — the draft they overturned, present
+// only when there was one. Both are whole Outputs of the graded prompt, held to its schema.
 export interface Fixture {
-	key: string; // the subject's identity (a thread URL) — how a case is named and `--only`-matched
-	expect: Record<string, unknown>; // the Output the human recorded, held to the prompt's own schema
+	key: string; // the SUBJECT's identity (a thread URL) — the case's name, and what `--only` matches
+	expect?: Record<string, unknown>;
+	reject?: Record<string, unknown>;
+	note?: string; // the RULE this case pins — the human's own words, moved here from the Decision
 	fields: Record<string, unknown>; // the evidence, one entry per Input-schema field
-	note?: string; // the RULE this case pins — why it is in the corpus at all
-	skip?: string; // not ground truth (yet): reported, never scored
+	skip?: string; // not ground truth (yet), and why — reported, never scored
 }
+
+// gtPath(id, prompt) — a corpus lives IN the prompt's own folder, beside the instructions it grades
+// and the schemas they are held to. Convention, not config: one judgment is one directory.
+const gtPath = (id: string, prompt: string): string => join(promptDir(id, prompt), "ground_truth.yaml");
 
 // A fixture's evidence as `projectInput` wants it. A value that is not already a scalar is
 // YAML-stringified — a Reddit thread's seed IS a document, and a corpus a human curates has to show
@@ -367,72 +67,358 @@ const fieldsOf = (fields: Record<string, unknown>): Record<string, string> =>
 		])
 	);
 
+const corpusOf = async (id: string, prompt: string): Promise<Fixture[]> => {
+	const path = gtPath(id, prompt);
+	const raw = await readFile(path, "utf8").catch(() => {
+		throw new Error(`no ground truth at ${path} — record one with \`sflock learn\``);
+	});
+	return (parse(raw) ?? []) as Fixture[];
+};
+
+// ─── the agent + its prompts ─────────────────────────────────────────────────────────────────────
+
+interface Ctx {
+	agent: Agent;
+	store: Store;
+	reviewer: ReturnType<typeof createReviewer>;
+}
+
+const load = async (id: string): Promise<Ctx> => {
+	const agent = AGENTS[id];
+	if (!agent) throw new Error(`no agent "${id}" — register it in agents/index.ts.`);
+	// A drift check before anything is scored or learned: a prompt whose inlined section no longer
+	// matches its source is not the prompt anyone thinks they are calibrating, so a green run on it
+	// certifies nothing. The same function `sflock prompts --check` and the test call.
+	const drifted = (await syncPrompts()).filter((p) => p.drifted.length);
+	if (drifted.length)
+		throw new Error(
+			`refusing to run on a drifted prompt: ${drifted
+				.map((p) => `${p.agent}/${p.key} (${p.drifted.join(", ")})`)
+				.join("; ")} — run \`sflock prompts\` to re-inline from the pool.`
+		);
+	return { agent, store: getStore(agent.config.destination), reviewer: createReviewer(agent) };
+};
+
+const specOf = (agent: Agent, key: string): PromptSpec => {
+	const spec = agent.config.prompts?.[key];
+	if (!spec) throw new Error(`agent "${agent.id}" declares no prompt "${key}"`);
+	return spec;
+};
+
+// scorerFor(agent, key) — the prompt that GRADES `key`, if one declares itself so. The inverse of
+// `PromptSpec.grades`, and the whole of how a grading mode is chosen: found ⇒ prose, reduced by that
+// scorer; not found ⇒ the Output is the verdict.
+const scorerFor = (agent: Agent, key: string): { key: string; spec: PromptSpec } | undefined => {
+	const hit = Object.entries(agent.config.prompts ?? {}).find(([, s]) => s.grades === key);
+	return hit ? { key: hit[0], spec: hit[1] } : undefined;
+};
+
+// The instructions under test: a candidate file, or the committed one. A candidate is just a copy of
+// a PROMPT.md — markers in, or already stripped — and `compileAuthoring` drops them exactly as the
+// loader does, so what is scored is what committing that file would ship.
+const instructions = async (live: Contract, candidate?: string): Promise<{ system: string; label: string }> =>
+	candidate
+		? { system: compileAuthoring(await readFile(candidate, "utf8")), label: candidate }
+		: { system: live.body, label: `committed (${live.hash})` };
+
+// ─── learn — a Decision becomes a case ───────────────────────────────────────────────────────────
+
+// The one write into a corpus, and the one thing that retires a Decision. Atomic in the only order
+// that can be: the case is written FIRST, the row is touched second — so a failure in between leaves
+// the learning recorded and the row still there, and a re-run converges (the corpus upserts on
+// `key`). The reverse order could destroy the evidence it was meant to preserve.
+//
+// `prompt` is the ONE thing a human must supply and a machine cannot infer: WHICH judgment this
+// teaches. It defaults to the decision's own kind, but the interesting case is the other one — a
+// note left on a reply ("this thread is off topic") is a complaint about QUALIFY, and the fix
+// belongs in qualify's corpus. `projectInput` is the retargeting operator: hand it the other
+// prompt's Input schema and the frozen evidence reduces to exactly the fields that judgment sees.
+//
+// What happens to the row follows from what the row IS, with no flag to pass. A decision that was
+// APPROVED is history — it records something we actually did — so it stays and only the note moves
+// (the note is a TODO; once it is a case, the TODO is done). A decision never approved is a draft
+// nobody sent: it is archived, and the entity it opened is closed at `config.dropped`, because
+// otherwise it waits forever on a decision that no longer exists.
+export const learn = async (
+	id: string,
+	decision: string,
+	opts: { prompt?: string; expect?: Record<string, unknown> } = {}
+) => {
+	const ctx = await load(id);
+	const { agent, store, reviewer } = ctx;
+	const shown = await reviewer.showDecision(decision);
+	if (!shown.subject)
+		throw new Error(
+			`decision ${shown.id} carries no Subject — it predates the column, so nothing names what it ` +
+				`is about. Re-cut the draft, or add the Subject by hand.`
+		);
+
+	// Which judgment this teaches, and therefore which corpus it lands in.
+	const own = shown.kind ? reviewer.keyOf(shown.kind) : undefined;
+	const key = opts.prompt ?? own;
+	if (!key) throw new Error(`decision ${shown.id} has no Kind — name the prompt with --prompt`);
+	const graded = await reviewer.prompt(key);
+	const spec = specOf(agent, key);
+
+	// The label. Learning about the decision's OWN judgment needs none — the committed output IS what
+	// should have come out. Retargeting to another judgment does: only the human knows the tier they
+	// meant. And the model's own Output is the negative exactly when it disagrees, so an overturn
+	// yields its pair with nothing declared.
+	const committed = shown.review?.human.output as Record<string, unknown> | undefined;
+	const expect = opts.expect ?? (key === own ? (committed ?? shown.output) : undefined);
+	const reject = key === own && expect && JSON.stringify(expect) !== JSON.stringify(shown.output)
+		? shown.output
+		: undefined;
+	if (expect) {
+		const err = schemaError(graded.outputSchema, expect);
+		if (err) throw new Error(`--expect is not a valid ${key} Output: ${err}`);
+	}
+	const note = shown.feedback?.note;
+	// A case with no label and no stated rule teaches nothing — refuse rather than write a row that
+	// can never fail and never inform.
+	if (!expect && !note)
+		throw new Error(
+			`nothing to learn from ${shown.id}: no note on the decision and no --expect. Say what should ` +
+				`have come out, or leave a note in the app first.`
+		);
+
+	// The evidence, projected onto the graded prompt's Input schema — the runtime's own projection,
+	// so the case is faithful, and the retargeting is free.
+	const fields = projectInput(shown.input, graded.inputSchema);
+
+	const path = gtPath(id, key);
+	const corpus = await corpusOf(id, key).catch(() => [] as Fixture[]);
+	const at = corpus.findIndex((f) => f.key === shown.subject);
+	const fixture: Fixture = {
+		key: shown.subject,
+		...(expect ? { expect } : {}),
+		...(reject ? { reject } : {}),
+		...(note ? { note } : {}),
+		fields
+	};
+	// Upsert on the subject, so learning twice about one thread converges instead of forking it.
+	const raw = await readFile(path, "utf8").catch(() => "");
+	if (at >= 0) {
+		corpus[at] = { ...corpus[at], ...fixture };
+		await writeFile(path, reheader(raw) + stringify(corpus, { lineWidth: 100, blockQuote: "literal" }));
+	} else {
+		await writeFile(
+			path,
+			raw.replace(/\n*$/, "\n") + stringify([fixture], { lineWidth: 100, blockQuote: "literal" })
+		);
+	}
+
+	// The row, second. Approved ⇒ history: keep it, move the note out (the note was a TODO; it is a
+	// case now). Never approved ⇒ a draft nobody sent: retire it, and let the agent close the entity
+	// it opened.
+	const approved = !!shown.review;
+	if (approved) {
+		if (note) await store.patch(agent.config.models.Decisions, shown.id, { Feedback: "" });
+	} else {
+		await store.archive(shown.id);
+		await agent.config.drop?.(shown.subject);
+	}
+	return {
+		learned: path,
+		key: shown.subject,
+		prompt: key,
+		...(expect ? { expect } : {}),
+		...(reject ? { reject } : {}),
+		...(note ? { note } : {}),
+		decision: approved ? "kept — approved, so it is history" : "archived — never approved",
+		...(!approved && agent.config.drop ? { entity: "dropped" } : {})
+	};
+};
+
+// Rewriting the whole sequence loses the file's leading comment block, so it is carried across:
+// everything above the first entry is prose a human wrote about the corpus.
+const reheader = (raw: string): string => {
+	const i = raw.search(/^- /m);
+	return i < 0 ? raw : raw.slice(0, i);
+};
+
+// ─── evaluate — cases become a score ─────────────────────────────────────────────────────────────
+
+// One graded case's result. `ok` is the whole verdict; everything else is why.
+export interface Scored {
+	name: string; // the case, named by its subject key
+	ok: boolean;
+	expect?: unknown;
+	got?: unknown;
+	why: string[]; // the claims behind the verdict
+	note?: string;
+	error?: string; // unscoreable — reported, never counted as agreement or disagreement
+	pre?: unknown; // the pre-screen's verdict, when the agent declares one
+	killed?: boolean; // the pre-screen dropped a subject the truth engages
+	gate?: boolean; // the outcome advances the same way the label does (`resolve`)
+}
+
+// The agent's optional evidence REDUCTION — what an earlier, cheaper read of the same subject saw.
+// Core cannot derive it (only the agent knows which field a later stage adds), and it is the one
+// thing a label comparison cannot check: a funnel that reads twice on growing evidence can DROP a
+// subject on the first read, and a subject dropped there is never fetched, so the verdict scored
+// here would never have been reached in production. That miss leaves no trace anywhere else.
+interface Funnel {
+	preScreen?: (input: Record<string, string>) => Record<string, string> | null;
+	decider?: {
+		judgmentContext: (
+			key: string,
+			handle: string | Subject
+		) => Promise<{ system: string; evidence: string; input: Record<string, string>; outputSchema: Record<string, unknown> }>;
+	};
+	tools?: { threads: { get: (select: object) => Promise<{ url: string; title: unknown }[]> } };
+}
+
+export const evaluate = async (
+	id: string,
+	key: string,
+	candidate?: string,
+	opts: { only?: string[]; tier?: string; subreddit?: string[]; limit?: number } = {}
+) => {
+	const ctx = await load(id);
+	const { agent } = ctx;
+	const spec = specOf(agent, key);
+	const graded = await ctx.reviewer.prompt(key);
+	const { system, label } = await instructions(graded, candidate);
+	const scorer = scorerFor(agent, key);
+
+	// WHOSE corpus. A scorer has none of its own: its cases are the prompt it grades, each read
+	// twice — the recorded output must be ruled valid, the overturned one invalid.
+	const from = spec.grades ?? key;
+	const path = gtPath(id, from);
+	const all = await corpusOf(id, from);
+	const picked = opts.only?.length ? all.filter((f) => opts.only!.some((o) => f.key.includes(o))) : all;
+	const live = picked.filter((f) => !f.skip);
+
+	const funnel = (await import(`../agents/${id}/tools.js`).catch(() => ({}))) as Funnel;
+	const advances = spec.resolve && ((o: Record<string, unknown>) => spec.resolve!(o).advances);
+	const run = (system: string, evidence: string, outputSchema: Record<string, unknown>) =>
+		runJudgment({ system, evidence, outputSchema }, agent.config.model);
+
+	// ── a scorer grading itself: the derived corpus, no generation at all ──
+	if (spec.grades) {
+		const gradedSpec = await ctx.reviewer.prompt(spec.grades);
+		const cases = live.flatMap((f) => [
+			...(f.expect ? [{ f, out: f.expect, expect: true, side: "expect" }] : []),
+			...(f.reject ? [{ f, out: f.reject, expect: false, side: "reject" }] : [])
+		]);
+		if (!cases.length) throw new Error(`no labelled cases in ${path} — nothing for a scorer to agree with`);
+		const rows = await mapLimit(cases, async (c): Promise<Scored> => {
+			const input = projectInput(fieldsOf(c.f.fields), gradedSpec.inputSchema);
+			const v = await rule(agent, graded, system, input, c.out).catch((e: unknown) => ({ error: renderError(e) }) as const);
+			if ("error" in v) return { name: `${c.f.key} [${c.side}]`, ok: false, error: v.error, why: [] };
+			return {
+				name: `${c.f.key} [${c.side}]`,
+				ok: v.valid === c.expect,
+				expect: { valid: c.expect },
+				got: { valid: v.valid },
+				why: v.why,
+				...(c.f.note ? { note: c.f.note } : {})
+			};
+		});
+		return { label, path, mode: `scorer of ${spec.grades}`, skipped: picked.length - live.length, rows };
+	}
+
+	// ── a prompt a scorer grades: draft, then reduce with the scorer ──
+	if (scorer) {
+		const judge = await ctx.reviewer.prompt(scorer.key);
+		// Two case sources: the labelled corpus (frozen evidence, so runs compare), or live subjects
+		// picked by the agent's own selector — unlabelled and unlimited, which is the point of having
+		// a scorer at all.
+		const select = opts.tier || opts.subreddit || opts.limit ? { tier: opts.tier, subreddit: opts.subreddit, limit: opts.limit } : undefined;
+		const subjects: { name: string; subject: string | Subject; mine?: unknown; note?: string }[] = select
+			? (await funnel.tools!.threads.get(select)).map((t) => ({ name: String(t.url), subject: t.url }))
+			: live.map((f) => ({
+					name: f.key,
+					subject: { key: f.key, name: f.key, fields: fieldsOf(f.fields) },
+					mine: f.expect,
+					...(f.note ? { note: f.note } : {})
+				}));
+		if (!subjects.length) throw new Error("nothing selected — no cases to grade");
+		const rows = await mapLimit(subjects, async (s): Promise<Scored> => {
+			const jc = await funnel.decider!.judgmentContext(key, s.subject);
+			const drafted = await run(system, jc.evidence, jc.outputSchema);
+			const v = await rule(agent, judge, judge.body, jc.input, drafted.output).catch(
+				(e: unknown) => ({ error: renderError(e) }) as const
+			);
+			if ("error" in v) return { name: s.name, ok: false, error: v.error, why: [] };
+			return {
+				name: s.name,
+				ok: v.valid,
+				got: drafted.output,
+				expect: s.mine,
+				why: v.why,
+				...(s.note ? { note: s.note } : {})
+			};
+		});
+		return { label, path, mode: `judged by ${scorer.key} (${judge.hash})`, skipped: picked.length - live.length, rows };
+	}
+
+	// ── nothing grades it: the Output IS the verdict ──
+	if (!live.length) throw new Error(`no cases selected in ${path}`);
+	// Every label held to the graded prompt's own Output schema BEFORE a single call. This is the one
+	// gate src/output.ts exists to be, and it kills a silent class: a mistyped label (`t1` for `T1`)
+	// used to be a case that could never pass and never error.
+	for (const f of live) {
+		if (!f.expect) throw new Error(`${path}: ${f.key} — no \`expect\`, so nothing to compare`);
+		const err = schemaError(graded.outputSchema, f.expect);
+		if (err) throw new Error(`${path}: ${f.key} — \`expect\` is not a valid Output: ${err}`);
+	}
+	const rows = await mapLimit(live, async (f): Promise<Scored> => {
+		const input = projectInput(fieldsOf(f.fields), graded.inputSchema);
+		const judge = (i: Record<string, string>) => run(system, agent.renderEvidence(i), graded.outputSchema);
+		const v = await judge(input).catch((e: unknown) => ({ error: renderError(e) }) as const);
+		if ("error" in v) return { name: f.key, ok: false, error: v.error, why: [] };
+		const reduced = funnel.preScreen?.(input);
+		// Nothing to strip ⇒ the earlier read IS this read; don't pay for it twice.
+		const pre = reduced ? (await judge(reduced).catch(() => null))?.output : v.output;
+		return {
+			name: f.key,
+			ok: matches(f.expect!, v.output),
+			expect: f.expect,
+			got: v.output,
+			why: v.statements.map((s) => `${s.supporting ? "+" : "-"} ${s.claim}`),
+			...(f.note ? { note: f.note } : {}),
+			...(reduced ? { pre } : {}),
+			// The GATE agreement, and `resolve` defines it: a wrong label that still advances is a much
+			// smaller error than one that drops a subject, and only the spec knows which is which.
+			...(advances ? { gate: advances(f.expect!) === advances(v.output) } : {}),
+			...(advances && pre && !advances(pre as Record<string, unknown>) && advances(f.expect!)
+				? { killed: true }
+				: {})
+		};
+	});
+	return { label, path, mode: "label", skipped: picked.length - live.length, rows };
+};
+
 // Does the produced Output satisfy the recorded label? `expect` is a partial Output, so only the
 // keys it names are compared — a label records the decision, not every field the schema allows.
 const matches = (expect: Record<string, unknown>, got: Record<string, unknown>): boolean =>
 	Object.entries(expect).every(([k, v]) => JSON.stringify(got[k]) === JSON.stringify(v));
 
-// The agent's optional evidence REDUCTION — what an earlier, cheaper read of the same subject saw.
-// Core cannot derive it (only the agent knows which field a later stage adds), and it is the one
-// thing this eval checks that a plain label comparison cannot: a funnel that reads twice on growing
-// evidence can DROP a subject on the first read, and a subject dropped there is never fetched, so
-// the verdict scored below would never have been reached in production. That miss leaves no trace
-// anywhere else — it is eliminating on the ABSENCE of evidence, which the funnel's invariants forbid.
-interface Reducible {
-	preScreen?: (input: Record<string, string>) => Record<string, string> | null;
-}
-
-export const evalQualify = async (id: string, prompt: string, candidate?: string, only?: string[]) => {
-	const ctx = await load(id, prompt);
-	const graded = await ctx.reviewer.prompt(prompt);
-	const { system, label } = await instructions(graded, candidate);
-	const path = gtPath(id, prompt);
-	const raw = await readFile(path, "utf8").catch(() => {
-		throw new Error(`no ground truth at ${path}`);
-	});
-	const all = (parse(raw) ?? []) as Fixture[];
-	const picked = only?.length ? all.filter((f) => only.some((o) => f.key.includes(o))) : all;
-	const live = picked.filter((f) => !f.skip);
-	if (!live.length) throw new Error(`no cases selected in ${path}`);
-	// Every label held to the graded prompt's OWN Output schema, before a single call is made. This
-	// is the one gate `src/output.ts` exists to be (the LLM's output, the human's Confirm and now the
-	// corpus all pass it), and it kills a whole silent class: a mistyped label — `t1` for `T1` — used
-	// to be a case that could never pass and never error, i.e. a permanent invisible miss.
-	for (const f of live) {
-		const err = schemaError(graded.outputSchema, f.expect);
-		if (err) throw new Error(`${path}: ${f.key} — \`expect\` is not a valid Output: ${err}`);
-	}
-	// The pre-screen reduction, if this agent declares one. Dynamic import on the one path that needs
-	// it, the convention `evalReply` already uses.
-	const { preScreen } = (await import(`../agents/${id}/tools.js`)) as Reducible;
-	const advances = ctx.spec.resolve && ((o: Record<string, unknown>) => ctx.spec.resolve!(o).advances);
-
-	const rows = await mapLimit(live, async (f) => {
-		const input = projectInput(fieldsOf(f.fields), graded.inputSchema);
-		const run = (i: Record<string, string>) =>
-			runJudgment(
-				{ system, evidence: ctx.agent.renderEvidence(i), outputSchema: graded.outputSchema },
-				ctx.agent.config.model
-			).then((v) => v);
-		const v = await run(input).catch((e: unknown) => ({ error: renderError(e) }) as const);
-		if ("error" in v) return { f, error: v.error };
-		const reduced = preScreen?.(input);
-		// Nothing to strip ⇒ the earlier read IS this read; don't pay for it twice.
-		const pre = reduced ? (await run(reduced).catch(() => null))?.output : v.output;
-		return {
-			f,
-			got: v.output,
-			pre,
-			twoPhase: !!reduced,
-			exact: matches(f.expect, v.output),
-			// The GATE agreement, and it is `resolve` that defines it — the ONE declaration of which
-			// outcome advances the pipeline (config.ts). A wrong tier that still engages is a much
-			// smaller error than one that drops a thread, and only the spec knows which is which.
-			gate: advances ? advances(f.expect) === advances(v.output) : undefined,
-			// The pre-screen killed something the truth engages: louder than a wrong label.
-			killed: !!(advances && pre && !advances(pre) && advances(f.expect)),
-			claims: v.statements.map((s) => `${s.supporting ? "+" : "-"} ${s.claim}`)
-		};
-	});
-	return { label, path, skipped: picked.length - live.length, rows };
+// rule(...) — the SCORER, run once. Its evidence is the graded prompt's own Input with an Output
+// spliced on, which is why no new renderer exists: it is just another field map, so the agent's
+// `renderEvidence` draws it. Held to the scorer's declared Input schema first — a drift between what
+// it asks for and what we hand it must be loud, not silently judged on a missing field.
+const rule = async (
+	agent: Agent,
+	judge: Contract,
+	system: string,
+	input: Record<string, string>,
+	output: Record<string, unknown>
+): Promise<{ valid: boolean; why: string[] }> => {
+	const evidence = { ...input, ...Object.fromEntries(Object.entries(output).map(([k, v]) => [k, String(v)])) };
+	const err = schemaError(judge.inputSchema, evidence);
+	if (err) throw new Error(`the judge's evidence violates its Input schema: ${err}`);
+	// One retry, and only for the step-budget miss: temperature 0 does not make a tool loop
+	// deterministic, and a scorer that drops a whole run because one call wandered is measuring the
+	// weather. A retry that fails again throws — "we could not score this" and "this is invalid" are
+	// different facts.
+	const ruled = () =>
+		runJudgment(
+			{ system, evidence: agent.renderEvidence(evidence), outputSchema: judge.outputSchema },
+			agent.config.model
+		);
+	const v = await ruled().catch(() => ruled());
+	return { valid: !!(v.output as { valid?: boolean }).valid, why: v.statements.map((s) => s.claim) };
 };

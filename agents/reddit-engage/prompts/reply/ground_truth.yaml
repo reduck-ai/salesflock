@@ -1,48 +1,335 @@
-# Ground truth for the reply judge — one entry per REVIEWED decision, refreshed by
-#   sflock eval cases --agent <agent> --prompt <prompt>
-# which UPSERTS on `id` and never touches an entry that is already here: your edits and comments
-# survive every re-pull, which is the whole reason this is a file and not a query.
+# Ground truth for the reply — one entry per case, SELF-CONTAINED: each carries the evidence it
+# was ruled on, so `sflock eval` reads no store, runs offline and is reproducible. Cases are written
+# by `sflock learn <decision>`, which moves your note here and retires the row it came from.
 #
-# `good` is the output you committed (the judge must pass it); `bad` is the draft you replaced
-# (it must fail). The EVIDENCE is not copied here — it is read from the Decision itself, so a case
-# is scored against the row, exactly as the qualification eval does.
+#   key     the SUBJECT's identity (the canonical thread URL) — the case's name, what `--only` matches
+#   expect  the Output you committed — the drafter should produce something like it, and the scorer
+#           must rule it VALID
+#   reject  the draft you overturned — the scorer must rule it INVALID. Same evidence, opposite
+#           verdict: the sharpest thing a binary judge can be held to
+#   note    the RULE this case pins, in your own words
+#   fields  the evidence, one entry per Input-schema field
+#   skip    not ground truth (yet), and why — reported, never scored
 #
-# A case that is not ground truth gets a `skip:` naming why, rather than being deleted — a
-# deletion is silently undone by the next pull, and the reason is worth keeping.
-# Not ground truth for the REPLY: the note is a qualification objection ("no specific Integration
-# need"), so what it records is that the thread should not have been engaged — qualify's business,
-# not the drafter's. Scored as a reply positive it teaches that a bare question answers anything.
-- id: 3af4d7b7-884c-81e9-bd12-ff548888ef64
-  skip: the correction is about the TIER, not the reply
-  name: r/ClaudeAI — How can I make Chrome give Claude for Chrome permissions for - Reddit Reply — 2026-08-01 09:07:58
-  good:
+# Two prompts are scored from this ONE file: `reply` (draft each case, the scorer rules on it) and
+# `judge` (no drafting — the scorer must agree that `expect` is valid and `reject` is not).
+- key: https://www.reddit.com/r/claudeai/comments/1v6wpf0/
+  expect:
     reply: "What do you need to do in Chrome? "
-  bad:
-    reply: If you want a truly autonomous browser for Claude, running it via an MCP server that controls a browser programmatically is much cleaner than fighting extension permissions. Controlling the browser via CDP or an automation framework bypasses origin and port-level prompts entirely. I'm actually building an MCP server that does exactly this—feel free to DM if you want to chat.
+  reject:
+    reply: If you want a truly autonomous browser for Claude, running it via an MCP server that controls
+      a browser programmatically is much cleaner than fighting extension permissions. Controlling
+      the browser via CDP or an automation framework bypasses origin and port-level prompts
+      entirely. I'm actually building an MCP server that does exactly this—feel free to DM if you
+      want to chat.
   note: Not obvious he has a specific Integration need, he might happy with generic slow Agent
-- id: 3af4d7b7-884c-8162-9f6d-d23531dc6327
-  name: r/automation — Need help with first timer here - Reddit Reply — 2026-08-01 09:05:44
-  good:
+  skip: the correction is about the TIER, not the reply
+  fields:
+    Tier: T1
+    Thread: |
+      subreddit: ClaudeAI
+      url: https://www.reddit.com/r/claudeai/comments/1v6wpf0/
+      title: How can I make Chrome give Claude for Chrome permissions for all sites all the time?
+      author: Informal-Addendum435
+      created: 2026-07-26T07:16:45.939000+0000
+      score: 3
+      num_comments: 12
+      op_text: |-
+        The "Claude for Chrome new permissions required" pop ups all the time are super inconvenient.
+            
+              How can I make them never appear again and just make it so that Claude can always do whatever it wants in my Chrome?
+            
+              If that's not possible, please can someone recommend me another way that I can give Claude a browser it can be fully autonomous in?
+      comments:
+        - author: Colin_Pepin
+          body: the per-site permission prompt is deliberate, it's the main thing standing between the extension and a prompt injection on some random page telling it to go do something in your gmail. there's no "allow everywhere forever" toggle for that reason. what helps in practice is granting it on the handful of sites you actually use it on, since those stick per domain and the popups mostly stop after a few days of normal use. if you genuinely want a fully autonomous browser, Claude Code with computer use in a separate profile or VM is the better shape for that, since the blast radius is contained. what's the workflow you're trying to automate?
+          score: 3
+          depth: 0
+        - author: Informal-Addendum435
+          body: |-
+            That makes sense, but I don't use Chrome. The only reason I installed it is for Claude. I've never logged into anything on Chrome. I guess a prompt injection might still be able to tell my Claude to do something on my system that I wouldn't want it to do.
+                
+                  The real annoying problem is I use localhost:PORT websites with many different ports for all parallel worktrees. And I have to enable permissions every single time for every single one of them. Maybe I can tell Claude to use osascript  and Claude for Chrome to enable permission for all 65,536 possible ports permanently.
+          score: 2
+          depth: 1
+        - author: lemi1001
+          body: Maybe local dns and reverse proxy could help?
+          score: 2
+          depth: 2
+        - author: Colin_Pepin
+          body: |-
+            lemi1001's reverse proxy idea is the actual fix here. the reason it's painful is that each localhost:PORT is a separate origin, so every worktree looks like a brand new site. put something like Caddy in front on one port and give each worktree a stable hostname instead, so worktree-a.localhost, worktree-b.localhost and so on. chrome resolves anything under .localhost to loopback automatically, so no /etc/hosts editing needed. then you're granting a handful of stable names once instead of a fresh port every time you spin up a tree.
+                
+                  the osascript route won't get you there though, it's not a chrome pref you can flip, and there's no wildcard-all-ports switch to script.
+                
+                  and fair point that you don't log into anything on that profile, that does cut the risk a lot. worth remembering the exposure isn't only your logged-in sites, a dev server rendering fetched content can carry an injection too. how many worktrees are you usually running at once?
+          score: 1
+          depth: 2
+        - author: Informal-Addendum435
+          body: |-
+            Yep great, I'll check out local reverse proxies
+                
+                  Running 3 to 6 worktrees at a time with about 3 HTTP ports open on each on the host machine, but the ports keep climbing (generating unique origins) even if there are "resting" worktrees just to prevent collisions from happening when I start up a resting one again, which means I get the permissions pop up on chrome a few times a day
+          score: 1
+          depth: 3
+        - author: Colin_Pepin
+          body: |-
+            ah, 3 to 6 trees at 3 ports each is exactly the case where the proxy pays for itself. the trick is to stop letting the ports be the identity. assign each worktree a fixed name and let the proxy map it to whatever port that tree happened to grab, so tree-a.localhost/api goes to whatever the api port is today. the climbing ports stay chaotic underneath and chrome never sees them, it only ever sees the same handful of hostnames.
+                
+                  caddy is probably the least painful for this, the config is a few lines per tree and you can regenerate it from whatever script already spins the trees up. one grant per name, then it's quiet.
+          score: 2
+          depth: 4
+        - author: Informal-Addendum435
+          body: Awesome, perfect tool for me, thanks for the help
+          score: 2
+          depth: 5
+        - author: aphelion83
+          body: You can’t. The handholding is deliberate until you learn how to replace it with chrome-devtools.
+          score: 1
+          depth: 0
+        - author: drydondapipebomb
+          body: |-
+            you can code your own browser control harness (and full pc control and screen control harness) with truly no impedance. i have one. don't build one if you don't know what you're doing though or you could fuck your whole system.
+                
+                  you'll need to include whatever version of safety barriers fits your usage and know how. for me that includes a list of codewords i must explicitly say in a prompt for the agent to do certain things without confirmation, like sending emails, deleting files, etc.
+          score: 1
+          depth: 0
+        - author: Ok_Mathematician6075
+          body: Da hell. Don't do that.
+          score: 1
+          depth: 0
+    Subreddit rules: |-
+      - **Be respectful** — Diversity of opinion is welcome. Controversial opinions are welcome. Personal attacks and harassment are not. Ask Claude for a definition of "good faith discussion for a subreddit" if you're unsure what's acceptable.
+      - **Be relevant** — Stay relevant to the Claude and Claude Code technology and users. We generally don't accept posts of more general AI interest here.
+      - **Be constructive. Don't come here to agitate others.** — Is your post/comment likely to add positively to the knowledge or experience of other readers here? Has it already been shared recently? Is it just designed to agitate others? Cancellation announcements and unsupported rants are not constructive. We also do not allow the organization of legal action on the subreddit.
+      - **Use the Megathreads for your recent Claude performance and bug reports/complaints** — Help us keep track of Claude system performance, limits and bugs by keeping your experiences and reports on the relevant Megathread https://www.reddit.com/r/ClaudeAI/comments/1s7fepn/rclaudeai_list_of_ongoing_megathreads/. This also frees the feed from performance incident flooding. We make occasional exceptions for well substantiated and helpful posts including useful questions. Check first if your issue has been discussed recently.
+      - **Do not come here to fix your Anthropic account problem** — Community replies to individual account issues have often caused confusion. We have no way of fixing the problem with your account and Anthropic does not respond to account help requests on this subreddit. Try their normal support channels. If you believe you were incorrectly charged, talk to your bank about a chargeback.
+      - **Competitor posts must contain sufficient homework and evidence.** — Competitor posts must satisfy ALL of the following criteria: a) cannot merely ask for a comparison without offering the author's own insights, research, genuine experiences, or evidence of investigation; b) cannot presume one model is better than another without providing detailed, novel evidence demonstrating this in specific instances; c) cannot cite comparative benchmarks without a source d) it cannot use inflammatory language. Basically you have to give before you can take.
+      - **Showcase your project in a way that helps educate and inspire others** — Promoting your project or paid service is encouraged if it fit the following criteria: be clear the project was built with Claude/Claude Code or specifically for Claude BY YOU include a clear description of what was built, how Claude helped, and what it does project must be free to try and say so (paid tiers/features OK) promotional language minimal do not use referral links (link to the project is ok) no job seeking requests or resumes Posts on the feed now require OP karma> 50
+      - **Read the Megathreads before you subscribe to Claude** — We strongly advise you visit the Performance Megathread before purchasing a plan. It is here https://www.reddit.com/r/ClaudeAI/comments/1s7fepn/rclaudeai_list_of_ongoing_megathreads/. Be aware of some of the issues you may face. Claude is a fast evolving technology.
+      - **Use relevant post flair** — Claude has vast amounts of diverse use cases. As a result, often the problems/questions/praise you have for Claude are not shared by others. Help others filter posts by their area of interest by choosing the flair most related to its usage group. If none fit, or you feel it is of more general interest, choose the flair most relevant.
+      - **Don't manipulate upvotes** — Undermining the Reddit voting system is an immediate permanent ban offence. This includes the use of bots. This subreddit has bots in place looking for suspicious activity.
+      - **Stay grounded** — If you post narratives about AI consciousness and experiences, they must be based in grounded research with references OR be clearly marked in the title as fiction to avoid misguiding people in vulnerable mental states AND use the Writing flair.
+      - **Be Reddit-compliant** — This subreddit uses Reddit's default harassment and abuse filters. In addition, you may find yourself or your content removed by Reddit if you don't follow their policies. These can be found below. Reddit content policy: https://www.redditinc.com/policies/content-policy Those discussing the use of Claude for creative writing should pay particular attention to Rules 6, 7 and 4. Reddit user agreement: https://www.redditinc.com/policies/user-agreement-september-25-2023
+- key: https://www.reddit.com/r/automation/comments/1va8ntx/
+  expect:
     reply: |-
       What takes you the most time? Generating the content or posting? From what you say it seems to be about pasting to each blog and I checked quickly, there seems to be no API for this exact need.
 
       In that case, best thing you can do is to reproduce what you do: automate the browser steps you perform yourself, aka navigate through the site, paste content and voila.
 
       If you want, I have an MCP you can plug to your AI Agent (e.g. Claude) exactly for this! You would need to create your custom script for Presta shop though but I can have a look and help you if needed. You can try it at Reduck AI.
-  bad:
-    reply: I feel your pain, click-based recorders like UI.Vision are incredibly brittle because they break the moment a page loads slowly or a selector shifts. Since you don't code and PrestaShop blog modules rarely have a clean API, you're stuck with browser automation. I'm building a tool that makes this kind of browser automation reliable and easy to set up—feel free to DM me if you want to chat!
-# Not ground truth: the committed reply opens with the pitch and offers no help, which breaks the
-# first rule of the law itself. Holding the drafter to it would teach the opposite of the law.
-- id: 3af4d7b7-884c-8151-b718-f9683bc32eac
+  reject:
+    reply: I feel your pain, click-based recorders like UI.Vision are incredibly brittle because they
+      break the moment a page loads slowly or a selector shifts. Since you don't code and PrestaShop
+      blog modules rarely have a clean API, you're stuck with browser automation. I'm building a
+      tool that makes this kind of browser automation reliable and easy to set up—feel free to DM me
+      if you want to chat!
+  fields:
+    Tier: T1
+    Thread: |
+      subreddit: automation
+      url: https://www.reddit.com/r/automation/comments/1va8ntx/
+      title: Need help with first timer here
+      author: Funkymole165
+      created: 2026-07-29T20:50:37.844000+0000
+      score: 6
+      num_comments: 22
+      op_text: Hello. I gotta really time consuming task to automate. Basically I’ve an organized listed of blogs that I gotta post but copy pasting them manually takes like 20-25 mins each and easily consumes my day. I tried ui vision spent 2 days fixing it but it still keeps crashing. What’s the easiest way I can automate this? Preferably no cost
+      comments:
+        - author: ajinkya_dev
+          body: What tool are you using and where do you wanna post?
+          score: 2
+          depth: 0
+        - author: Funkymole165
+          body: Blogs are posted on presta shop blogs module. I’m doing it all manually for 10+ blogs a day but I want a way to automate it.
+          score: 1
+          depth: 1
+        - author: Marshgrain
+          body: yeah good call, knowing the CMS matters a lot here
+          score: 1
+          depth: 1
+        - author: spoki-app
+          body: Oof, UI automation always breaks. If your blog platforms have any kind of API, even a janky one, you'll save yourself so much headache by hitting that directly with Python. It's a steeper initial climb to learn, but way more robust than fiddly UI bots.
+          score: 2
+          depth: 0
+        - author: AutoModerator
+          body: |-
+            Thank you for your post to r/automation!
+                
+                  New here? Please take a moment to read our rules, read them here.
+                
+                  This is an automated action so if you need anything, please Message the Mods with your request for assistance.
+                
+                  Lastly, enjoy your stay!
+                
+                  I am a bot, and this action was performed automatically. Please contact the moderators of this subreddit if you have any questions or concerns.
+          score: 1
+          depth: 0
+        - author: Ok-Masterpiece-7614
+          body: |-
+            UI Vision breaks because it's replaying clicks against parts of the page that move or load slow, so any click based tool is going to keep crashing on you no matter which one you pick.
+                
+                  If the blogs are already sitting somewhere structured, a spreadsheet, a doc, a folder of text files, the fix isn't a better clicking tool, it's skipping the UI entirely. Most CMS platforms, WordPress, Shopify, Ghost, whatever you're posting into, have an API for creating posts. A short script reads your list and posts through that instead of clicking buttons. It never crashes from a slow loading page because there's no page involved.
+                
+                  What are you actually posting into? That decides whether the API route is open to you.
+          score: 1
+          depth: 0
+        - author: Objective-Fun-4533
+          body: If your blog platform has an API, don't bother with browser automation. A basic Python script is way more stable and won't constantly crash on you as UI Vision does. Ask Claude Code/ChatGPT to write the script for u and teach how to get the API. No need to learn anything.
+          score: 1
+          depth: 0
+        - author: CODE_HEIST
+          body: before fighting the browser again, check whether the PrestaShop blog module exposes an API or database import. if it does, start with drafts only and keep publishing manual. that removes most of the copy paste work without letting a broken script send ten bad posts at once.
+          score: 1
+          depth: 0
+        - author: EmergencyLeast5358
+          body: Are you open to using a simple Python script, or do you strictly need no-code?
+          score: 1
+          depth: 0
+        - author: Funkymole165
+          body: Well let’s just say I know nothing about codes
+          score: 1
+          depth: 1
+        - author: Calm-Dimension3422
+          body: |-
+            UI Vision breaking is probably a sign to stop automating the clicks and move one layer underneath the UI.
+                
+                  For PrestaShop, I would try this in the simplest no/low-cost order:
+                
+                    
+                  
+                  put the blog backlog in a clean CSV or Google Sheet
+                
+                
+                  
+                  map each row to the fields PrestaShop needs: title, slug, body HTML, meta title, meta description, image URL, category, status
+                
+                
+                  
+                  check whether your PrestaShop blog module exposes an API endpoint or import feature
+                
+                
+                  
+                  have a small script create posts as drafts, not published posts
+                
+                
+                  
+                  write the created post ID / URL back to the sheet
+                
+                
+                  
+                  review a few drafts manually, then publish
+                
+                
+                  
+                  At Fabren, when we see a UI bot crashing on a repeated admin task, the fix is usually to turn the workflow into three boring steps: input cleanup, system write, verification receipt. The verification receipt matters because otherwise you will not know which blog posts partially succeeded when the script hits an error.
+                
+                  For your first version, I would not aim for full autopublish. Aim for "turn 10 manual copy-paste jobs into 10 draft posts plus a log." That gets most of the time back without risking broken formatting or accidental duplicate publishes.
+                
+                  If the module has no API/import path at all, browser automation can still work, but use it as the fallback and add visible checkpoints: wait for the editor to load, paste into one field at a time, screenshot or log after save, and stop on the first failed save instead of continuing blindly.
+          score: 1
+          depth: 0
+        - author: United-Consequence47
+          body: |-
+            I went through the same thing with image-based RPA tools (UI.Vision, Sikuli, that family). They rely on screen recognition, so any tiny UI shift, a popup, a font render difference, and the whole script breaks. Two days fixing it and still crashing sounds about right, unfortunately.
+                
+                  What actually fixed this for me on a similar copy-paste job was switching to browser automation instead of screen automation. Playwright (free, open source, works in Python or JS) interacts with the actual DOM elements instead of pixels on screen, so it doesn't care if a window moves or a button shifts by 3px. It's a bit more setup upfront since you write selectors instead of just recording clicks, but once it's running it basically never breaks unless the site itself changes structure.
+                
+                  If your blogs are going into something like WordPress, Medium, or a CMS with a form, Playwright filling that form + submitting is maybe 30-40 lines of code total. Worth the switch if this is a daily task eating your day.
+          score: 1
+          depth: 0
+        - author: BareStacker
+          body: "Quick one: UI Vision is brittle on blog lists because each publisher's DOM is slightly different, so the recording breaks on the next layout change. If these blogs have RSS feeds, a lightweight feed-to-post script costs nothing and survives layout changes. A GitHub Action or cheap VPS cron is enough."
+          score: 1
+          depth: 0
+        - author: Maleficent_Buy_406
+          body: ctly, the answer totally depends on where theyre posting to
+          score: 1
+          depth: 0
+        - author: yyyogev
+          body: if the blogs sit somewhere structured and you're posting into one platform, hitting that platform's posting api or cms with a script is way steadier than replaying clicks
+          score: 1
+          depth: 0
+        - author: aiblastoff
+          body: |-
+            Tell me your technical level.
+                
+                  What AI stack are you currently using and comfortable with?
+          score: 1
+          depth: 0
+        - author: Sophie-Swimmer-1995
+          body: U can use Python Automation. Or else there is one tool called Airtop which is use for browser automation you can use that too.
+          score: 1
+          depth: 0
+    Subreddit rules: |-
+      - **Be nice to one another.** — Breach of our be nice rule. Please take a minute to read the reddiquette. https://www.reddithelp.com/hc/en-us/articles/205926439
+      - **Blogspam & Self Promotion** — You are allowed to post blogs and self promotional material provided it is not clearly spam and offers something to the sub. Please consider the spam rules on reddit when posting and make sure you follow the 9:1 rule. https://www.reddit.com/wiki/selfpromotion
+      - **No referral/affiliate-links.** — We're not here to generate money for you. This will be an immediate ban, no questions asked. Part of this rule will include blocking URL shorteners.
+- key: https://www.reddit.com/r/ai_agents/comments/1va13a4/
+  expect:
+    reply: I have built an MCP connected to a Chrome extension that allows to do this easily and
+      quickly. Is this still an issue you face? If so, don't hesitate to DM and I can share it with
+      you. We have a Public Beta that works well!
+  reject:
+    reply: That's a classic hurdle with hosted agents—their safety filters will block flagged sites, and
+      writing raw Playwright scripts is tough if you aren't technical. A better approach is running
+      browser automation locally via an MCP tool, which lets you drive your own browser session to
+      bypass those blocks. I'm actually building a platform that does exactly this, feel free to DM
+      me!
   skip: pitch-first, no substance — contradicts "be of service first"
-  name: r/AI_Agents — Automating posts - Reddit Reply — 2026-08-01 09:02:55
-  good:
-    reply: I have built an MCP connected to a Chrome extension that allows to do this easily and quickly. Is this still an issue you face? If so, don't hesitate to DM and I can share it with you. We have a Public Beta that works well!
-  bad:
-    reply: That's a classic hurdle with hosted agents—their safety filters will block flagged sites, and writing raw Playwright scripts is tough if you aren't technical. A better approach is running browser automation locally via an MCP tool, which lets you drive your own browser session to bypass those blocks. I'm actually building a platform that does exactly this, feel free to DM me!
-- id: 3af4d7b7-884c-8156-b436-ea73f0d26047
-  name: r/ClaudeAI — Why are recorded skills so slow. - Reddit Reply — 2026-08-01 09:00:38
-  good:
+  fields:
+    Tier: T1
+    Thread: |
+      subreddit: AI_Agents
+      url: https://www.reddit.com/r/ai_agents/comments/1va13a4/
+      title: Automating posts
+      author: Firas-Dridi
+      created: 2026-07-29T16:24:51.602000+0000
+      score: 1
+      num_comments: 7
+      op_text: So i intended to use claude cowork to post on some forums (like patched.to) but he mentioned that it's an illegal site so he can t interact with it , so what solutions do u people recommend ? and specifically is openclaw capable of that or shitty as claude ?
+      comments:
+        - author: AutoModerator
+          body: |-
+            Thank you for your submission, for any questions regarding AI, please check out our wiki at https://www.reddit.com/r/ai_agents/wiki (this is currently in test and we are actively adding to the wiki)
+                
+                  I am a bot, and this action was performed automatically. Please contact the moderators of this subreddit if you have any questions or concerns.
+          score: 1
+          depth: 0
+        - author: k1_r1
+          body: comet browser can take care of actions that need client side browser activity.  Works great for me.
+          score: 1
+          depth: 0
+        - author: Firas-Dridi
+          body: ty , i'll try it rn.
+          score: 2
+          depth: 1
+        - author: Exact-Film-7023
+          body: |-
+            comet's not bad for that kinda stuff, i messed with it a while back when i needed something to handle a few forum accounts without getting flagged. the browser fingerprinting side is decent
+                
+                  openclaw i've heard mixed things about, mostly that it struggles with sites that have heavy js or captcha layers. if the site's got any kind of bot detection you might hit the same wall claude did
+                
+                  have you looked at just spinning up a lightweight playwright script? gives you way more control over headers and timing, and you can randomize the mouse movements so it doesn't look automated
+          score: 2
+          depth: 1
+        - author: Firas-Dridi
+          body: no didn t do it , i ll try it (i m not a very technical person , i ll try to learn what to do and i'll test it now)
+          score: 1
+          depth: 2
+        - author: Firas-Dridi
+          body: i hit the same wall .
+          score: 2
+          depth: 1
+    Subreddit rules: |-
+      - **Be respectful** — Treat others how you'd like to be treated
+      - **No spam** — Spammers will be permanently banned.
+      - **Put your links in the comments, not the posts** — This is mainly to prevent spam. If you have a blog post you want to link, link it in the comments. If you have a project you want to show off, link it in the weekly project display thread.
+      - **Limit self promotion** — Self promotion is fine, but if your posts are all self promotion (including promotion of your projects/products), you will be banned. A good ratio is one out of ten posts/comments.
+      - **No Low Effort Posts** — If your post provides no context, or it is simply meant to drive people off the site and somewhere else, it will be removed.
+- key: https://www.reddit.com/r/claudeai/comments/1vbpf4j/
+  expect:
     reply: |-
       That's because Claude is thinking every time it needs to perform actions and does not cache the code to replay it faster. 
 
@@ -50,11 +337,76 @@
 
       If you are interested, I have released a free MCP that allows Claude to create scripts and execute them over a Chrome extension so you only have it learn once the key actions to do, then it's super fast! It works already with some flows like LinkedIn outreach or Twitter but also Amazon. 
       If relevant, don't hesitate to DM and happy to share access to Public Beta.
-  bad:
-    reply: That's the classic agent bottleneck! Relying entirely on visual AI to analyze screenshots for every single click adds massive latency. For a repetitive flow like Etsy to WordPress, you want deterministic scripts for the standard navigation, only calling the LLM for dynamic parts like captchas. I'm building a platform that does exactly this hybrid automation, feel free to DM if you want to chat!
-- id: 3af4d7b7-884c-811f-90e9-ee068a4f809e
-  name: r/ClaudeAI — What's the best way to create a good automated daily news br - Reddit Reply — 2026-08-01 09:00:37
-  good:
+  reject:
+    reply: That's the classic agent bottleneck! Relying entirely on visual AI to analyze screenshots for
+      every single click adds massive latency. For a repetitive flow like Etsy to WordPress, you
+      want deterministic scripts for the standard navigation, only calling the LLM for dynamic parts
+      like captchas. I'm building a platform that does exactly this hybrid automation, feel free to
+      DM if you want to chat!
+  fields:
+    Tier: T1
+    Thread: |
+      subreddit: ClaudeAI
+      url: https://www.reddit.com/r/claudeai/comments/1vbpf4j/
+      title: Why are recorded skills so slow.
+      author: bbarker1992
+      created: 2026-07-31T12:22:07.376000+0000
+      score: 0
+      num_comments: 6
+      op_text: |-
+        So im relatively new to Claude. I've used it mainly in chat mode for a few months to write me php snippets for my WordPress sites. Recently I've been trying out the other features. Saw on tiktok yesterday that you can screen record a skill.
+            
+              I get orders from etsy that I manually load onto my WordPress site to make sure the customer gets a branded invoice and stock levels are consistent. We don't sell loads. Maybe 10/15 sales a week at most.
+            
+              Takes me aprox 2 minutes per order copying and pasting delivery info back and forth, generating labels on etsy, uploading copies of the labels onto our server etc, thought this would be the perfect task to automate, doesn't seem worth it to set up a custom importer or use csv files for the amount of orders we get.
+            
+              My god, Is it slow!
+            
+              So it seemed to understand what it needed to do, but watching it slowly and methodically work it's way through a single test order took literally more than 15 minutes, it would take one single action then sit and stare at the screen for 20/30 seconds before continuing.
+            
+              Am i missing something here or is it really that slow at taking actions when using it's connected chrome skill?
+      comments:
+        - author: DependentSpecific535
+          body: Currently, it is slow. Indeed, it is a new feature. I guess the model is trained to think more for browser actions. I am sure it will be faster in the next releases..
+          score: 1
+          depth: 0
+        - author: Relevant-Complaint71
+          body: Because the feature is for them, not you. You're the product here, datacollection.
+          score: 1
+          depth: 0
+        - author: VertipaqStar
+          body: |-
+            Screen interaction is very slow, you should use playwright so that it can interact with the webpage through API and commands instead of having it stare at chrome screenshots and determine where the mouse should be placed.
+                
+                  Ask Claude to figure out a better way and document the commands to run as a md skill. Once that is done, it will  operate way faster.
+          score: 1
+          depth: 0
+        - author: DLuke2
+          body: |-
+            Try asking how you can improve the speed of the skill. Most likely you need to use scripts to process the deterministic portions and AI for the non-deterministic portions.
+                
+                  You are relying all on the AI, which, yes is a little slower as it has to work through things. Scripts run in, what 5 seconds? Then the AI uses the deterministic info rather than having to work through that itself.
+          score: 1
+          depth: 0
+        - author: ma_ferland
+          body: For repetitive tasks, writing a playwright skill will probably be faster. But E2E tests have always been kinda slow.
+          score: 1
+          depth: 0
+    Subreddit rules: |-
+      - **Be respectful** — Diversity of opinion is welcome. Controversial opinions are welcome. Personal attacks and harassment are not. Ask Claude for a definition of "good faith discussion for a subreddit" if you're unsure what's acceptable.
+      - **Be relevant** — Stay relevant to the Claude and Claude Code technology and users. We generally don't accept posts of more general AI interest here.
+      - **Be constructive. Don't come here to agitate others.** — Is your post/comment likely to add positively to the knowledge or experience of other readers here? Has it already been shared recently? Is it just designed to agitate others? Cancellation announcements and unsupported rants are not constructive. We also do not allow the organization of legal action on the subreddit.
+      - **Use the Megathreads for your recent Claude performance and bug reports/complaints** — Help us keep track of Claude system performance, limits and bugs by keeping your experiences and reports on the relevant Megathread https://www.reddit.com/r/ClaudeAI/comments/1s7fepn/rclaudeai_list_of_ongoing_megathreads/. This also frees the feed from performance incident flooding. We make occasional exceptions for well substantiated and helpful posts including useful questions. Check first if your issue has been discussed recently.
+      - **Do not come here to fix your Anthropic account problem** — Community replies to individual account issues have often caused confusion. We have no way of fixing the problem with your account and Anthropic does not respond to account help requests on this subreddit. Try their normal support channels. If you believe you were incorrectly charged, talk to your bank about a chargeback.
+      - **Competitor posts must contain sufficient homework and evidence.** — Competitor posts must satisfy ALL of the following criteria: a) cannot merely ask for a comparison without offering the author's own insights, research, genuine experiences, or evidence of investigation; b) cannot presume one model is better than another without providing detailed, novel evidence demonstrating this in specific instances; c) cannot cite comparative benchmarks without a source d) it cannot use inflammatory language. Basically you have to give before you can take.
+      - **Showcase your project in a way that helps educate and inspire others** — Promoting your project or paid service is encouraged if it fit the following criteria: be clear the project was built with Claude/Claude Code or specifically for Claude BY YOU include a clear description of what was built, how Claude helped, and what it does project must be free to try and say so (paid tiers/features OK) promotional language minimal do not use referral links (link to the project is ok) no job seeking requests or resumes Posts on the feed now require OP karma> 50
+      - **Read the Megathreads before you subscribe to Claude** — We strongly advise you visit the Performance Megathread before purchasing a plan. It is here https://www.reddit.com/r/ClaudeAI/comments/1s7fepn/rclaudeai_list_of_ongoing_megathreads/. Be aware of some of the issues you may face. Claude is a fast evolving technology.
+      - **Use relevant post flair** — Claude has vast amounts of diverse use cases. As a result, often the problems/questions/praise you have for Claude are not shared by others. Help others filter posts by their area of interest by choosing the flair most related to its usage group. If none fit, or you feel it is of more general interest, choose the flair most relevant.
+      - **Don't manipulate upvotes** — Undermining the Reddit voting system is an immediate permanent ban offence. This includes the use of bots. This subreddit has bots in place looking for suspicious activity.
+      - **Stay grounded** — If you post narratives about AI consciousness and experiences, they must be based in grounded research with references OR be clearly marked in the title as fiction to avoid misguiding people in vulnerable mental states AND use the Writing flair.
+      - **Be Reddit-compliant** — This subreddit uses Reddit's default harassment and abuse filters. In addition, you may find yourself or your content removed by Reddit if you don't follow their policies. These can be found below. Reddit content policy: https://www.redditinc.com/policies/content-policy Those discussing the use of Claude for creative writing should pay particular attention to Rules 6, 7 and 4. Reddit user agreement: https://www.redditinc.com/policies/user-agreement-september-25-2023
+- key: https://www.reddit.com/r/claudeai/comments/1vbsvt5/
+  expect:
     reply: |-
       I would say start with APIs / programmatic access wherever possible as they are the most reliable. 
 
@@ -63,5 +415,207 @@
 
       But if you are interested, I built an MCP just for this: it enables Claude, connected through an extension, to write scripts that it can call afterwards as tools so recurring activities can be done with a fast script at scale. For instance, I use it to create my custom feed on LinkedIn and Twitter.
       DM me if you want access to the Public Beta (it's free)! 
-  bad:
-    reply: "That's a classic bottleneck! The real issue with scraping news sites directly is that they block basic fetch requests, which breaks standard LLM scraping. You need to decouple the fetching from the synthesis: run a lightweight, stealth browser script to pull the raw HTML first, clean it, and then feed only the clean text to Claude. I'm building a tool that does exactly this, feel free to DM!"
+  reject:
+    reply: "That's a classic bottleneck! The real issue with scraping news sites directly is that they
+      block basic fetch requests, which breaks standard LLM scraping. You need to decouple the
+      fetching from the synthesis: run a lightweight, stealth browser script to pull the raw HTML
+      first, clean it, and then feed only the clean text to Claude. I'm building a tool that does
+      exactly this, feel free to DM!"
+  fields:
+    Tier: T1
+    Thread: |
+      subreddit: ClaudeAI
+      url: https://www.reddit.com/r/claudeai/comments/1vbsvt5/
+      title: What's the best way to create a good automated daily news briefing with Claude Pro without burning through usage?
+      author: raym0ndlin
+      created: 2026-07-31T14:41:46.822000+0000
+      score: 2
+      num_comments: 8
+      op_text: |-
+        I'm trying to create a personalised daily news briefing that I can read on my iPhone, covering:
+            
+                
+              
+              Singapore/local news
+            
+            
+              
+              World news
+            
+            
+              
+              Finance and stock markets
+            
+            
+              
+              AI/technology
+            
+            
+              
+              Cybersecurity
+            
+            
+              
+              Ideally, I want the news filtered into something like Must Read / Worth Knowing, rather than just a long list of headlines.
+            
+              I've tried a few approaches with Claude Pro:
+            
+              1. Scheduled task + RSS
+            
+              I provided RSS feeds, but some feeds were blocked/inaccessible. I then asked Claude to scrape the source websites instead, but the resulting news wasn't always current or reliable.
+            
+              2. Claude Routines with Research
+            
+              I tried setting up a Routine to automatically generate the briefing and use Research to find the latest news. The research quality was better, but it seemed to consume a lot of Claude Pro usage, and I'm still not very happy with the quality of the final daily briefing.
+            
+              So I'm wondering what would be the better way to achieve this.
+            
+              Has anyone found a good Claude Pro setup for this, perhaps using Projects, Routines, RSS or another approach that doesn't require running extensive Research every day?
+            
+              I'm also open to other alternatives.
+            
+              Ideally, the solution should:
+            
+                
+              
+              Automatically collect current news
+            
+            
+              
+              Filter out duplicate/low-value stories
+            
+            
+              
+              Prioritise what's actually important
+            
+            
+              
+              Produce a concise daily briefing
+            
+            
+              
+              Be easy to read on iPhone
+            
+            
+              
+              What setup are you using for something similar?
+      comments:
+        - author: Ok_Boot5671
+          body: The route I went is sign up for newsletters then crawl/consolidate newsletters to a pdf to read in one go
+          score: 1
+          depth: 0
+        - author: mrcustardo
+          body: Point 1,2,4,5 should be a breeze for any LLM. 3 though, how would claude know?
+          score: 1
+          depth: 0
+        - author: Odd-Let9042
+          body: Use a proper RSS reader with an API. Subscribe to the feeds you want to follow and then ask Claude to create the brief using the API
+          score: 1
+          depth: 0
+        - author: spiderick69
+          body: I would use Claude to make the “app” an use Kimi or any other cheap model for the “work”.
+          score: 1
+          depth: 0
+        - author: tyschan
+          body: prefetch data sources with code. synthesise with haiku
+          score: 1
+          depth: 0
+        - author: LimiDrain
+          body: Gemini has free API so I run requests via GitHub Actions -> Gemini -> Telegram bot, it's enough for web search and making summaries, fully automated
+          score: 1
+          depth: 0
+        - author: AnvilandCode
+          body: Research-every-day is the expensive part, and it's mostly unnecessary since news sources don't change, only their content does. Instead of researching fresh each run, maintain a fixed list of a dozen or so reliable RSS feeds per category and just fetch them directly, skip the search step entirely, most of the RSS blocking you hit is specific feeds being flaky rather than RSS as an approach being wrong, worth trying a feed reader service as a proxy if a source blocks direct fetches. For the must-read versus worth-knowing split, that's a good use of Claude without needing Research, feed it the day's headlines plus one-line summaries and ask it to rank and bucket, that's a much cheaper call than having it go research each story from scratch.
+          score: 1
+          depth: 0
+    Subreddit rules: |-
+      - **Be respectful** — Diversity of opinion is welcome. Controversial opinions are welcome. Personal attacks and harassment are not. Ask Claude for a definition of "good faith discussion for a subreddit" if you're unsure what's acceptable.
+      - **Be relevant** — Stay relevant to the Claude and Claude Code technology and users. We generally don't accept posts of more general AI interest here.
+      - **Be constructive. Don't come here to agitate others.** — Is your post/comment likely to add positively to the knowledge or experience of other readers here? Has it already been shared recently? Is it just designed to agitate others? Cancellation announcements and unsupported rants are not constructive. We also do not allow the organization of legal action on the subreddit.
+      - **Use the Megathreads for your recent Claude performance and bug reports/complaints** — Help us keep track of Claude system performance, limits and bugs by keeping your experiences and reports on the relevant Megathread https://www.reddit.com/r/ClaudeAI/comments/1s7fepn/rclaudeai_list_of_ongoing_megathreads/. This also frees the feed from performance incident flooding. We make occasional exceptions for well substantiated and helpful posts including useful questions. Check first if your issue has been discussed recently.
+      - **Do not come here to fix your Anthropic account problem** — Community replies to individual account issues have often caused confusion. We have no way of fixing the problem with your account and Anthropic does not respond to account help requests on this subreddit. Try their normal support channels. If you believe you were incorrectly charged, talk to your bank about a chargeback.
+      - **Competitor posts must contain sufficient homework and evidence.** — Competitor posts must satisfy ALL of the following criteria: a) cannot merely ask for a comparison without offering the author's own insights, research, genuine experiences, or evidence of investigation; b) cannot presume one model is better than another without providing detailed, novel evidence demonstrating this in specific instances; c) cannot cite comparative benchmarks without a source d) it cannot use inflammatory language. Basically you have to give before you can take.
+      - **Showcase your project in a way that helps educate and inspire others** — Promoting your project or paid service is encouraged if it fit the following criteria: be clear the project was built with Claude/Claude Code or specifically for Claude BY YOU include a clear description of what was built, how Claude helped, and what it does project must be free to try and say so (paid tiers/features OK) promotional language minimal do not use referral links (link to the project is ok) no job seeking requests or resumes Posts on the feed now require OP karma> 50
+      - **Read the Megathreads before you subscribe to Claude** — We strongly advise you visit the Performance Megathread before purchasing a plan. It is here https://www.reddit.com/r/ClaudeAI/comments/1s7fepn/rclaudeai_list_of_ongoing_megathreads/. Be aware of some of the issues you may face. Claude is a fast evolving technology.
+      - **Use relevant post flair** — Claude has vast amounts of diverse use cases. As a result, often the problems/questions/praise you have for Claude are not shared by others. Help others filter posts by their area of interest by choosing the flair most related to its usage group. If none fit, or you feel it is of more general interest, choose the flair most relevant.
+      - **Don't manipulate upvotes** — Undermining the Reddit voting system is an immediate permanent ban offence. This includes the use of bots. This subreddit has bots in place looking for suspicious activity.
+      - **Stay grounded** — If you post narratives about AI consciousness and experiences, they must be based in grounded research with references OR be clearly marked in the title as fiction to avoid misguiding people in vulnerable mental states AND use the Writing flair.
+      - **Be Reddit-compliant** — This subreddit uses Reddit's default harassment and abuse filters. In addition, you may find yourself or your content removed by Reddit if you don't follow their policies. These can be found below. Reddit content policy: https://www.redditinc.com/policies/content-policy Those discussing the use of Claude for creative writing should pay particular attention to Rules 6, 7 and 4. Reddit user agreement: https://www.redditinc.com/policies/user-agreement-september-25-2023
+- key: https://www.reddit.com/r/n8n/comments/1vbsvwq/
+  expect:
+    reply: |-
+      Do you need a workflow or a specific node that would be part of this workflow? Could you describe what you would want to achieve and what it might have to do? 
+
+      I got a few ideas of flows to share but I would like to understand better what you are trying to achieve before biasing you in a specific direction.
+  reject:
+    reply: |-
+      If you want to scrape social platforms for leads using browser automation, the biggest hurdle isn't the scraping itself—it's session persistence and fingerprint detection. 
+
+      If you run a standard headless browser (like Browser Use or a basic Playwright script) on LinkedIn or X, you will get blocked or banned almost instantly. These platforms aggressively detect automated browser fingerprints and force login walls.
+
+      To do this reliably for free, you have to solve two things:
+      1. **Persistent Sessions:** You need to run the browser using a real user profile directory (`user-data-dir`). This keeps you logged in so you don't have to automate the login flow, which is a high-risk trigger for bans.
+      2. **Stealth:** You need to mask the automation signatures (using tools like `puppeteer-extra-plugin-stealth` or Playwright stealth wrappers) so the site doesn't see the `navigator.webdriver` flag.
+
+      In n8n, running a stealth browser directly inside the n8n execution environment is very difficult to configure. A more robust way is to run a separate local script (in Python or Node) that handles the browser session, and have your n8n workflow trigger it via a Webhook node to pass the data back.
+  fields:
+    Tier: T1
+    Thread: |
+      subreddit: n8n
+      url: https://www.reddit.com/r/n8n/comments/1vbsvwq/
+      title: Does anyone know about the Browser act ??
+      author: Djzala269
+      created: 2026-07-31T14:41:52.509000+0000
+      score: 2
+      num_comments: 4
+      post_type: text
+      content_href: https://www.reddit.com/r/n8n/comments/1vbsvwq/does_anyone_know_about_the_browser_act/
+      op_text: |-
+        Hello Folks,
+            
+              Recently i find the tool called browser act who scrap the data, do you have any workflow for free who can scrap the social platform hot or signal leads
+      comments:
+        - author: AutoModerator
+          body: |-
+            Moderator Announcement
+                      Read More »
+                    
+                
+              
+                      
+                  
+                  Want faster, better help? Share your workflow JSON.
+                
+                  A GitHub Gist is the easiest way -- paste your JSON, save as public, drop the link in your post. Folks can import it directly into n8n and reproduce the issue, which gets you real answers instead of guesses.
+                
+                  I am a bot, and this action was performed automatically. Please contact the moderators of this subreddit if you have any questions or concerns.
+          score: 1
+          depth: 0
+          created: 2026-07-31T14:41:53.173000+0000
+        - author: UlrikS
+          body: "Haven't used it, but if you want something cheaper than a subscription tool, get an AI tool like Claude Code to set up your own scraper: we use Python with Playwright in a real browser window, plus an LLM step to interpret what it's seeing. This works well for specific sites, feeds and searches, and we can run them again on a regular basis with no additional setup, much cheaper and quicker than letting it click around on its own. If you want something that clicks around to explore, though, it gets slow, burns through tokens, and you'll likely get rate limited before gathering a meaningful amount of data."
+          score: 3
+          depth: 0
+          created: 2026-07-31T14:55:30.602000+0000
+        - author: Djzala269
+          body: Yup brother iive that thought scraper with claude while be deadly combo
+          score: 0
+          depth: 1
+          created: 2026-07-31T15:15:33.077000+0000
+        - author: oujloid
+          body: Have a look at Crawl4AI
+          score: 1
+          depth: 0
+          created: 2026-08-01T02:27:01.785000+0000
+    Subreddit rules: |-
+      - **No Spam & No Clickbait** — You are welcome to post often! Ask for help, share templates, and contribute to the community. But excessive posting, misleading titles, or repetitive content may be removed.
+      - **No AI Slop** — No AI Slop
+      - **No Self-Promotion or Advertising** — Do not promote your own tools, SaaS products, paid services, courses, or platforms. If you built something with n8n and want to share it, use the Workflow - Github Included flair and include the code. Posts that exist primarily to drive traffic to your product or service will be removed.
+      - **No Business, Agency, or Client-Related Posts** — This is a technical subreddit focused on building with n8n — not on how to monetize it. Posts about starting an agency, finding clients, pricing your services, business models, or "how do I sell automation" are off-topic. We encourage users interested in the business side to head over to subreddits dedicated to entrepreneurship, freelancing, or consulting.
+      - **No Links to Paid Workflows, Paid Communities, or Signup-Required Content** — This includes but is not limited to Gumroad, Skool, paid Discord servers, and communities that are free to join but require a signup. No "DM me for workflow," no "comment here for the link," no email signups for templates. If you're sharing a workflow, share it publicly using an approved method.
+      - **Recruiting and Hiring** — You must share your Company Name and Website. If you do not have a company or website, you must include your LinkedIn profile. If there is a reason you can't do this publicly, message the mods for approval. A project description is required — low effort on this piece could lead to removal of the post.
+      - **All Workflow and Video Posts Must Include the Code** — If you're sharing a workflow — whether as a post, screenshot, or video — the code must be included directly in the Reddit post. Acceptable ways to share: Github Repository, Github Gist, n8n.io/workflows/. Sharing the code any other way is not allowed. Posts without a link to the code will be automatically removed. Screenshots alone do not count.
+      - **No Google Drive or Google Docs Links** — Google links frequently become inaccessible or require permissions that make them unreliable for the community. Use one of the approved sharing methods listed in Rule 6 instead.
+      - **Use the Correct Post Flair** — All posts must use the appropriate flair. Posts that use the wrong flair to sidestep rules (e.g., posting a workflow under Meta/News to avoid code-sharing requirements) will be removed.
+      - **Low Quality or Off Topic** — Low quality and off-topic posts are subject to removal at moderator discretion.
+      - **Keep it civil** — Be respectful. No personal attacks, harassment, or hostile behavior.

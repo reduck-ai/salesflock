@@ -92,10 +92,11 @@ export const responseSchemaFor = (outputSchema: object): Record<string, unknown>
 
 // Everything a judgment needs, and nothing else: the instructions, the evidence, and the Output
 // contract. A judgment is a pure function of its context (README #7), so this IS the context — no
-// store, no entity, no Decision.
+// store, no entity, no Decision. There is no few-shot block: an example a judgment should learn
+// from is worth WRITING INTO the instructions, where it is read, diffed and versioned like every
+// other word of them — not assembled per call from whichever CRM rows carried a checkbox.
 export interface Judgment {
 	system: string;
-	examples?: string;
 	evidence: string;
 	outputSchema: Record<string, unknown>;
 }
@@ -159,7 +160,7 @@ export const runJudgment = async (j: Judgment, model?: string): Promise<Verdict>
 			return { ok: true };
 		}
 	});
-	const prompt = [j.system, j.examples, `## Evidence\n\n${j.evidence}`].filter(Boolean).join("\n\n");
+	const prompt = [j.system, `## Evidence\n\n${j.evidence}`].join("\n\n");
 	await llm.agent(prompt, { search_quotes, submit_claims }, () => submitted !== undefined, model);
 	if (!submitted) throw new Error("the model did not submit a valid decision within the step budget");
 	return submitted;
@@ -246,8 +247,14 @@ export const createReviewer = ({ id: agentId, config, renderEvidence, store: giv
 			id,
 			name,
 			kind: kindOf(fields),
+			subject: fields.Subject ? String(fields.Subject) : undefined,
 			output: JSON.parse(String(fields.Output)) as Record<string, unknown>,
 			statements: JSON.parse(String(fields.Reasoning)) as Statement[],
+			// Both projections of the frozen evidence, because two readers need different ones: a human
+			// reads it RENDERED, and a consumer that re-projects it onto another prompt's Input schema
+			// (`sflock learn`, retargeting a note to the judgment it is really about) needs the MAP.
+			// Re-parsing the column downstream would be a second place for that decoding to live.
+			input: JSON.parse(String(fields.Input)) as Record<string, string>,
 			evidence: renderEvidence(JSON.parse(String(fields.Input)) as Record<string, string>),
 			model: fields.Model ? String(fields.Model) : undefined,
 			// the instructions this judgment was made under — compare with instructionsHash(kind)
@@ -272,22 +279,30 @@ export const createReviewer = ({ id: agentId, config, renderEvidence, store: giv
 	// The invariant is intact either way — the failure mode `query` protects against is a silent
 	// partial set, and walking the cursor to the end is the other way to not have one.
 	//
-	// `opts.feedback` keeps ONLY the rows carrying a delta, and carries the delta itself — the same
+	// `opts.feedback` keeps the rows carrying a NOTE, and carries the delta itself — the same
 	// `renderFeedback` markdown `showDecision --feedback` prints. It costs nothing: `feedbackOf`
-	// already ran per row, and this stops the result being thrown away. That one field is what makes
-	// "what have I told this agent?" a single call instead of a list, a manual scan for the flag, and
-	// a show per id — which reads the whole corpus of human corrections in one go.
+	// already ran per row. That one field is what makes "what have I told this agent?" a single call
+	// instead of a list, a manual scan for the flag, and a show per id.
+	//
+	// The NOTE, not any delta, and that is what makes this a worklist rather than an archive. A note
+	// is a TODO — "this regressed, do something" — and `sflock learn` is the something: it moves the
+	// note into a ground-truth case and clears it here, so this list DRAINS. An overturn cannot be
+	// cleared and must not be: rewriting `Output` or `Final output` would falsify what was judged and
+	// what was posted. So it stays, visible as `overturned` on the plain list, where it belongs —
+	// history, not an ask. Filtering on `feedbackOf() !== null` fused the two, and every overturned
+	// row would sit in this queue forever however many times it had been learned from.
 	const list = async (scope: "pending" | "reviewed" | "all" = "pending", opts: { feedback?: boolean } = {}) => {
 		const filter = scope === "all" ? { or: [SCOPE.pending, SCOPE.reviewed] } : SCOPE[scope];
 		const rows = await queryAll(store, config.models.Decisions, filter);
 		return rows.flatMap((r) => {
 			const fb = feedbackOf(r.fields);
-			if (opts.feedback && !fb) return [];
+			if (opts.feedback && !fb?.note) return [];
 			const name = String(r.fields.Name ?? r.id);
 			return {
 				id: r.id,
 				name,
 				kind: kindOf(r.fields),
+				subject: r.fields.Subject ? String(r.fields.Subject) : undefined,
 				hasFeedback: fb !== null,
 				overturned: !!fb?.outputChange,
 				...(fb && opts.feedback ? { feedback: renderFeedback(fb) } : {}),
@@ -321,9 +336,6 @@ export interface DeciderDeps extends ReviewerDeps {
 	// DAG dependent — the one place the domain funnel advances) and return that row's id. The relation
 	// it binds to is `config.entity`, so linkEntity no longer reports it — it just hands back the id.
 	linkEntity: (subject: Subject, spec: PromptSpec, opts: { dependsOn?: string[] }) => Promise<string>;
-	// The few-shot block the LLM sees, overridable per agent. Default: prior committed Decisions
-	// (examplesFor). x-engage supplies the owner's own Posts+Replies — its authentic voice — instead.
-	renderExamples?: (key: string, subject: Subject) => Promise<string>;
 }
 
 // createDecider(deps) — the decision tools bound to one agent's store + config + LinkedIn renderers:
@@ -331,56 +343,7 @@ export interface DeciderDeps extends ReviewerDeps {
 export const createDecider = (deps: DeciderDeps) => {
 	const { config, renderEvidence, projectInput, resolveSubject, linkEntity } = deps;
 	const reviewer = createReviewer(deps);
-	const { store, appLink, kindOf, showDecision } = reviewer;
-
-	// examplesFor(key, excludeName) — the few-shot block: the Decisions a human flagged
-	// `Include as example` (and committed), of this prompt kind, minus the person being judged.
-	//
-	// Shared context, so fetched ONCE per kind per decider (same reason and same idiom as the
-	// contract above: the corpus doesn't change during a run, and it costs a table query plus a read
-	// per example). Only the exclusion is per-item, and it is a filter over what was already
-	// fetched — hence one more than the limit is kept, so excluding the subject can't shrink the
-	// block below EXAMPLE_LIMIT.
-	const EXAMPLE_LIMIT = 4;
-	const corpora = new Map<string, Promise<{ name: string; block: string }[]>>();
-	const corpusFor = (key: string): Promise<{ name: string; block: string }[]> => {
-		const hit = corpora.get(key);
-		if (hit) return hit;
-		const flight = loadCorpus(key).catch((e: unknown) => {
-			corpora.delete(key);
-			throw e;
-		});
-		corpora.set(key, flight);
-		return flight;
-	};
-	const loadCorpus = async (key: string): Promise<{ name: string; block: string }[]> => {
-		const spec = config.prompts![key];
-		const rows = await store.query(config.models.Decisions, {
-			and: [
-				{ property: "Include as example", checkbox: { equals: true } },
-				{ property: "Final output", rich_text: { is_not_empty: true } }
-			]
-		});
-		const mine = rows
-			.filter((r) => kindOf(r.fields) === spec.name)
-			.slice(0, EXAMPLE_LIMIT + 1);
-		const shown = await Promise.all(mine.map((r) => showDecision(r.id)));
-		return shown.map((s) => {
-			const output = s.review?.human.output ?? s.output;
-			const response = JSON.stringify({ output, statements: s.statements }, null, 2);
-			return {
-				name: s.name,
-				block: `<example>\n<evidence>\n${s.evidence}\n</evidence>\n<response>\n${response}\n</response>\n</example>`
-			};
-		});
-	};
-	const examplesFor = async (key: string, excludeName: string): Promise<string> => {
-		const blocks = (await corpusFor(key))
-			.filter((e) => !e.name.startsWith(excludeName))
-			.slice(0, EXAMPLE_LIMIT)
-			.map((e) => e.block);
-		return blocks.length ? `## Examples\n\n<examples>\n${blocks.join("\n")}\n</examples>` : "";
-	};
+	const { store, appLink } = reviewer;
 
 	// The judgment context: the prompt folder's full contract plus the subject's frozen evidence.
 	//
@@ -405,10 +368,7 @@ export const createDecider = (deps: DeciderDeps) => {
 		const evidence = renderEvidence(input);
 
 		const responseSchema = responseSchemaFor(outputSchema);
-		const examples = deps.renderExamples
-			? await deps.renderExamples(key, subject)
-			: await examplesFor(key, String(f.Name ?? subject.name));
-		return { spec, subject, prompt, system, examples, outputSchema, input, evidence, responseSchema };
+		return { spec, subject, prompt, system, outputSchema, input, evidence, responseSchema };
 	};
 
 	// judge — the verdict alone: the contract, the frozen evidence, the two-tool loop, and nothing
@@ -447,6 +407,13 @@ export const createDecider = (deps: DeciderDeps) => {
 			// both are now plain columns. `Kind` replaced a relation into a Prompts table that no longer
 			// exists: with the contract in git, the row's only remaining job was to hold this one string.
 			Kind: ctx.spec.name,
+			// WHAT this decision is about, as the subject's own identity key (a thread URL) — the one
+			// datum a Decision could not previously state about itself. Its Name carries a truncated
+			// label and its entity rides in a relation the store flattens away, so "which thread is
+			// this?" cost a read of the frozen Input and a parse of an agent's seed. It is also what
+			// `sflock learn` keys a ground-truth case on, so a learning lands in the same key space
+			// the corpus already uses however many decisions were made about one subject.
+			Subject: ctx.subject.key,
 			"Instructions hash": ctx.prompt.hash,
 			[config.entity]: [entityId],
 			...(dependsOn?.length ? { "Depends on": dependsOn } : {})
@@ -464,8 +431,8 @@ export const createDecider = (deps: DeciderDeps) => {
 	// context — the read half of a decision: the contract plus the frozen evidence, with the
 	// response's expected shape. `--show` prints this; nothing is written.
 	const context = async (key: string, publicId: string) => {
-		const { system, examples, evidence, responseSchema } = await judgmentContext(key, publicId);
-		return { system, examples, evidence, responseSchema };
+		const { system, evidence, responseSchema } = await judgmentContext(key, publicId);
+		return { system, evidence, responseSchema };
 	};
 
 	return { ...reviewer, judge, decide, context, judgmentContext };

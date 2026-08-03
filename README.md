@@ -14,26 +14,29 @@ says what it does. If a fact can drift, it belongs in code, not here.
    the pipeline: it *sets up* (compile a destination's or source's contract → a TS type) and
    *reviews* (`sflock decisions` — an agent's Decisions, `sflock prompts` — its live Prompt
    contracts, and `sflock docs` — the Writer's documents, which belong to no agent at all; over
-   `createReviewer` or the Store seam, no entity bridge) and *calibrates* (`sflock eval`).
-   Calibration is the counterpart of authoring: publishing the next version of a judgment's
-   instructions is worth nothing unless something says it is better. **How it is graded follows from
-   the Output, and where its corpus lives follows from whether a human ruled on it** — two questions
-   about the judgment, not two preferences. An Output that is PROSE cannot be checked by `===` or by
-   a schema, so the scorer is itself a Prompt, authored and versioned like the one it grades, and a
-   run reports which version of it ruled; an Output that is CHECKABLE needs no scorer at all, because
-   the label a person recorded IS the answer. And a REVIEWED judgment froze its evidence in a
-   Decision, so its ground truth is the review history and is never written down — the corpus is a
-   QUERY, since a checked-in copy would be a second record of rows the CRM already owns, stale the
-   moment anyone reviews again — whereas a CALIBRATED judgment mints no Decision and froze nothing:
-   its subject's row is live state that a later stage moves under a label written weeks ago, so there
-   the fixture must CARRY its evidence, and the eval reads no store. The two are opposite conventions
-   for the same reason: score against whatever cannot change under you. Review is read-only with exactly one
-   exception, and it is a *prose* exception: `sflock docs push` hands a revision of a document
-   back — through the app's own save sink, so it lands in the editor a human has open rather than
-   behind a reload. Prompt text used to be the other one, because it lived in a CRM row; it is a file
-   now, so editing it is editing a file and the CLI has nothing to say about it — which leaves
-   `sflock prompts` doing the one job files cannot do for themselves (keeping an inlined shared
-   section in step with its source). Pipeline state stays the runtime's. The per-agent runtime binary
+   `createReviewer` or the Store seam, no entity bridge) and *calibrates* (`sflock learn`,
+   `sflock eval`). Calibration is the counterpart of authoring: publishing the next version of a
+   judgment's instructions is worth nothing unless something says it is better. **It is two verbs
+   and they are inverses** — `learn` turns a Decision into a CASE, `eval` turns cases into a SCORE;
+   one writes the corpus, one reads it, and nothing else touches it. A corpus is always
+   SELF-CONTAINED: a case carries the evidence it was labelled on, so a run reads no store and is
+   reproducible offline. It used to depend on whether a human had reviewed the judgment — a pointer
+   at the Decision that froze the evidence, or a fixture carrying its own — and that split was
+   honest only while a Decision lived forever. `learn` retires it, so there is one convention left,
+   and it is the one that cannot rot under you. **How a judgment is graded still follows from its
+   Output**, but it is derived rather than named: an Output that is CHECKABLE needs no scorer at all,
+   because the label a person recorded IS the answer; one that is PROSE cannot be checked by `===`,
+   so the scorer is itself a Prompt, authored and versioned like the one it grades. Which applies
+   comes from one declaration — the scorer says what it `grades` — and from that the scorer's own
+   corpus is derived too, since the outputs a human accepted and replaced are exactly the pair it
+   must rule on. Review is read-only with two exceptions and both write PROSE, never pipeline state:
+   `sflock docs push` hands a revision of a document back — through the app's own save sink, so it
+   lands in the editor a human has open rather than behind a reload — and `sflock learn` moves a note
+   out of the CRM and into git, which is the whole of what a complaint is for. Prompt text used to be
+   a third, because it lived in a CRM row; it is a file now, so editing it is editing a file and the
+   CLI has nothing to say about it — which leaves `sflock prompts` doing the one job files cannot do
+   for themselves (keeping an inlined shared section in step with its source). Pipeline state stays
+   the runtime's. The per-agent runtime binary
    is *action* (compose scripts, persist, advance the funnel). Setup describes, the operator CLI
    inspects, runtime does.
 

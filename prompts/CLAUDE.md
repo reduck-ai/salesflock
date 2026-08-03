@@ -10,7 +10,8 @@ agents/<id>/prompts/<key>/
   PROMPT.md          the instructions the model reads (pure prose, no frontmatter)
   input.json         what the judgment is shown      ┐ JSON Schema, draft-07
   output.json        what it must return             ┘ (a bare `new Ajv()` — do not tag 2020-12)
-  ground_truth.yaml  the corpus it is calibrated against (only for a graded prompt)
+  ground_truth.yaml  the corpus it is calibrated against — self-contained (each case carries its
+                     own evidence), written only by `sflock learn`, read only by `sflock eval`
 ```
 
 `<key>` is the key in that agent's `config.ts` `prompts` — the two must match, both ways, and a test
@@ -59,10 +60,18 @@ Neither binary is on `PATH`; from `salesflock/` they are `node dist/src/cli.js �
     npm test                    the same check, plus: schemas compile, config ↔ folders agree,
                                 no marker reaches the model, no pool file is unused
 
-    sflock eval qualify --agent <id> [candidate.md]   label vs judgment — no model scores it, so it
-                                is cheap and offline; run it on every edit
-    sflock eval judge  --agent <id> [candidate.md]    does the SCORER agree with your reviews
-    sflock eval reply  --agent <id> [candidate.md]    does the DRAFTER satisfy the scorer
+    sflock eval --agent <id> --prompt <key> [candidate.md]   score a prompt against its ground
+                                truth. ONE verb: how it is graded follows from the Output, and that
+                                is derived from the scorer's own `grades` declaration (config.ts).
+                                  --prompt qualify   nothing grades it → compare to your label.
+                                                     No model, no store: cheap, run it every edit
+                                  --prompt reply     `judge` grades it → draft, then the scorer rules
+                                  --prompt judge     it grades `reply` → cases DERIVED from reply's
+                                                     corpus: `expect` valid, `reject` invalid
+    sflock learn <decision> --agent <id> [--prompt <key>] [--expect <json>]
+                                the corpus's only writer: a decision becomes a case. Your note is
+                                the rule, the frozen evidence the fixture. --prompt routes it — a
+                                qualification complaint left on a reply belongs in qualify's corpus
 
 A **candidate** is just a copy of a `PROMPT.md`: `cp …/reply/PROMPT.md /tmp/c.md`, edit, score it,
 and if it wins, copy it back. Markers in or already stripped — either is read the same way. Every

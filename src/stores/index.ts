@@ -21,6 +21,11 @@ export interface Store {
 	// ACCUMULATES — a Decision, whose Name carries the instant it was judged, so an upsert's key lookup
 	// is a guaranteed-miss round-trip on every write.
 	create(model: string, record: object): Promise<Ref>;
+	// Write columns on a row addressed by ID — the write half of `get`, and the third member of the
+	// write family: `upsert` finds a row by key, `create` makes one, `patch` edits the one you name.
+	// For a row whose identity is not a column (a Decision — created, never keyed), it is the only
+	// way to correct a field. Writing "" clears a text property.
+	patch(model: string, id: string, record: object): Promise<Ref>;
 	read(model: string, key: string, value: unknown): Promise<Row>; // the one row where key = value
 	query(model: string, filter: object): Promise<Row[]>; // every row matching a store-native filter
 	// ONE page of matches + whether more exist (and the cursor to the next page when it does).
@@ -96,6 +101,14 @@ export interface PromptSpec {
 	// them that something must model. So the act runs INSIDE the commit: after every gate, before any
 	// write, so a failure persists nothing and the row simply stays in the queue.
 	//
+	// The prompt this one SCORES — set only on a scorer (the reply judge), naming the `config.prompts`
+	// key whose drafts it rules on. One string, and three things follow from it with nothing else
+	// declared: `sflock eval` grades THIS prompt by comparing its label (a scorer's Output is a
+	// boolean, so `===` settles it), grades the prompt it names through this scorer instead, and
+	// derives this prompt's own corpus from that one's (`expect` must be ruled valid, `reject`
+	// invalid — same evidence, opposite verdict). Before it, core looked up the literal key "judge",
+	// which is an agent's naming leaking into the engine.
+	grades?: string;
 	// It returns the fields its result adds to the pipeline entity (a permalink, a timestamp), merged
 	// into the SAME patch that writes `resolve`'s Status — one write, so the deed and its record
 	// cannot disagree. Absent ⇒ the decision only moves state, which is every prompt that judges.
@@ -127,6 +140,14 @@ export interface AgentConfig {
 	// regress it). Without it two Decisions tied to one entity fight over its Status and the last
 	// confirm wins, undoing a move that already happened. Statuses off the ladder are terminal.
 	ladder?: readonly string[];
+	// How this agent CLEANS ITS BACKLOG — the other end of the gate `pending` opens. `sflock learn`
+	// calls it with the subject's key when it retires a decision that was never approved; without it
+	// the entity sits at its pending rung with no Decision open on it, a row nobody will ever close.
+	//
+	// A function, not a Status string, for the reason `act` is one: only the agent knows which table
+	// holds its backlog and which column keys it, and core must not learn either. It is the mirror of
+	// `PromptSpec.act` — that is what approving DOES, this is what refusing does.
+	drop?: (subject: string) => Promise<void>;
 	prompts?: Record<string, PromptSpec>; // decision kind (e.g. qualify) → its contract row + transitions
 	// The LLM, "provider/modelId" (e.g. "bedrock/us.anthropic.claude-sonnet-4-6") — declared here
 	// like `destination`, never injected through env (env carries only credentials). Absent,

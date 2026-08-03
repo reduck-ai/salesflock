@@ -404,6 +404,20 @@ export const upsert = (model: string, record: object, keyProp: string): Promise<
 	});
 };
 
+// patch(model, id, record) — write columns on the page you name. `upsert` locates a row by key then
+// PATCHes it; this is that PATCH with the lookup removed, for a row whose identity is not a column
+// (a Decision is created, never keyed, so no `upsert` can ever reach it). The model is still needed
+// — Notion resolves the page by id, but serializing a value needs the data source's property types.
+// An empty string clears a text property, which is how a note is moved out rather than duplicated.
+export const patch = (model: string, id: string, record: object): Promise<Ref> =>
+	traced("patch", labelOf(model, idOf(id)), async (meter) => {
+		const dsId = await resolveDsId(model, meter);
+		const ds = await loadDs(dsId, meter);
+		const properties = propertiesOf(ds, model, record as Record<string, unknown>);
+		await api(`/pages/${idOf(id)}`, { method: "PATCH", body: { properties } }, meter);
+		return { id: idOf(id), url: pageUrl(idOf(id)), created: false };
+	});
+
 // A page → a Row: its id plus every property flattened to a plain scalar (relations and other
 // pointerish types drop to null and are skipped). The one page→Row mapping, shared by read,
 // query and get so the three return the same shape.
@@ -536,6 +550,7 @@ export const notion: Store = {
 	describe,
 	upsert,
 	create,
+	patch,
 	read,
 	query,
 	queryPage,

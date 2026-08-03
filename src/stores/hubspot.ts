@@ -90,6 +90,7 @@ export const hubspot: Store = {
 	describe,
 	upsert: notImplemented,
 	create: notImplemented,
+	patch: notImplemented,
 	read: notImplemented,
 	query: notImplemented,
 	queryPage: notImplemented,
