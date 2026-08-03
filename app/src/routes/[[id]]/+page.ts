@@ -20,7 +20,14 @@ export const load: PageLoad = async ({ params, fetch }) => {
 		if (hit) return { current: hit };
 	}
 	const res = await fetch(`/api/decision/${id}`);
-	if (!res.ok) throw new Error(`decision ${id}: ${res.status}`);
+	// Name WHICH layer refused. This fetch is to our OWN api route, so a 401 is this app's Google gate
+	// and never Notion — but a bare status reads exactly like a store failure, which sends you off
+	// verifying a token that was fine all along (measured: `/users/me` 200 and every data source
+	// readable, while the page still 401'd because the caller simply had no session).
+	if (!res.ok)
+		throw new Error(
+			`decision ${id}: ${res.status}${res.status === 401 ? " — not signed in (this app's gate, not Notion)" : ""}`
+		);
 	const current = (await res.json()) as EvidencedJudgment;
 	if (browser) setCard(id, current);
 	return { current };
