@@ -315,7 +315,7 @@ export const evaluate = async (
 				why: v.why,
 				...(c.f.note ? { note: c.f.note } : {})
 			};
-		});
+		}, { label: `eval ${key}` });
 		return { label, path, mode: `scorer of ${spec.grades}`, skipped: picked.length - live.length, rows };
 	}
 
@@ -350,7 +350,7 @@ export const evaluate = async (
 				why: v.why,
 				...(s.note ? { note: s.note } : {})
 			};
-		});
+		}, { label: `eval ${key}` });
 		return { label, path, mode: `judged by ${scorer.key} (${judge.hash})`, skipped: picked.length - live.length, rows };
 	}
 
@@ -367,6 +367,9 @@ export const evaluate = async (
 	const rows = await mapLimit(live, async (f): Promise<Scored> => {
 		const input = projectInput(fieldsOf(f.fields), graded.inputSchema);
 		const judge = (i: Record<string, string>) => run(system, agent.renderEvidence(i), graded.outputSchema);
+		// The two reads are independent (`reduced` derives from `input`, never from `v`) so they COULD
+		// run together. Tried, and reverted: it saved ~10s on the few two-phase cases and cost a second
+		// code path to read. Sequential is what "an earlier, cheaper read" already means.
 		const v = await judge(input).catch((e: unknown) => ({ error: renderError(e) }) as const);
 		if ("error" in v) return { name: f.key, ok: false, error: v.error, why: [] };
 		const reduced = funnel.preScreen?.(input);
@@ -387,7 +390,7 @@ export const evaluate = async (
 				? { killed: true }
 				: {})
 		};
-	});
+	}, { label: `eval ${key}` });
 	return { label, path, mode: "label", skipped: picked.length - live.length, rows };
 };
 

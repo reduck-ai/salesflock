@@ -11,24 +11,38 @@ import { generateObject, generateText, jsonSchema, stepCountIs, tool, type Langu
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock";
 import { fromNodeProviderChain } from "@aws-sdk/credential-providers";
-import { gate, LLM_CONCURRENCY } from "../concurrency.js";
 import { log } from "../log.js";
 
-// One gate for the whole LLM backend (its own ceiling, so a tool can fan out wider than it), with
-// retry-on-throttle: providers rate-limit wide fan-outs (Bedrock 429s at even 2 concurrent on some
-// accounts), so back off and retry rather than fail the run. Same shape as the Notion store's gate;
-// the retry is the sole diagnostic — normal calls stay quiet. A whole agent() loop holds one slot:
-// its steps are one conversation, interleaving them wouldn't add throughput at the provider.
-const slot = gate(LLM_CONCURRENCY);
+// NO CONCURRENCY GATE. There was one — a global 8, a number taken from Bedrock ("429s at even 2
+// concurrent") and charged to every provider. It cost 3x on the qualify corpus (75s against 22s) and
+// bought nothing measurable: across ~15 full-corpus runs at widths from 8 to 54, not one 429.
+//
+// A provider DOES fail, but the failure is a STALL, not a refusal — a request that is simply never
+// answered. Measured: single calls of 163s, 172s and 264s while every healthy call finished inside
+// 28s, always with zero throttles. It is exogenous (it appeared partway through a heavy session and
+// grew more frequent) and it does NOT track concurrency: 32 stalled in two runs of three, 49 in none
+// of two. A width was tried as the cure and is not one.
+//
+// So the two failure modes get the two mechanisms that can actually see them, and neither is a width:
+//   a loud refusal (429)  → RATE below: back off and retry.
+//   a silent stall        → DEADLINE below: a request past it is presumed dead, aborted, retried.
+// Without the deadline a single stall IS the run's wall time (264s observed on a 22s corpus); with
+// it, the damage is bounded to one deadline plus a retry. 45s is ~1.6x the slowest honest call.
+const DEADLINE = 45_000;
 const RATE = /too many requests|\b429\b|throttl|rate.?limit|resource.?exhausted/i;
+// An aborted deadline surfaces as a timeout rather than a rate limit, so it needs its own pattern —
+// but the response is the same (try again), which is why it shares the one retry path.
+const STALL = /abort|timed? ?out|timeout/i;
 const withRetry = async <T>(fn: () => Promise<T>, label: string): Promise<T> => {
 	for (let attempt = 0; ; attempt++) {
 		try {
 			return await fn();
 		} catch (e) {
-			if (attempt >= 4 || !RATE.test((e as Error).message)) throw e;
+			const why = (e as Error).message;
+			const stalled = STALL.test(why);
+			if (attempt >= 4 || !(RATE.test(why) || stalled)) throw e;
 			const wait = 1000 * 2 ** attempt;
-			log("llm", `${label} rate-limited, retry ${attempt + 1}/4 in ${wait}ms`);
+			log("llm", `${label} ${stalled ? `stalled past ${DEADLINE}ms` : "rate-limited"}, retry ${attempt + 1}/4 in ${wait}ms`);
 			await new Promise((r) => setTimeout(r, wait));
 		}
 	}
@@ -82,17 +96,16 @@ export const generate = async <T>(prompt: string, schema: object, spec = DEFAULT
 	const model = modelFor(spec);
 	log("llm", `${model.modelId} generate …`);
 	const t0 = Date.now();
-	const { object } = await slot(() =>
-		withRetry(
-			() =>
-				generateObject({
-					model,
-					schema: jsonSchema<T>(strict(schema) as never),
-					prompt,
-					temperature: 0
-				}),
-			`${model.modelId} generate`
-		)
+	const { object } = await withRetry(
+		() =>
+			generateObject({
+				model,
+				schema: jsonSchema<T>(strict(schema) as never),
+				prompt,
+				temperature: 0,
+				abortSignal: AbortSignal.timeout(DEADLINE)
+			}),
+		`${model.modelId} generate`
 	);
 	log("llm", `${model.modelId} generate done (${Date.now() - t0}ms)`);
 	return object;
@@ -121,20 +134,22 @@ export const agent = (prompt: string, tools: ToolSet, done: () => boolean, spec 
 	const model = modelFor(spec);
 	log("llm", `${model.modelId} …`);
 	const t0 = Date.now();
-	return slot(() =>
-		withRetry(
-			() =>
-				generateText({
-					model,
-					tools,
-					prompt,
-					temperature: 0,
-					stopWhen: [done, stepCountIs(maxSteps)],
-					onStepFinish: (s) =>
-						log("llm", `${model.modelId} step: ${s.toolCalls.map((c) => c.toolName).join(", ") || "—"}`)
-				}),
-			model.modelId
-		)
+	return withRetry(
+		() =>
+			generateText({
+				model,
+				tools,
+				prompt,
+				temperature: 0,
+				// The deadline covers the WHOLE loop, not a step: a judgment is one conversation and only
+				// its completion means anything. A fresh signal per attempt, since this closure is what
+				// `withRetry` re-invokes; re-running is safe because `runJudgment` is pure.
+				abortSignal: AbortSignal.timeout(DEADLINE),
+				stopWhen: [done, stepCountIs(maxSteps)],
+				onStepFinish: (s) =>
+					log("llm", `${model.modelId} step: ${s.toolCalls.map((c) => c.toolName).join(", ") || "—"}`)
+			}),
+		model.modelId
 	).then(
 		(r) => (
 			log(

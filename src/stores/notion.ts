@@ -153,7 +153,7 @@ export const idOf = (s: string): string => s.match(/[0-9a-f]{32}/i)?.[0] ?? s;
 // memo(cache, key, load) — one FLIGHT per key, not one value per key, and that difference is the
 // whole point: these caches serve a fan-out, so what has to be deduped is the request in the air,
 // not the answer once it lands. Caching the value means every caller that starts before the first
-// one returns misses, and they all fetch — a stampede exactly as wide as TASK_CONCURRENCY, paid on
+// one returns misses, and they all fetch — a stampede exactly as wide as the fan-out, paid on
 // every process against a rate-limited backend. (Measured, once the write trace made it visible: a
 // scan's first rows each spent 3–4 paced requests where the steady state is 2.) Storing the promise
 // makes the second caller wait on the first's request instead of issuing its own.

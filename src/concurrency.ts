@@ -1,30 +1,25 @@
-// Bounded work — where "how many at once, and how often" is decided. Each scarce backend is bounded
-// on the quantity IT actually limits (conflating them throttles fast calls to the slowest backend's
-// ceiling, and bounding the wrong quantity doesn't bound anything at all):
-//   REDUCK_CONCURRENCY — the single browser device (the reduck runner's gate). Physical: how many.
-//   NOTION_RPS         — the Notion API (the store's pacer). A RATE, because that is what Notion
-//                        limits: ~3 requests/second per connection *on average*, plus a second
-//                        workspace-wide limit shared with every other connection (the review app
-//                        included). So no local measurement can justify a concurrency number — the
-//                        workspace limit is invisible from inside one process, and a burst that
-//                        "drew zero 429s" one evening earns a 631s ban the next. The default sits
-//                        UNDER the documented average, because an average sustained exactly has no
-//                        margin (measured: 3 rps still drew a 429), and `pace` adapts from there.
-//                        There is deliberately NO Notion concurrency knob: at this rate with
-//                        sub-second calls, in-flight count is 1–3 by construction.
-//   LLM_CONCURRENCY    — the model provider (llm.ts's gate). Providers throttle wide fan-outs
-//                        (Bedrock 429s at even 2 concurrent on some accounts — measured, not assumed).
-//   TASK_CONCURRENCY   — a tool's fan-out over a list (mapLimit's default).
-// A tool fans a list out wide; each underlying call still acquires its backend's gate or pacer, so
-// browser, Notion and LLM work progress concurrently instead of serializing inside one narrow wave.
+// Bounded work. ONE RULE: a backend is bounded INSIDE the client that does its I/O, on the quantity
+// that backend actually limits — a COUNT (`gate`) or a RATE (`pace`). Nothing generic bounds anything.
+//   the browser device — a count, REDUCK_CONCURRENCY (clients/reduck.ts). Physical: you have so many.
+//   the Notion API     — a rate, NOTION_RPS (stores/notion.ts). ~3 rps per connection plus a
+//                        workspace-wide limit shared with the review app, so no local measurement can
+//                        justify a number; `pace` adapts from Notion's own 429s. It needs no
+//                        concurrency knob: `pace` reserves an instant per caller before it awaits, so
+//                        spacing is a property of the clock, not of how many callers queued — a wider
+//                        fan-out parks more callers, it cannot raise the rate.
+//   the LLM provider   — NOT bounded here, and ai/llm.ts says why: its failure mode is a silent
+//                        stall rather than a refusal, so no width can see it and a deadline can.
+//
+// So `mapLimit` fans out UNBOUNDED unless a caller passes a limit. There used to be a
+// TASK_CONCURRENCY of 8, equal to the LLM gate — so it clamped first and raising the gate did
+// nothing. A default that silently becomes the real limit is worse than none: the caller never made
+// the decision, and the knob lied about what it controlled (8-wide: 75s on a corpus that runs in 22s).
 
 import { renderError } from "./errors.js";
 import { log } from "./log.js";
 
 export const REDUCK_CONCURRENCY = Number(process.env.REDUCK_CONCURRENCY) || 4;
 export const NOTION_RPS = Number(process.env.NOTION_RPS) || 2.5;
-export const LLM_CONCURRENCY = Number(process.env.LLM_CONCURRENCY) || 8;
-export const TASK_CONCURRENCY = Number(process.env.TASK_CONCURRENCY) || 8;
 
 // gate(limit) — a FIFO admission gate: at most `limit` thunks run at once, the rest queue. Returns
 // the acquire wrapper; ONE gate instance shared by all callers is a single ceiling for that backend.
@@ -88,8 +83,11 @@ export const pace = (rps: number) => {
 	});
 };
 
-// mapLimit(items, fn, opts) — map `fn` over `items` with at most `opts.limit` in flight (default the
-// tool fan-out), results in input order. The backend gates beneath it are the hard floors for slow work.
+// mapLimit(items, fn, opts) — map `fn` over `items`, results in input order. UNBOUNDED by default:
+// the backend gates and pacers beneath it are the real ceilings, each sitting in the client that owns
+// the scarcity, so a generic width here would only ever shadow them (it did — see the header).
+// `opts.limit` exists for the caller that has a reason of its own, and a caller with no such reason
+// should not invent one.
 //
 // `opts.label` turns the fan-out into a PROGRESS line: `m/n <label>` on each completion. It belongs
 // here and nowhere else, because `n` exists here and nowhere else — a backend seam logs the call it
@@ -100,7 +98,7 @@ export const pace = (rps: number) => {
 export const mapLimit = async <T, R>(
 	items: T[],
 	fn: (item: T, index: number) => Promise<R>,
-	{ limit = TASK_CONCURRENCY, label }: { limit?: number; label?: string } = {}
+	{ limit, label }: { limit?: number; label?: string } = {}
 ): Promise<R[]> => {
 	const out: R[] = new Array(items.length);
 	let next = 0;
@@ -115,7 +113,9 @@ export const mapLimit = async <T, R>(
 			if (label) log("batch", `${++done}/${items.length} ${label}`);
 		}
 	};
-	await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+	// No limit ⇒ one worker per item, i.e. everything in flight at once. `Math.min` with an absent
+	// limit would be NaN, and `Array.from({length: NaN})` is empty — zero workers, a silent hang.
+	await Promise.all(Array.from({ length: Math.min(limit ?? items.length, items.length) }, worker));
 	return out;
 };
 
