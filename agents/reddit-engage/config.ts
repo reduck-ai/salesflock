@@ -165,16 +165,27 @@ export default {
 	// It arrives holding a THREAD (a Decision's Subject is what was judged) and must close a PERSON,
 	// so it reads the thread for its author — the one hop the re-key costs, and the honest one: the
 	// row being closed is the conversation, and the conversation is with a human.
+	//
+	// And it GUARDS ON THE DATUM, which is `act`'s rule read backwards. `act` refuses to post twice
+	// because a `Comment URL` says the deed is done; `drop` refuses to CLOSE a conversation for the
+	// same reason — the comment is on Reddit and cannot be un-said, so a conversation we are already
+	// having is not something retiring a draft may end. Without this the re-key turned `sflock learn`
+	// destructive: keyed on the thread, dropping a duplicate draft closed only that draft's row;
+	// keyed on the person, the SAME call would mark a live "Waiting for OP" conversation "Dropped"
+	// because a second, never-sent draft about them was thrown away. (Measured on exactly that row:
+	// one author's cross-post left a draft we never sent hanging off a conversation we had already
+	// posted in.) No outreach at all ⇒ nothing to close, so it is silent rather than inventing a row.
 	drop: async (subject) => {
 		const store = getStore("notion");
 		const thread = await store.read(THREADS, "Thread URL", threadUrl(subject));
 		if (!thread.fields.Author)
 			throw new Error(`thread ${subject} has no Author — cannot close an outreach with no person`);
-		await store.upsert(
-			BACKLOG,
-			{ Person: userUrl(String(thread.fields.Author)), Status: "Dropped" },
-			"Person"
-		);
+		const [outreach] = await store.query(BACKLOG, {
+			property: "Person",
+			url: { equals: userUrl(String(thread.fields.Author)) }
+		});
+		if (!outreach || outreach.fields["Comment URL"]) return;
+		await store.patch(BACKLOG, outreach.id, { Status: "Dropped" });
 	},
 	prompts: {
 		// Is this thread worth answering? The one filter of the funnel (no deterministic pre-filter),
