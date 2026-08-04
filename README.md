@@ -120,9 +120,15 @@ says what it does. If a fact can drift, it belongs in code, not here.
 ## Applied
 
 `agents/reddit-engage/` is the worked example, and today the only agent: a funnel that judges
-then drafts, and a human gate whose click posts. Its two tables are #4 taken literally — the
-thread (what Reddit says, plus how we judged it) and the outreach (our conversation on it, one
-row per thread we chose to engage), both keyed on the same canonical URL. What is owed is
+then drafts, and a human gate whose click posts. Its two tables are #4 taken literally, and each
+is keyed on the canonical URL of the thing it *is* — the thread on the thread's (what Reddit says,
+plus how we judged it), the outreach on the PERSON's (our conversation with one human, whatever
+they posted). That second key is #6 doing real work: identity was the thread until a cross-poster
+got two replies eighteen minutes apart, and moving the key one entity up made "one conversation
+per human" converge by construction instead of by a rule someone remembers. It also splits the
+writes by what they may do — opening the conversation writes its status, while joining another of
+their threads writes only that thread's own relation, so a stage with nothing to guard cannot
+disturb where the conversation stands. What is owed is
 *derived* from that data, never a rung anyone wrote down: no Tier ⇒ judge it, a good Tier and no
 outreach ⇒ draft it. So a run that dies mid-funnel leaves the state its own data describes, with
 nothing to reconcile. Its identity lives in the CRM, as its Prompt bodies (with the generic

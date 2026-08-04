@@ -421,6 +421,12 @@ export const createDecider = (deps: DeciderDeps) => {
 		return {
 			id: d.id,
 			name,
+			// The pipeline entity this decision opened — already in hand from linkEntity, so handing it
+			// back costs nothing and saves the caller a read of a row it just caused to exist. An agent
+			// whose funnel relates OTHER rows to that entity (reddit-engage attaches a person's remaining
+			// threads to the outreach it just opened) needs the id, and re-querying for it would be
+			// asking the store to tell us something we computed one line ago.
+			entity: entityId,
 			output,
 			claims: statements.map((s) => s.claim),
 			where: d.url,

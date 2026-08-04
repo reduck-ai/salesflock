@@ -49,11 +49,14 @@ const withThreadFilters = (c: Command): Command =>
 		.option("--tier <tier>", "only threads judged T1, T2 or No (omit for every thread)")
 		.option("--since <window>", `only threads created since — ISO date or shorthand ("48h", "7d")`);
 
-// The Backlog's own flags. `--status` names that table's own column, which is the only place the
-// word means anything; `--since` reads `Posted at`, because a different table keeps a different clock.
-type BacklogFlags = Ident & { status?: string; since?: string };
+// The Backlog's own flags. `--person` names that table's IDENTITY (an outreach is a person now), so
+// it is the one word that selects an outreach by what it is rather than by the thread it answers;
+// `--status` names that table's own column, which is the only place the word means anything; and
+// `--since` reads `Posted at`, because a different table keeps a different clock.
+type BacklogFlags = Ident & { person?: string[]; status?: string; since?: string };
 const withBacklogFilters = (c: Command): Command =>
 	withIdent(c)
+		.option("--person <users...>", "only these people (any shape: u/Name, /user/Name, a bare handle, the profile URL)")
 		.option("--status <state>", `only outreaches at this state ("Pending approval", "Waiting for OP", "Dropped")`)
 		.option("--since <window>", `only outreaches posted since — ISO date or shorthand ("48h", "7d")`);
 

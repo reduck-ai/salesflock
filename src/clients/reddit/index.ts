@@ -16,6 +16,36 @@ export const threadUrl = (url: string): string => {
 	return `https://www.reddit.com/r/${m[1].toLowerCase()}/comments/${m[2].toLowerCase()}/`;
 };
 
+// The canonical URL of a Reddit ACCOUNT — threadUrl's twin, and the second identity key this
+// source mints: the Reddit Backlog keys an outreach on the PERSON, because a human who posts
+// twice is one human to talk to, not two. (Measured, the hard way: one author cross-posted the
+// same question to two subreddits and we replied to both, eighteen minutes apart.)
+//
+// Same contract as threadUrl, for the same reason — Reddit renders a user under many shapes
+// (u/Name, /user/Name, a bare handle, any casing) and a username is case-INSENSITIVE for lookup,
+// so `SrvLdr` and `srvldr` are one account. All collapse to
+// https://www.reddit.com/user/<lowercased>/ so no spelling can fork a row.
+//
+// Loud on anything that is not a username, and that is the load-bearing half: "[deleted]" is
+// Reddit's word for an account that is gone, and keying an outreach on it would fuse every
+// deleted author in the store into ONE person. Absence and "[deleted]" are the same fact here —
+// there is nobody to talk to — so both throw rather than resolve to a shared bucket. (0 of the 53
+// qualified threads lack an author, so this is a guard, not a funnel gate.)
+export const userUrl = (author: string): string => {
+	// ONE anchored match over the WHOLE string, never a chain of strips: the accepted shapes are
+	// enumerated here, so anything else is rejected rather than mangled into something plausible.
+	// (Both halves are load-bearing. Stripping prefixes left a pasted profile URL's trailing slash
+	// on, so the first thing anyone pastes failed. Matching the last path segment instead accepted
+	// a THREAD url — "…/comments/1veqz5n/" reads as the username "1veqz5n" — which would key an
+	// outreach on a person who does not exist. Anchored, that cannot parse at all.)
+	const name = author
+		.trim()
+		.replace(/[?#].*$/, "")
+		.match(/^(?:(?:https?:\/\/)?(?:www\.)?reddit\.com)?\/?(?:u(?:ser)?\/)?([A-Za-z0-9_-]{3,20})\/?$/i)?.[1];
+	if (!name) throw new Error(`not a Reddit username: ${JSON.stringify(author)}`);
+	return `https://www.reddit.com/user/${name.toLowerCase()}/`;
+};
+
 // The community a thread belongs to, read off its canonical URL — threadUrl's twin, and the only
 // honest source for it. The stored Subreddit column keeps whatever casing the scan was handed
 // ("AI_Agents", "ai_agents"), so grouping on it forks one community into two; the URL is the

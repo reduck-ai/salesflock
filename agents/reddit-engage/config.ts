@@ -10,10 +10,13 @@
 // TWO tables, split by who writes them, because they change for unrelated reasons (README #4 —
 // pipeline state is a join, not a column):
 //   Reddit Threads   what Reddit says + what we concluded about the thread (Tier). Mutable only
-//                    because we re-read Reddit. No funnel state at all.
-//   Reddit Backlog   our outreach on one thread: its state, the comment we posted, when. One row
-//                    per thread we chose to engage — a hundredth of the threads we have seen.
-// Both keyed on the canonical Thread URL (the ONE identity, src/clients/reddit/index.ts), plus the
+//                    because we re-read Reddit. No funnel state at all. Keyed on the canonical
+//                    Thread URL.
+//   Reddit Backlog   our outreach to one PERSON: its state, the thread we answered, the comment we
+//                    posted, when. Keyed on the canonical account URL (`userUrl`), because a human
+//                    who posts twice is one human to talk to — their other threads hang off the row
+//                    as relations. One row per person we chose to engage.
+// Two canonical URLs, one per entity (src/clients/reddit/index.ts), plus the
 // two universal tables every agent shares (Decisions, Prompts). No People table: the thread IS the
 // unit, its author a flat column. `sflock pull --agent reddit-engage` reads this to regenerate
 // schema/*.ts; the runtime reads it to address each table.
@@ -22,11 +25,13 @@
 // inside the human's Confirm, never in a background pass.
 
 import { getStore, type AgentConfig } from "../../src/stores/index.js";
-import { say, threadUrl } from "../../src/clients/reddit/index.js";
+import { say, threadUrl, userUrl } from "../../src/clients/reddit/index.js";
 
-// The Backlog's table id, named because two declarations below need it: `models` maps it, and `drop`
-// writes to it. One constant, so they cannot come to mean different tables.
+// The two table ids `drop` needs beside `models`: it reads a thread to learn WHO wrote it, then
+// closes that person's outreach. Named constants, so the two declarations cannot come to mean
+// different tables.
 const BACKLOG = "ba8786a2-afd6-4b12-8416-df2a85440f58";
+const THREADS = "287eec98-859f-4a64-a50d-75da2e965488";
 
 // The watchlist AND each community's own rules — ONE declaration: which subreddits `scan` watches,
 // keyed by canonical name (lowercase, bare), each mapped to the rules a reply posted there must obey.
@@ -154,13 +159,21 @@ export default {
 	// case and the outreach closes in the same act — the queue drains instead of accumulating
 	// conversations that are waiting on nobody.
 	//
-	// An upsert keyed on the canonical Thread URL, like every other write to this table, so it
+	// An upsert keyed on the canonical account URL, like every other write to this table, so it
 	// converges however often it runs and cannot fork a row. "Dropped" is off the ladder: terminal.
+	//
+	// It arrives holding a THREAD (a Decision's Subject is what was judged) and must close a PERSON,
+	// so it reads the thread for its author — the one hop the re-key costs, and the honest one: the
+	// row being closed is the conversation, and the conversation is with a human.
 	drop: async (subject) => {
-		await getStore("notion").upsert(
+		const store = getStore("notion");
+		const thread = await store.read(THREADS, "Thread URL", threadUrl(subject));
+		if (!thread.fields.Author)
+			throw new Error(`thread ${subject} has no Author — cannot close an outreach with no person`);
+		await store.upsert(
 			BACKLOG,
-			{ "Thread URL": threadUrl(subject), Status: "Dropped" },
-			"Thread URL"
+			{ Person: userUrl(String(thread.fields.Author)), Status: "Dropped" },
+			"Person"
 		);
 	},
 	prompts: {

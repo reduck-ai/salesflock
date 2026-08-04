@@ -1,119 +1,150 @@
 #!/usr/bin/env node
-// ONE-TIME migration: the day pipeline state left Reddit Threads for its own table.
+// ONE-TIME migration: the day an outreach stopped being a THREAD and became a PERSON.
 //
 //   node agents/reddit-engage/migrate.mjs [--apply]      (run from salesflock/, after `npm run build`)
 //   — without --apply it prints what it WOULD do and writes nothing.
 //
-// Delete this file once it has run. It exists because the split cannot be inferred from the data
-// alone: every Decision made before it binds to a Reddit Thread, and the review app now looks for a
-// Reddit Backlog — so confirming an old draft would write its output and move nothing, loudly but
-// too late. This gives each existing Decision the outreach row it should always have had.
+// Delete this file once it has run. It exists because the re-key cannot be inferred from the data:
+// every Backlog row was keyed on the thread it answered, so a human who posted twice has TWO rows,
+// and nothing in the store says they are one conversation. `userUrl(thread.Author)` says it, and
+// performing that join is the whole job.
 //
-// The threads themselves need NO migration, which is the point of where the line was drawn: the
-// Tier already says everything the funnel reads (empty ⇒ judge it, T1/T2 ⇒ draft it, "No" ⇒ done),
-// so the retired Status column is not translated, it is simply abandoned — and the rows that used
-// to sit at a status off the ladder, which a re-scan kept dragging backward, stop being anomalous
-// by construction rather than by repair.
+// Three steps, and only the second is destructive:
+//   1. PERSON   — stamp each outreach with its author's canonical account URL (the new key). By ID,
+//                 not by upsert: the row has no Person yet, so keying on it would create a twin.
+//   2. MERGE    — collapse the rows that turn out to be one human: the loser's Decisions are
+//                 re-pointed at the winner, its thread is attached to the winner, the row is
+//                 archived (Notion's trash, recoverable).
+//   3. ATTACH   — every qualified thread of a person we already track joins their outreach, so it
+//                 leaves the owed set instead of becoming a second reply to the same human. This is
+//                 the backfill of exactly what the runtime now does at its draft step.
 //
-// Idempotent: the Backlog upserts on the canonical Thread URL and the Decision's relation is set to
-// exactly one row, so a second run converges on the same state.
+// Idempotent: step 1 rewrites the same value, step 2 finds no collision the second time, step 3
+// selects on `Backlog is_empty` and so sees nothing it already did. A second run is a no-op.
 
 import "../../dist/src/env.js";
 import { getStore, queryAll } from "../../dist/src/stores/index.js";
-import { threadUrl } from "../../dist/src/clients/reddit/index.js";
+import { threadUrl, userUrl } from "../../dist/src/clients/reddit/index.js";
 import config from "../../dist/agents/reddit-engage/config.js";
 
 const apply = process.argv.includes("--apply");
 const store = getStore(config.destination);
-const REPLY = config.prompts.reply.name;
+const { RedditThreads: THREADS, RedditBacklog: BACKLOG } = config.models;
+const DECISIONS = config.models.Decisions;
+const say = (...a) => console.error(...a);
 
-// Walk from the THREADS, not the Decisions — a store Row comes back with its relations flattened
-// away, so a Decision cannot say which thread it belongs to, while the thread's own `Decision`
-// relation is a filterable fact. Every thread that ever produced a Decision is exactly the set that
-// needs an outreach row.
-const threads = await queryAll(store, config.models.RedditThreads, {
-	property: "Decision",
-	relation: { is_not_empty: true }
+const QUALIFIED = {
+	or: [
+		{ property: "Tier", select: { equals: "T1" } },
+		{ property: "Tier", select: { equals: "T2" } }
+	]
+};
+
+// ── the picture, read once ─────────────────────────────────────────────────────────────────────
+const outreaches = await queryAll(store, BACKLOG, { property: "Thread URL", url: { is_not_empty: true } });
+const qualified = await queryAll(store, THREADS, {
+	and: [{ property: "Thread URL", url: { is_not_empty: true } }, QUALIFIED]
 });
-console.error(`${threads.length} threads carry a Decision`);
+say(`${outreaches.length} outreaches, ${qualified.length} qualified threads`);
 
-for (const thread of threads) {
-	const url = threadUrl(String(thread.fields["Thread URL"]));
-	// This thread's decisions, found the same way round: the relation is filterable even though it is
-	// not readable off a row.
-	const decisions = await store.query(config.models.Decisions, {
-		property: "Reddit Thread",
-		relation: { contains: thread.id }
-	});
-	const replies = decisions.filter((d) => String(d.fields.Name ?? "").includes(REPLY));
-	if (!replies.length) {
-		console.error(`SKIP  ${url} — decisions, but none of kind "${REPLY}"`);
-		continue;
-	}
-	// Committed or not, the outreach is at "Pending approval": the reply was never posted (nothing
-	// could post it until now), so confirming it in the app is exactly what is still owed — and for
-	// the already-committed ones that is a re-confirm, which is precisely what `act`'s guard on
-	// `Comment URL` was written to make safe.
-	console.error(`${apply ? "LINK " : "would"} ${url}  (${replies.length} reply decision(s))`);
-	if (!apply) continue;
-	const ref = await store.upsert(
-		config.models.RedditBacklog,
-		{
-			Name: String(thread.fields.Name ?? url),
-			"Thread URL": url,
-			Thread: [thread.id],
-			Status: config.prompts.reply.pending
-		},
-		"Thread URL"
-	);
-	for (const d of replies)
-		await store.upsert(
-			config.models.Decisions,
-			{ Name: String(d.fields.Name), "Reddit Backlog": [ref.id] },
-			"Name"
-		);
+// thread URL → its row. Canonicalized on both sides so a stored spelling cannot miss (they are all
+// canonical today — checked — but the lookup should not depend on that staying true).
+const byUrl = new Map(qualified.map((t) => [threadUrl(String(t.fields["Thread URL"])), t]));
+const authorOf = async (url) => {
+	// An outreach on a thread that is not T1/T2 (a manual draft, an older rule) is not in the map —
+	// read it directly rather than skip it: EVERY existing outreach must get a Person, or the new key
+	// cannot reach it again.
+	const row = byUrl.get(threadUrl(url)) ?? (await store.read(THREADS, "Thread URL", threadUrl(url)));
+	if (!row.fields.Author) throw new Error(`thread ${url} has no Author — cannot key its outreach`);
+	return String(row.fields.Author);
+};
+
+// ── who is who: person → the outreaches that turn out to be theirs ─────────────────────────────
+const people = new Map();
+for (const o of outreaches) {
+	const person = userUrl(await authorOf(String(o.fields["Thread URL"])));
+	if (!people.has(person)) people.set(person, []);
+	people.get(person).push(o);
 }
 
-// STEP 2 — un-decide the replies that were confirmed before anything could post them.
-//
-// They were committed under the old funnel, where confirming meant "approved" and a later pass was
-// supposed to send. That pass never existed, so the comments were never posted — and a committed row
-// is out of the review queue, which is now the only place a post can happen. So they go back.
-//
-// `Final output` is the sole marker of a review, so clearing it IS the un-decide (src/decide.ts,
-// app/…/notion.ts and review.ts all read exactly that one property). The human's text is not lost
-// with it: it moves to `Draft output`, the working-copy channel, so the card reopens on THEIR words
-// rather than the model's — which is the whole reason that column now exists. `Feedback` and `Final
-// reasoning` are cleared: the ask was to remove the trace of the review, and the note's content is
-// preserved anyway wherever it mattered (an overturn re-derives itself the moment they confirm
-// again, since `Final output ≢ Output` is computed, never stored).
-const decided = await queryAll(store, config.models.Decisions, {
+// WHO SURVIVES a merge, and it is not arbitrary: the conversation that actually happened. A row
+// carrying a Comment URL points at a comment live on Reddit right now, and archiving it would orphan
+// the only record of a deed we cannot undo — so a posted row always beats an unposted one, and
+// between two posted rows the EARLIER wins (it is the one the other duplicated). The final
+// tie-break is the page id: arbitrary, but TOTAL, so a re-run crowns the same winner.
+const winnerOf = (rows) =>
+	[...rows].sort(
+		(a, b) =>
+			(a.fields["Comment URL"] ? 0 : 1) - (b.fields["Comment URL"] ? 0 : 1) ||
+			String(a.fields["Posted at"] ?? "￿").localeCompare(String(b.fields["Posted at"] ?? "￿")) ||
+			a.id.localeCompare(b.id)
+	)[0];
+
+// ── steps 1 + 2 ────────────────────────────────────────────────────────────────────────────────
+const keep = new Map(); // person → the surviving outreach id
+let merged = 0;
+for (const [person, rows] of [...people].sort(([a], [b]) => a.localeCompare(b))) {
+	const winner = winnerOf(rows);
+	keep.set(person, winner.id);
+	const losers = rows.filter((r) => r.id !== winner.id);
+	say(
+		`${apply ? "PERSON" : "would "} ${person.padEnd(46)} ${String(winner.fields["Thread URL"])}` +
+			(losers.length ? `   (+${losers.length} to merge)` : "")
+	);
+	// By ID. `upsert` would look for a row whose Person already equals this — there is none yet — and
+	// dutifully create a second one. `patch` is the write for a row whose identity is not (yet) a column.
+	if (apply) await store.patch(BACKLOG, winner.id, { Person: person });
+
+	for (const loser of losers) {
+		// The loser's Decisions must follow the row, or confirming one would move a page in the trash —
+		// and `reply.act`, which reads the ENTITY's Comment URL to know whether it already spoke, would
+		// be reading the wrong conversation and could post a second time. A relation is filterable even
+		// though it is not readable off a Row, which is the only way to ask this at all.
+		const decisions = await store.query(DECISIONS, {
+			property: config.entity,
+			relation: { contains: loser.id }
+		});
+		merged++;
+		say(`         MERGE ${String(loser.fields["Thread URL"])}  ${decisions.length} decision(s) → winner, thread attached, row archived`);
+		if (!apply) continue;
+		for (const d of decisions) await store.patch(DECISIONS, d.id, { [config.entity]: [winner.id] });
+		// From the THREAD side, exactly as the runtime attaches: the relation is synced (dual_property),
+		// so this grows the winner's list without writing one column of their row.
+		await store.upsert(
+			THREADS,
+			{ "Thread URL": threadUrl(String(loser.fields["Thread URL"])), Backlog: [winner.id] },
+			"Thread URL"
+		);
+		await store.archive(loser.id);
+	}
+}
+
+// ── step 3: every unattached qualified thread of a tracked person joins their outreach ─────────
+// Selected on the relation being EMPTY, because that is the funnel's own definition of "owed" and
+// because a Row comes back with its relations flattened away — "is it already attached?" is a
+// question only the filter can answer, never the row.
+say("");
+const unattached = await queryAll(store, THREADS, {
 	and: [
-		{ property: "Final output", rich_text: { is_not_empty: true } },
-		{ property: "Draft output", rich_text: { is_empty: true } }
+		{ property: "Thread URL", url: { is_not_empty: true } },
+		QUALIFIED,
+		{ property: "Backlog", relation: { is_empty: true } }
 	]
 });
-const stale = decided.filter((d) => String(d.fields.Name ?? "").includes(REPLY));
-console.error(`\n${stale.length} committed "${REPLY}" decision(s) to reopen`);
-for (const d of stale) {
-	const name = String(d.fields.Name);
-	const human = String(d.fields["Final output"]);
-	// Only carry the text forward when it is actually theirs. A confirm-verbatim row has nothing to
-	// restore — its committed output IS the judge's — and writing a draft equal to `Output` would
-	// invent a human edit that never happened.
-	const edited = human !== String(d.fields.Output ?? "");
-	console.error(`${apply ? "REOPEN" : "would"} ${name}${edited ? "  (restoring the human's text)" : ""}`);
-	if (!apply) continue;
-	await store.upsert(
-		config.models.Decisions,
-		{
-			Name: name,
-			"Final output": "",
-			Feedback: "",
-			"Final reasoning": "",
-			...(edited ? { "Draft output": human } : {})
-		},
-		"Name"
-	);
+let attached = 0;
+for (const t of unattached) {
+	const author = String(t.fields.Author ?? "");
+	if (!author) continue;
+	const outreach = keep.get(userUrl(author));
+	if (!outreach) continue; // nobody is talking to them yet — the funnel may still draft this one
+	const url = threadUrl(String(t.fields["Thread URL"]));
+	attached++;
+	say(`${apply ? "ATTACH" : "would "} ${url}  u/${author}  ${String(t.fields.Tier)}`);
+	if (apply) await store.upsert(THREADS, { "Thread URL": url, Backlog: [outreach] }, "Thread URL");
 }
-console.error(apply ? "done" : "\ndry run — re-run with --apply");
+
+say(
+	`\n${people.size} people, ${merged} row(s) merged away, ${attached} thread(s) attached ` +
+		`(of ${unattached.length} unattached qualified)`
+);
+say(apply ? "done" : "\ndry run — re-run with --apply");

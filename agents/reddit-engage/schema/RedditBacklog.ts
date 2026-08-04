@@ -7,6 +7,7 @@ export interface RedditBacklog {
    */
   Decision?: string[];
   Name: string;
+  Person?: string;
   /**
    * ISO 8601 date or date-time
    */

@@ -16,17 +16,31 @@
 //   [human gate] → confirming a draft POSTS it (config.ts `reply.act`) and lands the outreach at
 //            "Waiting for OP". Approving and posting are one act, so there is no state between them.
 //
+// AN OUTREACH IS A PERSON, NOT A THREAD. The Backlog keys on the canonical account URL
+// (`userUrl`), so a human who posts twice is one conversation — the Thread relation is 1:N. Before
+// that, identity was the thread and a cross-poster got two replies eighteen minutes apart, which is
+// the shape a mod reads as spam. It catches repeat posters too, not just cross-posts: of 53
+// qualified threads, 4 authors had two each and only two of those pairs were cross-posts.
+//
+// Two writes touch an outreach and only ONE of them can move it — that split is the whole guarantee
+// that a newly scanned thread from someone we already track disturbs nothing:
+//   linkEntity  opens/re-opens the conversation, writes Status. Runs only when we are drafting.
+//   attach      writes the THREAD's own relation. No Backlog column, so nothing to guard.
+// `scan` cannot reach either: `queue` writes only the columns it is handed, and Backlog is not one.
+//
 // WHAT IS OWED IS DERIVED, never stored — the two facts that place a thread are both data a stage
 // already had to write, so there is no third thing to keep in sync and nothing to drag backward:
 //   Tier empty                      → not judged yet          (qualify owes it)
 //   Tier T1/T2 + no Backlog row     → judged, never drafted   (draft owes it — a crashed run resumes here)
 //   Tier "No"                       → terminal, judged out
+// The second line is unchanged by the re-key, which is why it stayed small: the relation was
+// already the marker, and all that widened is what it may point at (one outreach ← many threads).
 // The Tier is persisted deliberately: flash is not run-stable on borderline threads, so re-judging
 // after a crash could flip a T2 to "No" and freeze that false negative forever.
 //
 // Monotonic + idempotent on the canonical Thread URL, which keys BOTH tables.
 
-import { getSubredditThreads, getThread, sinceIso, subOf, threadUrl } from "../../src/clients/reddit/index.js";
+import { getSubredditThreads, getThread, sinceIso, subOf, threadUrl, userUrl } from "../../src/clients/reddit/index.js";
 import { getStore, queryAll } from "../../src/stores/index.js";
 import { createDecider } from "../../src/decide.js";
 import { renderEvidence } from "./evidence.js";
@@ -49,6 +63,19 @@ const label = (text: string, n = 60): string =>
 	[...text.replace(/\s+/g, " ").trim()].slice(0, n).join("");
 
 const nameOf = (subreddit: string, title: string): string => `r/${subreddit} — ${label(title)}`;
+
+// The person behind a thread — the Backlog's identity key, read off the thread's own Author column.
+// That column is single-writer (only `queue` writes it, from the listing; `refresh` deliberately
+// omits it), so its spelling is Reddit's own and stays consistent — and `userUrl` lowercases
+// regardless, so no casing could fork an outreach even if it did drift.
+//
+// Loud when absent, because an outreach with no person is the one thing this table can no longer
+// express. It is a guard rather than a funnel gate: 0 of the 53 qualified threads lack an author
+// (11 of 4037 overall), so this fires on a thread nobody could reply to anyway.
+const authorOf = (fields: Record<string, string | number | boolean>, url: string): string => {
+	if (!fields.Author) throw new Error(`thread ${url} has no Author — an outreach needs a person`);
+	return String(fields.Author);
+};
 
 // The Reddit entity bridge (this agent's own wiring), and the two halves are two tables: the Reddit
 // THREAD row is the subject — it carries the seed projectInput reads — while the Reddit
@@ -95,8 +122,29 @@ const readThread = (url: string): Promise<Row> =>
 const writeThread = (url: string, fields: Omit<Partial<RedditThreads>, "Thread URL">) =>
 	store.upsert(config.models.RedditThreads, { ...fields, "Thread URL": threadUrl(url) }, "Thread URL");
 
-const writeBacklog = (url: string, fields: Omit<Partial<RedditBacklog>, "Thread URL">) =>
-	store.upsert(config.models.RedditBacklog, { ...fields, "Thread URL": threadUrl(url) }, "Thread URL");
+// The outreach is keyed on the PERSON, not the thread — the same construction, one entity up. A
+// human who posts twice is one human to talk to, so the row a re-run must converge on is theirs.
+const writeBacklog = (person: string, fields: Omit<Partial<RedditBacklog>, "Person">) =>
+	store.upsert(config.models.RedditBacklog, { ...fields, Person: userUrl(person) }, "Person");
+
+// attach(thread, outreach) — join a thread to the conversation it belongs to, and the ONE write in
+// this file that touches an outreach without being able to move it. It writes the THREAD's own
+// `Backlog` relation; Notion syncs the pair (`Backlog` ↔ `Thread`, dual_property), so the person's
+// list grows without a single column of their row being written.
+//
+// That is the whole reason it exists as its own call rather than a field on the upsert above: a
+// second thread from someone we already track must not disturb where that conversation stands, and
+// the strongest form of that guarantee is a write with no state to guard — not a read-before-write,
+// not a ladder check. There is nothing here to drag backward because nothing about the person is
+// said. (It is also the only way round that works: the store flattens relations away on read, so
+// the person's existing `Thread` list cannot be read back to append to it — writing that side would
+// clobber every sibling already attached.)
+//
+// It doubles as the funnel's marker, which is why no new column was needed: `NO_OUTREACH` below
+// reads exactly this relation, so attaching a thread both joins it to the conversation and retires
+// it from the worklist, in one write.
+const attach = (url: string, outreach: string): Promise<unknown> =>
+	writeThread(url, { Backlog: [outreach] });
 
 // The Thread seed, parsed. null when the field is absent or not the shape `queue` writes —
 // the same tolerance evidence.ts's renderer has. Exported because a caller that wants to know what
@@ -137,9 +185,19 @@ const resolveSubject = async (url: string): Promise<Subject> =>
 	subjectOf(url, await readThread(url));
 
 // linkEntity — open (or re-open) the OUTREACH this decision advances, and hand back its row id for
-// the Decision to bind to. Keyed on the same canonical Thread URL as the thread itself, so a row
-// converges however often a draft is re-cut, and related to the Thread so each can be reached from
-// the other. `subject.ref` is the thread's id — the relation target, not the return value.
+// the Decision to bind to. Keyed on the PERSON, so the row a re-run converges on is the human's,
+// not the thread's — one conversation per person, whatever they posted.
+//
+// It is the ONLY write in this file that can move an outreach, and it runs on exactly one path:
+// we are drafting a reply. Everything else that touches a conversation goes through `attach`, which
+// cannot express a move. That split is what makes "a newly scanned thread from someone we already
+// track must not disturb them" true by construction rather than by a guard someone remembered.
+//
+// `Thread URL` is written as a plain COLUMN and it means one thing: the thread we chose to answer.
+// (`reply.act` reads it to know where to post, and `Comment URL` beside it to know we already have —
+// both scalars on the person's row, which is why re-keying cost the act nothing.) The `Thread`
+// RELATION is deliberately not written here: it is the person's whole list, the store flattens
+// relations away on read, so writing it would clobber every sibling. `attach` owns that side.
 //
 // This is also where the cycle closes: a follow-up drafted after the OP answers upserts the SAME
 // row back to "Pending approval". Deliberately unguarded — the ladder governs the review app, whose
@@ -157,15 +215,21 @@ const linkEntity = async (
 	// only if that stops being true.
 	if (!subject.ref)
 		throw new Error(`no thread row behind ${subject.key} — cannot open an outreach with no Thread`);
-	const ref = await writeBacklog(subject.key, {
-		Name: subject.name,
-		Thread: [subject.ref],
+	const author = authorOf(subject.fields, subject.key);
+	const ref = await writeBacklog(author, {
+		// Who first, then what we answered: the row IS a person now, and a list of outreaches reads as
+		// the people we are talking to rather than as a second copy of the thread index.
+		Name: `u/${author} — ${subject.name}`,
+		"Thread URL": threadUrl(subject.key),
 		// A held dependent leaves Status alone — its gate has not been ruled on yet.
 		// `spec.pending` is a free string on the shared PromptSpec (core cannot know one agent's
 		// column enum); the generated schema is where that enum actually lives. Same seam as the
 		// Tier write below — config.ts declares the literal, this asserts it against the column.
 		...(dependsOn?.length ? {} : { Status: spec.pending as RedditBacklog["Status"] })
 	});
+	// The thread joins the conversation from its OWN side, exactly as a sibling does — one idiom, so
+	// the row this decision is about is attached the same way as the ones it is not.
+	await attach(subject.key, ref.id);
 	return ref.id;
 };
 
@@ -212,9 +276,11 @@ export const decider = createDecider({
 // among them — the first is the drain's business (`pendingFilterOf` below, which is these clauses
 // plus its own), the second the Backlog's, and both would be asking this table about something it
 // does not carry.
-// How you name a SET, in the words both tables share — because both key on the canonical Thread URL,
-// so either can be asked about the same threads. Each vocabulary below is this plus its own table's
-// columns, which is exactly the real difference between them.
+// How you name a SET, in the words both tables share — because both CARRY the canonical Thread URL,
+// so either can be asked about the same threads. (They no longer both key on it: an outreach keys
+// on its person and carries the thread it answers. The words still land on both, which is what
+// matters here.) Each vocabulary below is this plus its own table's columns, which is exactly the
+// real difference between them.
 export interface Ident {
 	url?: string[];
 	subreddit?: string[];
@@ -298,6 +364,56 @@ const filterOf = (opts: Select): object => ({ and: threadClauses(opts) });
 // or one `or` of leaves, so no combination of options can deepen it.
 const OWED = { or: [UNJUDGED, tierIs("T1"), tierIs("T2")] };
 const NO_OUTREACH = { property: "Backlog", relation: { is_empty: true } };
+
+// outreachFor(author) — the conversation we already have with this person, or null. Through
+// `query`, not `queryPage`: this is the read the draft step reasons about ABSENCE on ("we have
+// never spoken to them, so draft"), and `query` refuses a truncated result rather than hand back a
+// partial set — the one primitive that makes a negative provable here. One person, one row, so
+// there is nothing to truncate anyway; using the strict reader is how that stays true if it ever
+// stops being.
+const outreachFor = async (author: string): Promise<Row | null> => {
+	const rows = await store.query(config.models.RedditBacklog, {
+		property: "Person",
+		url: { equals: userUrl(author) }
+	});
+	return rows[0] ?? null;
+};
+
+// siblingsOf(author) — every thread of theirs worth answering, judged and not judged out. The set
+// `bestOf` ranks, and the set the winner attaches. Deliberately NOT narrowed to threads that still
+// owe work: the ranking has to be stable while a run is draining, and a set that shrank as its
+// members were attached would let two workers crown two different winners.
+const siblingsOf = (author: string): Promise<Row[]> =>
+	queryAll(store, config.models.RedditThreads, {
+		and: [
+			{ property: "Author", rich_text: { equals: author } },
+			{ or: [tierIs("T1"), tierIs("T2")] }
+		]
+	});
+
+// bestOf(threads) — which ONE of a person's qualified threads we answer. A PURE function of rows
+// the store already holds, and that purity is the whole design: every sibling drained concurrently
+// computes the same winner independently, so exactly one drafts. The race is removed rather than
+// guarded — no lock, no claim row, no in-process map to keep in step with the store.
+//
+// Purity therefore has a hard requirement: total order, no ties. T1 before T2 (fit first — it is
+// the judgment the funnel spent a model on), then score (where the audience actually is: measured,
+// one author's cross-post drew 13 comments in one sub and 1 in the other), then newest, then the
+// canonical URL — the last is arbitrary but TOTAL, which is what a tie-break is for. Sorting on
+// anything mutable-by-rescan alone (a score that moves between two workers' reads) would let them
+// disagree, so the URL underneath makes the order deterministic whatever else drifts.
+const RANK: Record<string, number> = { T1: 0, T2: 1 };
+const bestOf = (threads: Row[]): Row =>
+	[...threads].sort((a, b) => {
+		const url = (r: Row) => String(r.fields["Thread URL"] ?? "");
+		const num = (r: Row, k: string) => Number(r.fields[k] ?? 0);
+		return (
+			(RANK[String(a.fields.Tier)] ?? 9) - (RANK[String(b.fields.Tier)] ?? 9) ||
+			num(b, "Score") - num(a, "Score") ||
+			String(b.fields.Created ?? "").localeCompare(String(a.fields.Created ?? "")) ||
+			url(a).localeCompare(url(b))
+		);
+	})[0];
 const pendingFilterOf = (opts: Select = {}): object => ({
 	and: [...threadClauses(opts), OWED, NO_OUTREACH]
 });
@@ -320,12 +436,17 @@ const tally = (rows: Row[]) => ({
 // `Created`: a different table keeps a different clock, and fusing them would silently answer a
 // question nobody asked.
 export interface BacklogSelect extends Ident {
+	person?: string[];
 	status?: string;
 	since?: string;
 }
 const backlogFilterOf = (opts: BacklogSelect): object => ({
 	and: [
 		...identityClauses(opts),
+		// The table's own identity, and the only word that selects an outreach BY WHAT IT IS. Any
+		// spelling of an account resolves through `userUrl`, exactly as `--url` resolves through
+		// `threadUrl` — so "u/SrvLdr", "srvldr" and the full profile URL all find the one row.
+		...anyOf((opts.person ?? []).map((p) => ({ property: "Person", url: { equals: userUrl(p) } }))),
 		...(opts.status ? [{ property: "Status", select: { equals: opts.status } }] : []),
 		...(opts.since ? [{ property: "Posted at", date: { on_or_after: sinceIso(opts.since) } }] : [])
 	]
@@ -596,15 +717,44 @@ export const tools = {
 			]);
 			if (!move.advances) return { url: u, tier, ...(screened ? { screened } : {}) };
 		}
+		// WHO wrote this, because a reply is to a PERSON and the Backlog is keyed on them. Both reads
+		// at once — different tables, so they overlap instead of queueing.
+		const author = authorOf(row.fields, u);
+		const [outreach, siblings] = await Promise.all([outreachFor(author), siblingsOf(author)]);
+
+		// Already talking to this human ⇒ join this thread to that conversation and stop. One outreach
+		// per person, forever: a second comment from us under the same name, on the same day, is the
+		// shape a mod reads as spam — and it has happened (one author cross-posted a question to two
+		// subreddits and got two replies eighteen minutes apart).
+		//
+		// `attach` writes the THREAD's relation only, so this cannot move where their conversation
+		// stands — which is the invariant, held by construction rather than by a guard.
+		if (outreach) {
+			await attach(u, outreach.id);
+			return { url: u, tier, ...(screened ? { screened } : {}), joined: String(outreach.fields["Thread URL"] ?? outreach.id) };
+		}
+
+		// Not the thread to answer ⇒ stand down. The winner below claims us in this same run (it holds
+		// the same sibling set), so nothing is written here — there is no outreach to attach to yet,
+		// and inventing one for a draft that has not happened would be a row nobody will ever close.
+		const best = bestOf(siblings);
+		if (best && best.id !== row.id)
+			return { url: u, tier, ...(screened ? { screened } : {}), deferredTo: String(best.fields["Thread URL"] ?? best.id) };
+
 		// By KEY, not the Subject in hand: the draft's evidence must include the Tier just written, so
 		// this stage reads the row back rather than judging a copy that predates its own gate.
 		const draft = await decider.decide("reply", u);
+		// …and the winner claims the rest of this person's threads, so they leave the worklist in the
+		// SAME run instead of standing down again on the next one. Relation writes: they move nothing.
+		const rest = siblings.filter((s) => s.id !== row.id);
+		await Promise.all(rest.map((s) => attach(String(s.fields["Thread URL"]), draft.entity)));
 		return {
 			url: u,
 			tier,
 			...(screened ? { screened } : {}),
 			status: config.prompts.reply.pending,
-			draft: draft.open ?? draft.id
+			draft: draft.open ?? draft.id,
+			...(rest.length ? { alsoTheirs: rest.map((s) => String(s.fields["Thread URL"])) } : {})
 		};
 	},
 
@@ -671,9 +821,11 @@ export const tools = {
 			}))
 	},
 
-	// backlog — the outreaches themselves: one row per thread we chose to engage, which is where the
+	// backlog — the outreaches themselves: one row per PERSON we chose to engage, which is where the
 	// conversation stands and what we actually posted. The peer of `threads`, and separate for the
-	// reason the tables are (README #4): a thread is what Reddit says, an outreach is what WE did.
+	// reason the tables are (README #4): a thread is what Reddit says, an outreach is what WE did —
+	// and who we did it to. `url` is the thread we answered; `person` is the row's identity, and the
+	// other threads of theirs we passed over hang off it as relations.
 	//
 	// One projection, not two — a thread carries a document (hence `dump`), an outreach carries
 	// scalars, so there is nothing a second shape would add. It is also the only path to `Comment URL`
@@ -686,6 +838,7 @@ export const tools = {
 		get: async (opts: BacklogSelect = {}) =>
 			newest(
 				(await queryAll(store, config.models.RedditBacklog, backlogFilterOf(opts))).map((r) => ({
+					person: r.fields.Person ?? null,
 					url: String(r.fields["Thread URL"] ?? ""),
 					subreddit: subOf(String(r.fields["Thread URL"])),
 					name: r.fields.Name ?? null,
