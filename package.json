@@ -7,6 +7,9 @@
 		"sflock": "./dist/src/cli.js",
 		"rdt": "./dist/agents/reddit-engage/cli.js"
 	},
+	"engines": {
+		"node": "22.x"
+	},
 	"scripts": {
 		"build": "tsc",
 		"test": "tsc && node --test \"dist/**/*.test.js\""
