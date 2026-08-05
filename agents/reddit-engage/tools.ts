@@ -1,5 +1,12 @@
 // reddit-engage tools — the funnel. Fetch and judge are separate stages and the STORE is the queue
 // between them, but what marks a thread's place is now DATA, not a rung:
+// THE TOP OF THE FUNNEL IS `SUBREDDITS` (config.ts), and one function says so for both stages that
+// spend anything: `watched` resolves the communities `scan` discovers and the ones the drain judges,
+// throwing on a name that declares no rules. So removing an entry stops both, adding one starts both,
+// and `--subreddit` narrows within it and can never widen past it. READING is deliberately not
+// bounded (`threads get`/`dump`): the corpus includes communities we have stopped watching, which is
+// what a ground-truth dump is cut from.
+//
 //   scan   → each watched subreddit's NEW threads (one listing run each — the listing's `body` is
 //            the post's FULL text, so discovery already carries everything a qualification needs; no
 //            per-thread fetch exists in this agent), upserted as Reddit Threads. The seed only, no
@@ -296,6 +303,28 @@ export interface Select extends Ident {
 // Subreddit column: the URL was lowercased when it was minted, so no spelling of a community can
 // fork it — the same choice `subOf` makes. An exact URL goes through `threadUrl`, so any shape
 // Reddit renders finds the row and a non-thread string fails loud instead of matching nothing.
+// watched(names) — WHICH communities this funnel may touch: the names given, else the whole
+// watchlist. The top of the funnel is SUBREDDITS and nothing else, so this NARROWS and can never
+// widen — a name it doesn't declare throws rather than resolving, the same way `threadUrl` refuses a
+// non-thread string instead of minting a key that would fork a row forever.
+//
+// It is one function because it is one decision, and both stages now make it here: `scan` (don't
+// discover what we don't watch) and the drain (don't judge it). Being loud is the load-bearing half —
+// an undeclared community has no rules entry, so a thread there reaches the drafter with no
+// "Subreddit rules" field at all and is judged against nothing, two stages from where anyone would
+// notice. (Measured: three communities sat in the store that way for weeks.) Refusing here is what
+// makes `tools.watchlist`'s old `rules: null` case unreachable rather than merely reported.
+const watched = (names?: readonly string[]): string[] => {
+	const keys = (names?.length ? names : Object.keys(SUBREDDITS)).map(subKey);
+	const undeclared = keys.filter((k) => !(k in SUBREDDITS));
+	if (undeclared.length)
+		throw new Error(
+			`no rules declared for r/${undeclared.join(", r/")} — add them to SUBREDDITS in config.ts ` +
+				`(reduck run --script reduck/reddit.com/get_subreddit_info subreddit=<name>)`
+		);
+	return keys;
+};
+
 const anyOf = (clauses: object[]): object[] =>
 	clauses.length ? [clauses.length === 1 ? clauses[0] : { or: clauses }] : [];
 // The identity half of both vocabularies, in one place: "every row of this table" plus whichever of
@@ -414,8 +443,17 @@ const bestOf = (threads: Row[]): Row =>
 			url(a).localeCompare(url(b))
 		);
 	})[0];
+// …and the third clause is the WATCHLIST, which is why this is the only place it goes: the top of the
+// funnel is SUBREDDITS, so work is bounded by the declaration while READING stays unbounded (the
+// corpus includes communities we have stopped watching — that is what a ground-truth dump is cut
+// from). Exactly the line `--limit` already draws: a property of a reading is not a fact about the set.
+//
+// It rides in as `opts.subreddit`, so the filter logic is untouched — every clause still narrows, and
+// `identityClauses` compiles this list the same way it compiles an explicit `--subreddit`. Which is
+// also why the flag keeps working and can only narrow: a name outside the watchlist never reaches a
+// clause, because `watched` throws first.
 const pendingFilterOf = (opts: Select = {}): object => ({
-	and: [...threadClauses(opts), OWED, NO_OUTREACH]
+	and: [...threadClauses({ ...opts, subreddit: watched(opts.subreddit) }), OWED, NO_OUTREACH]
 });
 
 // What an owed thread will COST, which is why the tally splits this way rather than counting rows:
@@ -608,21 +646,15 @@ export const tools = {
 	// cannot describe a different set than the run — the same reason `pending` shares the drain's
 	// filter. Pure config: no browser, no store, no write.
 	//
-	// `rules: null` is NOT DECLARED, and it is the one thing this is really for. It does not mean the
-	// community allows anything; it means SUBREDDITS has no entry, so a reply drafted there reaches
-	// the judge with no rules field at all and the prompt's strictest reading applies. That is a
-	// different fact from `rules: 0` — a community that publishes none and says so in words, which
-	// the drafter reads. Scanning an undeclared subreddit works fine, which is exactly why the loss
-	// is silent: it surfaces two stages later, in a draft judged against nothing. (Measured: three
-	// communities sat in the store for weeks that way.)
-	watchlist: (subreddits: readonly string[] = Object.keys(SUBREDDITS)) =>
-		subreddits.map((s) => {
-			const rules = SUBREDDITS[subKey(s)];
-			return {
-				subreddit: subKey(s),
-				rules: rules === undefined ? null : (rules.match(/^- /gm)?.length ?? 0)
-			};
-		}),
+	// `rules: 0` is a community that publishes none and SAYS SO in words, which the drafter reads —
+	// the only remaining case, because an UNDECLARED name no longer resolves at all: `watched` throws,
+	// here and in the drain and in the scan. That is the difference between reporting a hole and not
+	// having one, and it is why this no longer answers `null`.
+	watchlist: (subreddits?: readonly string[]) =>
+		watched(subreddits).map((s) => ({
+			subreddit: s,
+			rules: SUBREDDITS[s].match(/^- /gm)?.length ?? 0
+		})),
 
 	// scan — discovery only: each watched subreddit's threads newer than `since` (the script's own
 	// chronological window), recorded with their evidence. No funnel state and no LLM — judging is
@@ -631,8 +663,8 @@ export const tools = {
 	// write that says nothing about progress cannot undo any.
 	// One reduck run per subreddit — the rules a reply must obey are declared in config.ts, so
 	// discovery has nothing to refresh (they are fetched by hand, as a setup step).
-	scan: async (since = "48h", subreddits: readonly string[] = Object.keys(SUBREDDITS)) =>
-		mapLimit([...subreddits], async (subreddit) => {
+	scan: async (since = "48h", subreddits?: readonly string[]) =>
+		mapLimit(watched(subreddits), async (subreddit) => {
 			const ranAt = new Date().toISOString();
 			// The listing and what we already hold, fetched together — a browser run and a store query
 			// on different backends, so they overlap rather than queue. `fetched` is the one thing the

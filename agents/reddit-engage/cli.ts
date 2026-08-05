@@ -72,7 +72,7 @@ program
 	.argument("[subreddits...]", "subreddits to scan — sugar for --subreddit; omit for the config watchlist")
 	.option("--subreddit <names...>", "only these subreddits (r/ prefix optional); omit for the whole watchlist")
 	.option("--since <window>", `how far back — ISO date or shorthand ("48h", "7d")`, "48h")
-	.option("--dry-run", "name the communities this would scan and whether their rules are declared (`rules: null` ⇒ no SUBREDDITS entry, so a reply drafted there would be judged with no rules at all). Reads nothing — no browser, no store, no write.")
+	.option("--dry-run", "name the communities this would scan, with how many rules each declares (`rules: 0` ⇒ it publishes none and says so). Reads nothing — no browser, no store, no write.")
 	.description("Discovery: each subreddit's threads newer than --since, recorded with their seed (title + full post). The seed only — no funnel state, no LLM, so re-scanning a thread already deep in the funnel cannot disturb it. Deduped on Thread URL. Judge with `engage`.")
 	// Positional subreddits ARE --subreddit, the same sugar `engage` gives --url: one word names a
 	// community in every command that takes one, so a set you scanned pastes straight into the set
@@ -86,7 +86,7 @@ withThreadFilters(
 	program
 		.command("engage")
 		.argument("[threads...]", "thread URLs to engage — sugar for --url; omit to take everything the filters name")
-		.description("Qualify (a judgment: Tier on the thread, claims as a page comment — no Decision) — the post alone first, then the full thread with its comments for anything that survives → if it still scores well, a reply draft opens an outreach at 'Pending approval'. Works on the threads the filters name that still OWE work (never judged, or judged good and never drafted); no filters ⇒ everything owed, page by page.")
+		.description("Qualify (a judgment: Tier on the thread, claims as a page comment — no Decision) — the post alone first, then the full thread with its comments for anything that survives → if it still scores well, a reply draft opens an outreach at 'Pending approval'. Works on the threads the filters name that still OWE work (never judged, or judged good and never drafted), always WITHIN the config watchlist: no --subreddit ⇒ every watched community, and naming one we don't watch fails loud rather than drafting into a community whose rules we never derived.")
 		.option("--dry-run", "describe that queue instead of draining it: how many threads are owed, split by what each owes (a qualify call, or only a draft), per community. Reads the store and nothing else — no LLM, no browser, no write.")
 ).action(async (threads: string[], f: ThreadFlags & { dryRun?: boolean }) => {
 	// The positional URLs ARE --url, so there is ONE path through this command: the words name a set,
