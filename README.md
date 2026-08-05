@@ -50,6 +50,18 @@ says what it does. If a fact can drift, it belongs in code, not here.
    guards on its own evidence in the world (a permalink already recorded), never on a status,
    so confirming twice cannot do it twice.
 
+   Refusing is an act too, and it is the same shape: **a row is pending iff the human has said
+   nothing, and there are two ways to say something.** A committed output is a Confirm — it was
+   posted. A NOTE with nothing committed is a rejection — it was not, and what it performs is the
+   agent's `drop` (close the outreach), the mirror `act` always had. Neither side declares an
+   intent: the note's presence IS the verdict, so the queue's read and the write derive it from
+   one predicate and cannot disagree. The asymmetry that makes this safe is that a rejection is
+   REVERSIBLE — clearing the note returns the row — while a Confirm speaks to the world and
+   cannot be unsaid. And the row survives its own rejection, because the note is only a TODO:
+   `learn` is the second stage, and it needs the frozen evidence to cut a case from. Rejecting is
+   about this subject; learning is about the prompt, and you cannot tell which fix a complaint
+   deserves from inside one card — the pattern is only visible across several.
+
 3. **`reduck` is a runner, not a schema source.** One base-script call → run it with
    `reduck run` directly. Wrap it in a tool **only** for what `reduck` can't do: compose
    several calls, or persist to your store. A wrapper that adds neither shouldn't exist.

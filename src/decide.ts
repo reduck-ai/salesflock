@@ -21,7 +21,7 @@ import { getStore, queryAll } from "./stores/index.js";
 import type { AgentConfig, PromptSpec, Row, Store } from "./stores/index.js";
 import { idOf } from "./stores/notion.js";
 import { loadPrompt, type Contract } from "./prompts.js";
-import { reviewOf, feedbackOf, renderFeedback } from "./review.js";
+import { reviewOf, feedbackOf, renderFeedback, SAID } from "./review.js";
 import * as llm from "./ai/llm.js";
 import { collectQuotes, findQuotes, inRange, quoteKey, type Statement } from "./anchor.js";
 import { schemaError } from "./output.js";
@@ -188,9 +188,15 @@ export interface ReviewerDeps {
 
 export type { Contract };
 
+// The review states, compiled from the ONE declaration of which columns carry a verdict
+// (src/review.ts `SAID`) — the same fact the app's queue reads, so the operator's "pending" and the
+// reviewer's "To review" cannot come to name different sets. PENDING is nothing said; REVIEWED is
+// anything said, which spans both ways of saying it (a committed output, or a note that refused).
+// Their union is still exhaustive — every row is in exactly one — so `--all` stays a plain `or`.
+const said = (is_not_empty: boolean) => SAID.map((property) => ({ property, rich_text: { [is_not_empty ? "is_not_empty" : "is_empty"]: true } }));
 const SCOPE = {
-	pending: { property: "Final output", rich_text: { is_empty: true } },
-	reviewed: { property: "Final output", rich_text: { is_not_empty: true } }
+	pending: { and: said(false) },
+	reviewed: { or: said(true) }
 } as const;
 
 export const createReviewer = ({ id: agentId, config, renderEvidence, store: given }: ReviewerDeps) => {
@@ -266,9 +272,10 @@ export const createReviewer = ({ id: agentId, config, renderEvidence, store: giv
 	};
 
 	// list(scope, opts) — decisions by review state, each flagged with the human delta it carries (free —
-	// the rows arrive with their fields, and one feedbackOf per row yields both flags): `hasFeedback`
-	// (any channel touched) and the stricter `overturned` (the human changed the committed Output — a
-	// disagreement, not just a note). "Final output" set = reviewed (the committed output IS the
+	// the rows arrive with their fields, and one feedbackOf per row yields every flag): `hasFeedback`
+	// (any channel touched), the stricter `overturned` (the human changed the committed Output — a
+	// disagreement, not just a note), and `rejected` (a note with nothing committed — they refused it).
+	// "Final output" set = reviewed (the committed output IS the
 	// decision); pending is the queue, all is both (a union — every Decision has the property, so
 	// is_empty ∪ is_not_empty is exhaustive).
 	//
@@ -305,6 +312,13 @@ export const createReviewer = ({ id: agentId, config, renderEvidence, store: giv
 				subject: r.fields.Subject ? String(r.fields.Subject) : undefined,
 				hasFeedback: fb !== null,
 				overturned: !!fb?.outputChange,
+				// A NOTE WITH NOTHING COMMITTED IS A REJECTION — the review app's third verdict, read
+				// here off the same two columns it writes (app: server/notion.ts `SAID`). It is what
+				// splits this worklist into its two kinds of work: a refused draft needs a case, an
+				// archive and its entity closed, while an approved-with-a-note needs only the note
+				// moved out. `learn` already does the right thing with each; this is what lets you SEE
+				// which is which without opening every row.
+				rejected: !r.fields["Final output"] && !!fb?.note,
 				...(fb && opts.feedback ? { feedback: renderFeedback(fb) } : {}),
 				open: appLink(r.id)
 			};

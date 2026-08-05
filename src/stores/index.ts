@@ -140,9 +140,11 @@ export interface AgentConfig {
 	// regress it). Without it two Decisions tied to one entity fight over its Status and the last
 	// confirm wins, undoing a move that already happened. Statuses off the ladder are terminal.
 	ladder?: readonly string[];
-	// How this agent CLEANS ITS BACKLOG — the other end of the gate `pending` opens. `sflock learn`
-	// calls it with the subject's key when it retires a decision that was never approved; without it
-	// the entity sits at its pending rung with no Decision open on it, a row nobody will ever close.
+	// How this agent CLEANS ITS BACKLOG — the other end of the gate `pending` opens, called with the
+	// subject's key when a decision is REFUSED. Two callers, one meaning: the review app, the moment a
+	// human saves a note without committing (a note is a rejection), and `sflock learn`, when it
+	// retires such a row into the corpus. Without it the entity sits at its pending rung with no
+	// Decision open on it, a row nobody will ever close. Idempotent, so being called twice is free.
 	//
 	// A function, not a Status string, for the reason `act` is one: only the agent knows which table
 	// holds its backlog and which column keys it, and core must not learn either. It is the mirror of

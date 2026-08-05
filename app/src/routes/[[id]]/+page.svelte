@@ -88,9 +88,17 @@
 		if (!data.current) return;
 		const j = data.current;
 		const id = dashless(j.id); // the route param, the toast key, and the queue's handle: one id
+		// A NOTE IS A REJECTION, and the deck's rule follows from that with nothing added: a row leaves
+		// the queue when the human has SAID something, either way. So a reject takes the very same
+		// advance path as a commit — pending toast (which is what hides the row), step, settle — and
+		// only a Save that says nothing keeps you where you are. The server derives the same fact from
+		// the same emptiness (`record` → `refuse`), so the two sides cannot disagree about what a note
+		// means; this one is derived here purely to know whether to advance.
+		const refused = !commit && !!feedback.trim();
+		const said = commit || refused;
 		// A second Confirm before the navigation lands would mint a twin. The guard is the queue
 		// itself — no separate in-flight flag to keep in step with it.
-		if (commit && hidden.has(id)) return;
+		if (said && hidden.has(id)) return;
 		const at = index; // the slot the successor shifts into
 		const back = `/${id}${filterQuery(data.filter)}`; // captured now: `data` moves under us
 		const post = fetch("/api/decide", {
@@ -108,9 +116,10 @@
 		const reason = async (res?: Response) =>
 			((await res?.json().catch(() => ({}))) as { message?: string } | undefined)?.message;
 
-		// A Save keeps the card and the row's place, so there is nothing to advance to and nothing to
-		// queue: it is a Notion write, hundreds of milliseconds, and the reviewer is looking at it.
-		if (!commit) {
+		// A Save that says nothing keeps the card and the row's place, so there is nothing to advance
+		// to and nothing to queue: it is a Notion write, hundreds of milliseconds, and the reviewer is
+		// looking at it.
+		if (!said) {
 			const res = await post;
 			return void toast(
 				res?.ok ? { message: "Saved", tone: "ok" } : { message: (await reason(res)) ?? "Not saved", tone: "error" }
@@ -119,7 +128,7 @@
 
 		// The queue entry — the receipt, minted before the fact and keyed on the decision. Pushing it
 		// is what removes the row from `rows`, so the deck can move on the very next line.
-		toast({ message: "Posting…", detail: j.title, tone: "ok", pending: true }, id);
+		toast({ message: refused ? "Rejecting…" : "Posting…", detail: j.title, tone: "ok", pending: true }, id);
 		goto(href(Math.min(at, rows.length - 1)) ?? `/${filterQuery(data.filter)}`);
 
 		// …and whenever the run lands, it resolves that same entry in place. "Edited" is measured
@@ -143,9 +152,14 @@
 			// stops being hidden — one lifetime for `pending`, and no frame where the decided row
 			// flashes back into the deck.
 			await invalidate("app:rail");
+			// The three verdicts, in the same words the list uses (cards/decision.ts `Verdict`) — one
+			// vocabulary, so the receipt and the row you find it on later say the same thing.
 			settle(id, {
-				message: edited ? "Edited" : "Confirmed",
-				tone: edited ? "edit" : "ok",
+				message: refused ? "Rejected" : edited ? "Edited" : "Confirmed",
+				// "edit", not "error": a rejection is an outcome, not a failure — and an error toast is
+				// deliberately sticky (toast.svelte.ts `schedule`), which would leave every refusal on
+				// screen waiting to be dismissed by hand.
+				tone: refused || edited ? "edit" : "ok",
 				detail: j.title,
 				href: j.href
 			});

@@ -160,15 +160,23 @@ export const learn = async (
 	const graded = await reviewer.prompt(key);
 	const spec = specOf(agent, key);
 
-	// The label. Learning about the decision's OWN judgment needs none — the committed output IS what
-	// should have come out. Retargeting to another judgment does: only the human knows the tier they
-	// meant. And the model's own Output is the negative exactly when it disagrees, so an overturn
-	// yields its pair with nothing declared.
+	// The label, and it FOLLOWS FROM WHAT THE HUMAN DID — nothing to pass in the ordinary case. An
+	// APPROVED decision states its own positive: the committed output is what should have come out.
+	// A REFUSED one (a note, never approved — what the review app now writes) states only a NEGATIVE,
+	// and that is the correction here: this used to record `shown.output` as `expect`, teaching the
+	// corpus that the draft you threw away was the right answer, with the note beside it saying the
+	// opposite. A refusal has no positive unless you supply one. Retargeting to another judgment
+	// (`--prompt`) has neither, since the frozen Output answers a different schema — only a stated
+	// `--expect` can be a label there.
 	const committed = shown.review?.human.output as Record<string, unknown> | undefined;
-	const expect = opts.expect ?? (key === own ? (committed ?? shown.output) : undefined);
-	const reject = key === own && expect && JSON.stringify(expect) !== JSON.stringify(shown.output)
-		? shown.output
-		: undefined;
+	const mine = key === own;
+	const expect = opts.expect ?? (mine && shown.review ? (committed ?? shown.output) : undefined);
+	// ONE rule for the negative, and it covers all four cases: the judge's own output is the `reject`
+	// whenever it is not what should have come out. Verbatim confirm ⇒ none (they agree); overturn ⇒
+	// the pair; refusal ⇒ the whole label (there is no `expect`, so they differ); refusal you then
+	// labelled ⇒ the pair again. Compared as JSON, so an absent `expect` is simply never equal to a
+	// real output.
+	const reject = mine && JSON.stringify(expect) !== JSON.stringify(shown.output) ? shown.output : undefined;
 	if (expect) {
 		const err = schemaError(graded.outputSchema, expect);
 		if (err) throw new Error(`--expect is not a valid ${key} Output: ${err}`);

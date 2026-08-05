@@ -15,16 +15,33 @@ import { hasFeedback, reviewOf } from "$core/review";
 import type { EvidencedJudgment, Quote, Statement } from "./types";
 
 // A list row — the cheap projection of a Decision (no `renderEvidence`, no Output/Input parse
-// beyond what the badge needs), so the list stays fast at any Past size. `verdict` is derived only
-// for a decided row: Accepted (committed ≡ judge's Output) → "Confirmed", Rejected → "Edited".
+// beyond what the badge needs), so the list stays fast at any Past size.
 export interface DecisionRow {
 	id: string;
 	name: string; // the Decision's title (the subject's name)
 	kind: string; // the Prompt Name — the badge + the per-Prompt filter/sort key
 	date: string; // created_time (ISO)
 	hasFeedback: boolean; // any human channel touched (note / reasoning edit / overturn), both states
-	verdict?: "Accepted" | "Rejected"; // past only — agreement, derived (never stored)
+	verdict?: Verdict; // what the human said, derived (never stored); absent ⇒ they have not
 }
+
+// WHAT THE HUMAN SAID, and it is exactly the two markers the queue reads (server/notion.ts `SAID`),
+// resolved to three words. A committed output was posted, verbatim or rewritten; a note with no
+// commit refused it. Absent ⇒ nobody has ruled, which is what keeps the row in the queue.
+//
+// The vocabulary is the TOAST's ("Confirmed" / "Edited"), not `reviewOf`'s — whose `human.verdict`
+// says "Rejected" for an overturn that was nonetheless committed and posted. That word now has a
+// stronger claimant, and the one place the two meanings could be confused is this list.
+export type Verdict = "Confirmed" | "Edited" | "Rejected";
+
+const verdictOf = (d: Decision): Verdict | undefined =>
+	d.fields["Final output"]
+		? reviewOf(d.fields).human.verdict === "Accepted"
+			? "Confirmed"
+			: "Edited"
+		: d.fields.Feedback?.trim()
+			? "Rejected"
+			: undefined;
 
 export const decisionToRow = (d: Decision): DecisionRow => ({
 	id: d.id,
@@ -32,9 +49,7 @@ export const decisionToRow = (d: Decision): DecisionRow => ({
 	kind: d.promptName ?? "",
 	date: d.created,
 	hasFeedback: hasFeedback(d.fields),
-	verdict: d.fields["Final output"]
-		? (reviewOf(d.fields).human.verdict as "Accepted" | "Rejected")
-		: undefined
+	verdict: verdictOf(d)
 });
 
 // quotes in order of appearance in the evidence, so a cursor stepping through them moves

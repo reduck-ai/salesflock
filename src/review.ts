@@ -11,6 +11,17 @@
 
 import { quoteKey, type Quote, type Statement } from "./anchor.js";
 
+// THE TWO COLUMNS A VERDICT LANDS IN, in the order of how much they claim — and the reason they are
+// named here rather than twice: a row is pending iff the human has SAID NOTHING, and that predicate
+// governs two separate queues (the operator CLI's `sflock decisions list`, the review app's "To
+// review" tab) built by two codebases against the same table. Each spells its own store filter —
+// the dialect is theirs — but which columns carry a verdict is one fact, so it is declared once.
+//
+// A committed output is a Confirm: it was posted. A NOTE with nothing committed is a rejection: it
+// was not, and the note stays as the rule `sflock learn` moves into the corpus. Which one is set is
+// what says which way it went, which is why there is no verdict column and never was.
+export const SAID = ["Final output", "Feedback"] as const;
+
 // A Decision's fields as the store hands them back (Row.fields) — scalars keyed by column.
 type Fields = Record<string, string | number | boolean>;
 const text = (v: string | number | boolean | undefined): string => (v == null ? "" : String(v));

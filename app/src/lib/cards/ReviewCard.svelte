@@ -318,6 +318,16 @@
 	export function save() {
 		onjudge?.({ ...working(), commit: false });
 	}
+	// A NOTE IS A REJECTION — the server derives it from this same emptiness (`record` → `refuse`),
+	// so nothing here declares an intent; the affordance only stops HIDING one. With a note written,
+	// the second act reads "Reject" and fires the save, because that save now closes the outreach.
+	// Same key, same one gesture — but the consequence is stated before the press, which is the rule
+	// Confirm already obeys by going inert while `outputError` is set.
+	//
+	// Confirm stays live beside it: a note on a decision you nonetheless post is an approved-with-a-
+	// note, which is its own thing (`sflock learn` keeps that row and moves only the note). The note
+	// refuses only when nothing was committed.
+	const refusing = $derived(!!feedback.trim());
 	// ⌘⏎ confirm — driven page-level (the twin of ⌘S), so it fires even mid-note. Inert while
 	// the selection popover is open (a commit would drop the in-progress claim); commit() owns
 	// the schema gate.
@@ -750,11 +760,14 @@
 					<button
 						class="btn-note"
 						class:on={noting}
-						title="Add a note (⌘E)"
+						class:reject={refusing}
+						title={refusing
+							? "Reject — keep the note, close this outreach (⌘S)"
+							: "Add a note (⌘E)"}
 						aria-expanded={noting}
-						onclick={() => (noting = !noting)}
+						onclick={() => (refusing ? save() : (noting = !noting))}
 					>
-						Note <kbd>⌘E</kbd>
+						{refusing ? "Reject" : "Note"} <kbd>{refusing ? "⌘S" : "⌘E"}</kbd>
 					</button>
 					<!-- the pane toggle — pinned here (never behind the body's scroll), the touch twin of
 					     Tab/Esc; label names the OTHER pane, the one the tap takes you to -->
@@ -776,7 +789,7 @@
 					<input
 						bind:value={feedback}
 						class="note"
-						placeholder="Optional note — why you (dis)agree"
+						placeholder="Why — ⌘S rejects, and this note becomes the rule"
 						{@attach (el) => el.focus()}
 						onkeydown={(e) => e.key === "Escape" && (e.preventDefault(), (noting = false))}
 					/>
@@ -1406,6 +1419,14 @@
 	.btn-note.on {
 		color: var(--foreground);
 		background: var(--accent);
+	}
+	/* the note has words, so this button now REFUSES — outlined in the destructive tone rather than
+	   filled, because Confirm is still the primary act beside it and only one thing may look primary */
+	.btn-note.reject,
+	.btn-note.reject.on {
+		color: var(--destructive);
+		border-color: color-mix(in oklab, var(--destructive) 45%, transparent);
+		background: color-mix(in oklab, var(--destructive) 10%, transparent);
 	}
 	.btn-note kbd {
 		font-family: ui-monospace, monospace;

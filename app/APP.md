@@ -80,10 +80,19 @@ The write-back needs the Notion integration's "Update content" capability plus f
 properties on the Decisions database. Three are the human's WORKING COPY — `Draft output`,
 `Feedback`, `Final reasoning` (all rich text) — written together by a Save, so a row reopens
 exactly as it was left. The fourth, `Final output`, is the decision. The committed output IS
-the decision: `Final output` is the sole record of a review (its presence means reviewed, and
-drops the row from the queue), and agreement is *derived* (`Final output ≡ Output`) — there is
-no stored verdict column. A commit writes `Final output` and CLEARS `Draft output`: the working
+the decision, and agreement is *derived* (`Final output ≡ Output`) — there is no stored verdict
+column. A commit writes `Final output` and CLEARS `Draft output`: the working
 copy has become the decision, and two columns must never both claim to be the human's last word.
+
+**A row is pending iff the human has said nothing**, and there are two ways to say something —
+which column carries it is what says which way it went. A committed output is a Confirm: it was
+posted. A **note is a rejection**: it was not. So the queue's cut reads both columns (`SAID` in
+`server/notion.ts`), `record` derives the same fact from the same emptiness rather than taking a
+declared intent (a client that declared one could send a note-less reject), and the card's second
+button relabels **Note → Reject** the moment the note has words, so ⌘S states its consequence
+before you press it. A rejection is REVERSIBLE — the note *is* the marker, so clearing it returns
+the row to the queue — which is what makes one key carrying two outcomes fair next to a Confirm
+that posts to the world and cannot be undone.
 Since a decision also moves the linked pipeline entity, "Update content" on that database is needed
 too. Which Status each committed output moves it to is the agent's config (`config.prompts`,
 imported via the `$agents` alias), not app code.
@@ -96,7 +105,17 @@ had already replaced. Without the second, a Save kept the note and the reasoning
 words — which made committing the only way to keep an edit. `proposed` carries the judge's own
 Output alongside, because an overturn is precisely the two differing.
 
-## A Confirm can also DO the thing
+## A Confirm can also DO the thing — and so can a refusal
+
+The symmetry is the agent's own declaration: `PromptSpec.act` is what approving performs, and
+`AgentConfig.drop` is what refusing performs (close the outreach the draft opened). Both were
+declared from the start; only `act` was reachable from a click, so the app could approve and never
+refuse — `sflock learn` was the sole caller of the other half. Saving a note now runs `drop`, and
+the Decision row is deliberately **not** archived: it stays as the audit trail and as the frozen
+evidence `sflock learn` cuts a ground-truth case from. That is the hand-off — the row leaves this
+queue and lands in the learn worklist (`sflock decisions list --feedback`, where it is flagged
+`rejected`), which is the second stage and the one that touches git.
+
 
 An agent may declare `act` beside `resolve` (`PromptSpec`, `$core/stores`): what committing
 this decision performs in the world — post the reply, send the message. `record` runs it

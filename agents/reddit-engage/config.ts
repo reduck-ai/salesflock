@@ -154,10 +154,11 @@ export default {
 	// second writer to race. "Dropped" is off the ladder: terminal, the sweep's verdict.
 	ladder: ["Pending approval", "Waiting for OP"],
 	// How this agent cleans its backlog — the other end of the gate `pending` opens, and the mirror
-	// of `reply.act`: that is what approving a draft DOES, this is what refusing one does. `sflock
-	// learn` calls it when it retires a decision I never approved, so the note becomes a ground-truth
-	// case and the outreach closes in the same act — the queue drains instead of accumulating
-	// conversations that are waiting on nobody.
+	// of `reply.act`: that is what approving a draft DOES, this is what refusing one does. Two callers
+	// and they are the two halves of a refusal: the review app runs it the moment I save a note
+	// without committing (a note IS a rejection, so the conversation closes at the click), and `sflock
+	// learn` runs it again when it moves that note into the corpus — free, because it guards on the
+	// datum. The queue drains instead of accumulating conversations that are waiting on nobody.
 	//
 	// An upsert keyed on the canonical account URL, like every other write to this table, so it
 	// converges however often it runs and cannot fork a row. "Dropped" is off the ladder: terminal.

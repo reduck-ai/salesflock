@@ -9,7 +9,7 @@ import { error } from "@sveltejs/kit";
 import { env } from "$env/dynamic/private";
 import { chunks, plain, relation, type NotionValue } from "$core/stores/notion.codec";
 import { schemaError } from "$core/output";
-import { hasFeedback } from "$core/review";
+import { hasFeedback, SAID } from "$core/review";
 import { agentFor } from "$agents/index";
 import { promptFor } from "$lib/server/prompts";
 import type { Filter } from "$lib/filter";
@@ -77,6 +77,13 @@ const advanced = async (id: string): Promise<{ advances: boolean; created: strin
 // only accept its own literals — while a Status read back off a page is just a string.)
 const ahead = (to: string, from: string | null, ladder?: readonly string[]): boolean =>
 	!ladder || from === null || ladder.indexOf(to) > ladder.indexOf(from);
+
+// A ROW IS PENDING IFF THE HUMAN HAS SAID NOTHING — compiled from the ONE declaration of which
+// columns a verdict lands in ($core/review `SAID`, shared with the operator CLI's own queue, so the
+// two cannot name different sets). A committed output is a Confirm: it was posted. A NOTE is a
+// rejection: it was not, and it stays as the rule `sflock learn` moves into the corpus.
+const said = (yes: boolean) =>
+	SAID.map((property) => ({ property, rich_text: { [yes ? "is_not_empty" : "is_empty"]: true } }));
 
 const statusOf = async (id: string): Promise<string | null> => {
 	const v = (await page(id)).properties.Status;
@@ -193,11 +200,12 @@ export const decision = async (id: string): Promise<Decision> => toDecision(awai
 // over fields already fetched (so `feedback` can mean hasFeedback's exhaustive 3-column sense, which
 // no native filter expresses). Paginated — a growing Past tab must not be silently capped at 100.
 export const decisions = async (filter: Filter): Promise<Decision[]> => {
-	// pending: unset "Final output" (the committed output IS the decision). past: the decided log.
-	const tabFilter = {
-		property: "Final output",
-		rich_text: filter.tab === "past" ? { is_not_empty: true } : { is_empty: true }
-	};
+	// A ROW IS PENDING IFF THE HUMAN HAS SAID NOTHING, and there are two ways to say something —
+	// which column carries it is what says which way it went. A committed output is a Confirm (it
+	// was posted); a NOTE is a rejection (it was not). That second clause is the whole of the reject
+	// flow's read side: `record` derives the same fact from the same emptiness, so the queue and the
+	// write can never disagree about what a note means.
+	const tabFilter = filter.tab === "past" ? { or: said(true) } : { and: said(false) };
 	const results: {
 		id: string;
 		url: string;
@@ -292,13 +300,41 @@ const archive = async (pageId: string) => {
 	if (!res.ok) throw new Error(`Notion ${res.status}: ${await res.text()}`);
 };
 
+// refuse(pageId) — close what a note refuses. The Decision row itself is left alone beyond the note:
+// it is the audit trail, and `sflock learn` still needs its frozen evidence to cut a ground-truth
+// case from (which is why this archives nothing — the app hands the row to the learn worklist,
+// `sflock decisions list --feedback`, and that second stage retires it).
+//
+// So the only thing that moves is the pipeline entity the agent opened, through its own `drop`. Two
+// properties make this safe to do from a click. It is REVERSIBLE: the note IS the queue marker, so
+// clearing it puts the row back: and "Dropped" sits off the agent's `ladder`, so `ahead()` lets a
+// later Confirm move the entity forward anyway. And it is IDEMPOTENT by the agent's own guard (it
+// no-ops on a conversation already posted in), so `learn` calling it again later costs nothing.
+const refuse = async (pageId: string): Promise<void> => {
+	const { properties } = await page(pageId);
+	const kind = String(plain(properties.Kind) ?? "");
+	const subject = plain(properties.Subject);
+	const drop = agentFor(kind)?.config.drop;
+	// Loud, never silent: a note is recorded either way (it is already written), but an entity left
+	// open at its pending rung with no decision on it is a row nobody will ever close.
+	if (!drop || !subject)
+		return void console.error(
+			`refuse: decision ${pageId} noted but nothing closed — ${
+				!subject ? "it carries no Subject" : `kind "${kind}" declares no \`drop\``
+			}`
+		);
+	await drop(String(subject));
+};
+
 // record(pageId, { output, feedback, finalReasoning, commit }) — a review writes the human-owned
 // columns. There is ONE thing to write and one bit that says what it means: the human's WORKING
 // COPY — the output as they have it, their note, their statements ("Reasoning" stays the judge's,
 // verbatim) — and whether they are deciding.
 //
 //   commit: false  a Save. The working copy lands in the three DRAFT columns and nothing else, so
-//                  the row keeps its place in the queue and reopens exactly as they left it.
+//                  the row keeps its place in the queue and reopens exactly as they left it —
+//                  UNLESS it carries a note, which is a rejection (`refuse` above). Three verdicts,
+//                  still one payload and one bit: the note is not a mode, it is what was said.
 //   commit: true   the decision. The same output lands in "Final output" — the sole marker of a
 //                  review (its presence drops the row from the queue and lets `reviewOf` derive
 //                  agreement, committed ≡ Output) — and the draft output is CLEARED, because the
@@ -339,7 +375,18 @@ export const record = async (
 		"Draft output": { rich_text: chunks(commit ? "" : JSON.stringify(output)) }
 	};
 	if (!commit) {
-		return void (await patch(pageId, working)); // a Save — decision withheld, working copy kept
+		await patch(pageId, working);
+		// A NOTE IS A REJECTION, derived rather than declared: the caller sends the same working copy
+		// and the same `commit: false`, and what the human wrote decides what it means. One predicate,
+		// so the queue's read (`SAID.noted`) and this write cannot come to disagree — a client that had
+		// to declare the intent could send a noted Save or a note-less Reject, and the rule would then
+		// live in two places.
+		//
+		// Nothing was committed, so nothing is posted: no "Final output", no `act`, no `resolve`. What
+		// moves is the pipeline entity, through the `drop` the agent already declares beside `act` as
+		// the mirror of it — that is what approving DOES, this is what refusing does. Until now only
+		// `sflock learn` could reach it, so the app could approve and never refuse.
+		return void (feedback.trim() && (await refuse(pageId)));
 	}
 	const committedOutput = output;
 

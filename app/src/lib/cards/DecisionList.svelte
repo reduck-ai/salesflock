@@ -4,9 +4,12 @@
 	// /<id>?{filter} — the deck opens scoped to this exact set, so prev/next and "back" line up.
 	import { goto } from "$app/navigation";
 	import { filterQuery, type Filter, type Tab, type Feedback, type Sort } from "$lib/filter";
-	import type { DecisionRow } from "./decision";
+	import type { DecisionRow, Verdict } from "./decision";
 
 	let { rows, prompts, filter }: { rows: DecisionRow[]; prompts: string[]; filter: Filter } = $props();
+
+	// the mark beside each verdict — the word itself is the label, so this only has to carry tone
+	const GLYPH: Record<Verdict, string> = { Confirmed: "✓", Edited: "✎", Rejected: "✕" };
 
 	const dashless = (id: string) => id.replace(/-/g, "");
 
@@ -67,8 +70,14 @@
 			<span class="meta"><span class="kind">{r.kind || "—"}</span> · {ago(r.date)}</span>
 			<span class="right">
 				{#if r.verdict}
-					<span class="agree" class:ok={r.verdict === "Accepted"} class:edit={r.verdict === "Rejected"}>
-						{r.verdict === "Accepted" ? "✓ Confirmed" : "✎ Edited"}
+					<span
+						class="agree"
+						class:ok={r.verdict === "Confirmed"}
+						class:edit={r.verdict === "Edited"}
+						class:no={r.verdict === "Rejected"}
+					>
+						{GLYPH[r.verdict]}
+						{r.verdict}
 					</span>
 				{/if}
 				{#if r.hasFeedback}<span class="fb" title="Has feedback">💬</span>{/if}
@@ -199,6 +208,9 @@
 	}
 	.agree.edit {
 		color: #b7791f;
+	}
+	.agree.no {
+		color: #dc2626;
 	}
 	.empty {
 		text-align: center;
