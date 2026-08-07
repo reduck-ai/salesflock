@@ -13,6 +13,13 @@ import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock";
 import { fromNodeProviderChain } from "@aws-sdk/credential-providers";
 import { log } from "../log.js";
 
+// The AI SDK prints its warnings to STDOUT, which is the one place nothing but the result may go: a
+// single "AI SDK Warning System: …" line ahead of the JSON makes the answer unparseable, and it is
+// the caller's `jq` that discovers it, not us. (Measured: it corrupted the output of a 535-thread
+// drain — 52KB of valid result behind one line of advice.) Off, globally, at the seam that owns the
+// SDK: the trace has a stderr channel and this is not part of it.
+(globalThis as { AI_SDK_LOG_WARNINGS?: boolean }).AI_SDK_LOG_WARNINGS = false;
+
 // NO CONCURRENCY GATE. There was one — a global 8, a number taken from Bedrock ("429s at even 2
 // concurrent") and charged to every provider. It cost 3x on the qualify corpus (75s against 22s) and
 // bought nothing measurable: across ~15 full-corpus runs at widths from 8 to 54, not one 429.
@@ -94,7 +101,6 @@ const strict = (s: unknown): unknown => {
 // generate(prompt, schema, model?) — the prompt in, the schema-shaped JSON out.
 export const generate = async <T>(prompt: string, schema: object, spec = DEFAULT_MODEL): Promise<T> => {
 	const model = modelFor(spec);
-	log("llm", `${model.modelId} generate …`);
 	const t0 = Date.now();
 	const { object } = await withRetry(
 		() =>
@@ -130,9 +136,26 @@ export const jsonTool = <I>(def: {
 // agent(prompt, tools, done, model?) — the multi-step tool loop: run until `done()` (the caller's
 // success flag — e.g. a valid decision was submitted) or the step budget. `generate`'s one-shot
 // generateObject can't loop over tools; this is the same contract as a loop, temperature 0.
+// SPEAKS IN AGGREGATE, for the reason the Notion store does (stores/notion.ts `traced`): under a wide
+// fan-out a per-call narration is intent, not progress. Every judgment used to print a start line, a
+// line per tool step and a done line — five lines each, all naming the same model, none naming the
+// SUBJECT, so a start could not even be paired with its done. On a 535-thread drain that is ~2700
+// lines saying nothing the caller's own verdict line doesn't say better.
+//
+// What only this layer knows is what the MODEL cost, so that is what it reports: a heartbeat every
+// HEARTBEAT_CALLS judgments with the running totals, plus the outliers — a judgment that burned most
+// of its step budget (near the cap means it nearly failed) or ran long. Retries and stalls already
+// speak for themselves in `withRetry`. Everything else is silence, which is what "it is working"
+// should look like.
+const ms = (n: number): string => (n < 1000 ? `${n}ms` : `${(n / 1000).toFixed(1)}s`);
+const HEARTBEAT_CALLS = 25;
+const SLOW_MS = 30_000;
+let calls = 0;
+let tokens = 0;
+let spent = 0;
+
 export const agent = (prompt: string, tools: ToolSet, done: () => boolean, spec = DEFAULT_MODEL, maxSteps = 10) => {
 	const model = modelFor(spec);
-	log("llm", `${model.modelId} …`);
 	const t0 = Date.now();
 	return withRetry(
 		() =>
@@ -145,18 +168,22 @@ export const agent = (prompt: string, tools: ToolSet, done: () => boolean, spec 
 				// its completion means anything. A fresh signal per attempt, since this closure is what
 				// `withRetry` re-invokes; re-running is safe because `runJudgment` is pure.
 				abortSignal: AbortSignal.timeout(DEADLINE),
-				stopWhen: [done, stepCountIs(maxSteps)],
-				onStepFinish: (s) =>
-					log("llm", `${model.modelId} step: ${s.toolCalls.map((c) => c.toolName).join(", ") || "—"}`)
+				stopWhen: [done, stepCountIs(maxSteps)]
 			}),
 		model.modelId
-	).then(
-		(r) => (
+	).then((r) => {
+		const took = Date.now() - t0;
+		calls++;
+		tokens += r.totalUsage.totalTokens ?? 0;
+		spent += took;
+		// The two shapes of "this one was not routine", named individually because a mean hides both.
+		if (r.steps.length >= maxSteps - 1 || took > SLOW_MS)
+			log("llm", `${model.modelId}: ${r.steps.length}/${maxSteps} steps, ${ms(took)} — outlier`);
+		if (calls % HEARTBEAT_CALLS === 0)
 			log(
 				"llm",
-				`${model.modelId} done: ${r.steps.length} steps, ${r.totalUsage.totalTokens ?? 0} tok, ${Date.now() - t0}ms`
-			),
-			r
-		)
-	);
+				`${calls} judgments · ${(tokens / 1000).toFixed(0)}k tok · ${ms(Math.round(spent / calls))} each`
+			);
+		return r;
+	});
 };

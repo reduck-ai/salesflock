@@ -54,6 +54,7 @@ import { renderEvidence } from "./evidence.js";
 import { projectInput } from "../../src/project.js";
 import { mapLimit } from "../../src/concurrency.js";
 import { renderError } from "../../src/errors.js";
+import { log } from "../../src/log.js";
 import { drain } from "../../src/drain.js";
 import { parse, stringify } from "yaml";
 import config, { TARGETS, SUBREDDITS, OWNER, subKey } from "./config.js";
@@ -753,6 +754,15 @@ export const tools = {
 			}
 			const move = config.prompts.qualify.resolve(v.output);
 			tier = tierOf(v);
+			// The verdict, as it happens — the one line only this stage can write, because the Tier is
+			// this agent's word and core cannot know what a judgment MEANT. The counter beside it says
+			// how far the drain has got; this says what it decided, so a long run reads as a stream of
+			// outcomes instead of a number that moves. `screened` rides along when the comment tree
+			// changed the answer, which is the whole justification for paying for the second read.
+			log(
+				"engage",
+				`${u} → ${tier}${screened && screened !== tier ? ` (post alone read ${screened})` : ""}`
+			);
 			// The Tier lands on the THREAD row, not only inside the verdict, and it is the whole record
 			// of this judgment: it is what says the thread HAS been judged (so a re-run skips it), what
 			// says it was judged OUT when it reads "No", and what the reply then sees — the reply
@@ -841,8 +851,12 @@ export const tools = {
 	// that set, said once. Engaging a thread leaves it, so the drain pages the queue with no cursor
 	// to carry — including rows that only became owed while it ran.
 	engagePending: (opts: Select = {}) =>
-		drain(store, config.models.RedditThreads, pendingFilterOf(opts), (r) =>
-			tools.engage(String(r.fields["Thread URL"]))
+		drain(
+			store,
+			config.models.RedditThreads,
+			pendingFilterOf(opts),
+			(r) => tools.engage(String(r.fields["Thread URL"])),
+			"engage"
 		),
 
 	// threads — the stored threads themselves, in the two shapes anyone ever wants them. ONE selector

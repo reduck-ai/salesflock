@@ -345,15 +345,43 @@ const propertiesOf = (
 // cost it points at the row; read as `2 calls, 786ms, queued 6.4s` it points where the time really
 // is — at the request COUNT and the fan-out width, which are the only two things that would change it.
 const ms = (n: number): string => (n < 1000 ? `${n}ms` : `${(n / 1000).toFixed(1)}s`);
+
+// A row this heavy in NOTION's own time is worth naming; queue time is not its fault and is reported
+// in aggregate below. One heartbeat per this many rows — enough that a paced backlog moves visibly,
+// few enough that the counter beside it stays readable.
+const SLOW_WORK_MS = 3000;
+const HEARTBEAT_ROWS = 25;
+let rows = 0;
+let queuedTotal = 0;
+
+// traced(op, label, write) — the write seam's emission, and it SPEAKS IN AGGREGATE, because a paced
+// backend makes per-row narration actively misleading. It used to print a start line before each
+// write and a done line after, on the theory that a stalled write is then a dangling start. That
+// theory holds for one write at a time and inverts under fan-out: `pace` admits 2.5 requests a
+// second while a caller creates six hundred promises at once, so six hundred start lines land in a
+// burst — every one of them dangling, none of them a stall — and the `m/n` counter that carries the
+// only real information scrolls past at 1:100. (Measured on a 48h watchlist scan: 606 starts, 8
+// dones, 7 progress lines, and the fact that explained the wait — `queued 244.2s` — printed once per
+// row where nobody could see it.)
+//
+// So the routine channel is a heartbeat naming what the BACKEND is doing (rows landed, the rate the
+// clock has settled on, the average queue per row), which is the one thing this layer knows and the
+// caller cannot: `pace` adapts to Notion's own 429s, so the rate IS the answer to "why is this
+// slow". A row is named individually only when Notion itself was slow for it, which is the case the
+// per-row line was always for. "Is it stuck?" is answered by the counter not advancing — one line,
+// one meaning, and no line that means nothing.
 const traced = async (op: string, label: string, write: (meter: Meter) => Promise<Ref>): Promise<Ref> => {
-	log("notion", `${op} ${label} …`);
 	const meter: Meter = { calls: 0, work: 0, queued: 0 };
 	const ref = await write(meter);
-	log(
-		"notion",
-		`${op} ${label} → ${ref.created ? "created" : "updated"} ` +
-			`(${meter.calls} calls, ${ms(meter.work)}, queued ${ms(meter.queued)})`
-	);
+	rows++;
+	queuedTotal += meter.queued;
+	if (meter.work > SLOW_WORK_MS)
+		log("notion", `${op} ${label} → ${ms(meter.work)} in ${meter.calls} calls — slow`);
+	if (rows % HEARTBEAT_ROWS === 0)
+		log(
+			"notion",
+			`${rows} rows written · ${slot.rps().toFixed(1)} rps · ${ms(Math.round(queuedTotal / rows))} queued per row`
+		);
 	return ref;
 };
 

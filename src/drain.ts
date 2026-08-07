@@ -8,11 +8,15 @@
 import { batch } from "./concurrency.js";
 import type { Row, Store } from "./stores/index.js";
 
+// `label` is the CALLER's word for the work, not this file's: a drain is a shape, and "drain" on a
+// progress line says only that something is looping. The caller knows what it is doing to each row
+// ("engage"), so it names it — same convention as mapLimit's label, which is what actually prints it.
 export const drain = async <R>(
 	store: Store,
 	model: string,
 	filter: object,
-	run: (row: Row) => Promise<R>
+	run: (row: Row) => Promise<R>,
+	label = "drain"
 ): Promise<(R | { item: Row; error: string })[]> => {
 	const out: (R | { item: Row; error: string })[] = [];
 	const seen = new Set<string>();
@@ -26,6 +30,6 @@ export const drain = async <R>(
 		// is that the total is not known in advance (rows leave the filter as they are processed, and
 		// new ones can arrive while it runs), so a page is the largest honest denominator. The
 		// backlog-wide count is what `--dry-run` is for.
-		out.push(...(await batch(fresh, run, "drain")));
+		out.push(...(await batch(fresh, run, label)));
 	}
 };
