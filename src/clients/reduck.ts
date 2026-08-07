@@ -1,178 +1,117 @@
-// Runner — the one bit of plumbing. Runs a reduck script and returns its JSON result, reusing the
-// user's device, auth and cookies. The script's contract (args, output) lives in the script —
-// `reduck read reduck/<host>/<slug>` — never restated here.
-//
-// TWO transports, ONE `run`. The CLI is the default: self-contained (a dependency resolved from
-// node_modules, no global install), and REDUCK_BIN overrides it with e.g. a patched local build.
-// But the review app is a serverless function — it has no node_modules to shell and no process to
-// spawn — and a decision's `act` (stores/index.ts) has to reach a browser from exactly there. So
-// REDUCK_API_KEY selects the HTTP transport: the same run, over the MCP server's REST surface.
-//
-// The seam is the point: every caller keeps calling `run(addr, args)` and none of them knows which
-// transport answered. The HTTP one absorbs the one difference that would otherwise leak — a run
-// slow enough to answer `202 {runId}` instead of a result — by polling `/runs/{id}` to a terminal
-// state, because "await the run" is what the CLI's caller already means.
+// Runner — the one bit of plumbing, and the ONLY file that knows both the Reduck client and this
+// repo. The client itself is portable (reduck.client.ts: no env, no logger, no gate); this binds it
+// to salesflock's three local facts and nothing more:
+//   the credential   REDUCK_API_KEY, absent ⇒ loud. There is no fallback, deliberately: the review
+//                    app is a serverless function, and the old client silently shelled a CLI that
+//                    does not exist there — a missing key then reported "Session expired" instead of
+//                    "no credential", which is a whole afternoon to diagnose and one line to prevent.
+//   the ceiling      one request = one slot of gate(REDUCK_CONCURRENCY). A batch is one request, so
+//                    fanning out through `runAll` costs one slot rather than one per script.
+//   the trace        log() before and after each request, so a hung run is a dangling start line.
+// A script's contract (args, output) lives in the script — `reduck read reduck/<host>/<slug>` —
+// never restated here.
 
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
-import { parse } from "yaml";
+import { createReduckClient, type Args, type Call, type Contract, type RunOpts } from "./reduck.client.js";
 import { gate, REDUCK_CONCURRENCY } from "../concurrency.js";
 import { log } from "../log.js";
 
-const exec = promisify(execFile);
-
-// The single global ceiling on concurrent reduck runs (one browser device). Every `run` acquires a
-// slot, so any fan-out — a profile's parallel scripts, a batched tool — is throttled to the limit.
-const slot = gate(REDUCK_CONCURRENCY);
-const require = createRequire(import.meta.url);
-
-// The bundled CLI's entry, run under this same node. Falls back to a `reduck` on
-// PATH if the dependency can't be resolved.
-function reduckArgv(): string[] {
-	if (process.env.REDUCK_BIN) return [process.env.REDUCK_BIN];
-	try {
-		const pkg = require.resolve("@reduck-ai/cli/package.json");
-		const { bin } = require(pkg) as { bin: string | Record<string, string> };
-		return [process.execPath, join(dirname(pkg), typeof bin === "string" ? bin : bin.reduck)];
-	} catch {
-		return ["reduck"];
-	}
-}
-
-export type Args = Record<string, string | number | boolean>;
-
-// The address `<owner>/<host>/<slug>` split into the script step the REST API takes. The OWNER is
-// carried, not dropped: a script is its address, not its name (a same-named copy under a different
-// owner is a different script), and host+slug alone resolves only against the caller's own scripts —
-// so dropping it silently swaps which script runs, or 404s on the catalogue.
-const addrParts = (addr: string): { handle?: string; host: string; slug: string } => {
-	const m = addr.match(/^(?:(@?[^/]+)\/)?([^/]+)\/([^/]+)$/);
-	if (!m) throw new Error(`not a script address: ${addr}`);
-	return { ...(m[1] ? { handle: m[1] } : {}), host: m[2], slug: m[3] };
-};
+export type { Args, Call, Contract, RunOpts, Target, ManagedRegion } from "./reduck.client.js";
+export { ReduckError } from "./reduck.client.js";
 
 const MCP_URL = process.env.REDUCK_MCP_URL ?? "https://mcp.reduck.ai";
 
-// The server's envelope, discriminated by `status` alone (mcp-server runs/envelope.ts): a terminal
-// run carries `result` or `error`; one still in flight carries the handle and how long to wait.
-interface Envelope {
-	status: "completed" | "queued" | "running" | "failed";
-	runId?: string;
-	result?: unknown;
-	error?: string;
-	externalMessage?: string;
-	retryAfterMs?: number;
-}
+// Read at CALL time, never at import: the review app injects its env per process, and a module-level
+// read would freeze whatever was set when the bundle loaded.
+const apiKey = (): string => {
+	const key = process.env.REDUCK_API_KEY;
+	if (!key)
+		throw new Error(
+			"no REDUCK_API_KEY — every run goes over the Reduck REST API (mcp.reduck.ai), which needs one. " +
+				"Create it at https://reduck.ai/api-keys and put it in the environment of THIS process."
+		);
+	return key;
+};
 
-// The HTTP transport. `POST /run` answers with the outcome, or 202 + a handle when the run outlives
-// the request — so this polls `/runs/{id}` to a terminal state, honouring the server's own
-// `retryAfterMs`, and hands back the same thing the CLI would. A failed run RAISES with the
-// server's message: the error belongs to the caller (a reviewer's card, the CLI's exit code) and
-// is never swallowed into a fake-empty success.
-const runHttp = async <T>(addr: string, args: Args, key: string, device?: string): Promise<T> => {
-	const api = async (path: string, init?: RequestInit): Promise<Envelope> => {
-		const res = await fetch(`${MCP_URL}${path}`, {
-			...init,
-			headers: { "X-API-Key": key, "Content-Type": "application/json", ...init?.headers }
-		});
-		const body = (await res.json()) as Envelope & { error?: string };
-		if (!res.ok && res.status !== 202)
-			throw new Error(`reduck ${res.status} ${path}: ${body.error ?? JSON.stringify(body)}`);
-		return body;
-	};
-	// `browser: "extension"` — the user's own paired Chrome, which is what the CLI targets by default
-	// and the only thing that works here: every script this agent runs is logged-in (and Reddit's
-	// write scripts say so in their own contract, "runs only via the browser extension"). The hosted
-	// cloud browser would be a different, signed-out identity.
-	//
-	// WHICH paired browser, when there are several — and the server refuses to guess, rightly: two
-	// browsers are two signed-in identities, so an auto-pick would act as whoever happened to answer.
-	// The caller names it, because only the caller knows what this run IS (a scrape or a post) and
-	// therefore which identity should be seen doing it. REDUCK_DEVICE_ID is the fallback for a caller
-	// that has no opinion; with one device paired, neither is needed.
-	const deviceId = device ?? process.env.REDUCK_DEVICE_ID;
-	let env = await api("/run", {
+const client = () => createReduckClient({ credential: { apiKey: apiKey() }, baseUrl: MCP_URL });
+
+// The single ceiling on concurrent requests to the run door. One `runAll` — however many scripts it
+// carries — is one slot, because it is one request; the server meters the browsers behind it and
+// queues the rest FIFO.
+const slot = gate(REDUCK_CONCURRENCY);
+
+// WHERE this went, in the trace — because "which browser ran it" is the question a wrong result
+// raises first, and it was unanswerable after the fact: a scrape on the wrong identity and a scrape
+// on the cloud read identically in the log. Short by design (`@cloud/FR`, `@device:c12b4b27`), so it
+// costs a few characters on a line that already carries the args.
+const where = (opts?: RunOpts): string => {
+	const t = opts?.target ?? "extension";
+	const at = typeof t === "string" ? t : `device:${t.deviceId.slice(0, 8)}`;
+	return ` @${at}${opts?.country ? `/${opts.country}` : ""}${opts?.region ? `/${opts.region}` : ""}`;
+};
+
+const label = (calls: Call[], opts?: RunOpts): string =>
+	calls.map((c) => `${c.addr} ${Object.entries(c.args ?? {}).map(([k, v]) => `${k}=${v}`).join(" ")}`.trim()).join(" | ") +
+	where(opts);
+
+// Log at the START — so a slow or hung run is visible immediately, not only once it returns — then
+// again on completion with the elapsed. The args and the target self-tag both lines, so concurrent
+// requests stay paired across the interleaved output.
+const traced = <T>(calls: Call[], opts: RunOpts | undefined, fn: () => Promise<T>): Promise<T> =>
+	slot(async () => {
+		const what = label(calls, opts);
+		log("reduck", `${what} …`);
+		const t0 = Date.now();
+		try {
+			return await fn();
+		} finally {
+			log("reduck", `${what} → done (${Date.now() - t0}ms)`);
+		}
+	});
+
+// runAll(calls, opts) — several scripts in ONE request, each on its own browser, one outcome each:
+// a rejection never removes its siblings' results. The batch is the point — a watchlist scan is one
+// request and one poll instead of one per community.
+export const runAll = <T = unknown>(
+	calls: Call[],
+	opts?: RunOpts
+): Promise<PromiseSettledResult<T>[]> => traced(calls, opts, () => client().runAll<T>(calls, opts));
+
+// run(addr, args, opts) — one script, unwrapped. `opts.target` is WHICH browser, i.e. which
+// signed-in identity the site sees: core carries it and never chooses it, because only the caller
+// knows whether this run reads or writes (see agents/reddit-engage/config.ts TARGETS).
+export const run = <T = unknown>(addr: string, args: Args = {}, opts?: RunOpts): Promise<T> =>
+	traced([{ addr, args }], opts, () => client().run<T>(addr, args, opts));
+
+// read(addr) — a script's contract, the ground truth `sflock bind` compiles into TS types.
+export const read = (addr: string): Promise<Contract> => client().read(addr);
+
+// devices() — the paired browsers, and the one call that does NOT go through the REST door: it has
+// no devices endpoint, so this is the MCP door's `list_devices` tool over the same URL and the same
+// key. It answers the server's own TEXT, for a human to read — never something to branch on. It
+// lives in the binding rather than in the client for exactly that reason: the client is a typed REST
+// surface, this is operator tooling (`sflock devices`), and a device id is what `DEVICES` pins.
+export const devices = async (): Promise<string> => {
+	const res = await fetch(MCP_URL, {
 		method: "POST",
+		headers: {
+			"X-API-Key": apiKey(),
+			"Content-Type": "application/json",
+			Accept: "application/json, text/event-stream"
+		},
 		body: JSON.stringify({
-			browser: "extension",
-			...(deviceId ? { deviceId } : {}),
-			script: { ...addrParts(addr), args }
+			jsonrpc: "2.0",
+			id: 1,
+			method: "tools/call",
+			params: { name: "list_devices", arguments: {} }
 		})
 	});
-	while (env.status === "queued" || env.status === "running") {
-		if (!env.runId) throw new Error(`reduck ${addr}: run is ${env.status} but the server gave no runId`);
-		await new Promise((r) => setTimeout(r, env.retryAfterMs ?? 2000));
-		env = await api(`/runs/${env.runId}`);
-	}
-	if (env.status === "failed") throw new Error(`reduck ${addr}: ${env.externalMessage ?? env.error}`);
-	// A terminal run that carries neither a result nor a `failed` status. Measured: a device signed
-	// OUT of the site came back exactly this way, and returning `undefined` made the caller crash one
-	// frame later on a property of nothing — the error naming a field instead of the browser. An empty
-	// answer that was never an answer is the fake-empty success the invariants forbid, so refuse it
-	// here, where the run id is still in hand. (`null` is a real result; only absence is not.)
-	if (env.result === undefined)
-		throw new Error(
-			`reduck ${addr}: run ${env.runId ?? "?"} ended "${env.status}" with no result — ` +
-				`read its trace (is the device signed in?)`
-		);
-	return env.result as T;
-};
-
-const runCli = async <T>(addr: string, args: Args, pairs: string[], device?: string): Promise<T> => {
-	const [cmd, ...pre] = reduckArgv();
-	// `--device` is the CLI's own name for the same choice the REST body calls `deviceId`, so both
-	// transports honour it identically — otherwise which identity acted would depend on which
-	// transport happened to answer, which is the one thing a caller must be able to rely on.
-	const target = device ?? process.env.REDUCK_DEVICE_ID;
-	// 64MB stdout headroom: a busy subreddit's week of full post bodies overflows Node's 1MB default.
-	const { stdout, stderr } = await exec(
-		cmd,
-		[...pre, "run", "--script", addr, ...pairs, ...(target ? ["--device", target] : [])],
-		{
-			maxBuffer: 64 * 1024 * 1024
-		}
-	);
-	const runId = stderr.match(/run_id:\s*(\S+)/)?.[1] ?? "?";
-	log("reduck", `${addr} ${pairs.join(" ")} ← ${runId}`);
-	return JSON.parse(stdout) as T;
-};
-
-// run(addr, args, device?) — `device` is WHICH paired browser, i.e. which signed-in identity the
-// site sees. Core carries it and never chooses it: only the caller knows whether this run reads or
-// writes, and an agent that keeps those on separate accounts (see agents/reddit-engage/config.ts
-// DEVICES) must be able to say so per call. Omitted ⇒ REDUCK_DEVICE_ID, else the server auto-picks.
-export const run = <T = unknown>(addr: string, args: Args, device?: string): Promise<T> =>
-	slot(async () => {
-		const pairs = Object.entries(args).map(([k, v]) => `${k}=${v}`);
-		// Log at the START — so a slow or hung run is visible immediately, not only once it returns —
-		// then again on completion with the elapsed. The args self-tag both lines, so concurrent runs
-		// stay paired across the interleaved output.
-		log("reduck", `${addr} ${pairs.join(" ")} …`);
-		const t0 = Date.now();
-		const key = process.env.REDUCK_API_KEY;
-		const out = key
-			? await runHttp<T>(addr, args, key, device)
-			: await runCli<T>(addr, args, pairs, device);
-		log("reduck", `${addr} ${pairs.join(" ")} → done (${Date.now() - t0}ms)`);
-		return out;
-	});
-
-// A script's contract — the ground truth. input/output are JSON Schemas (server-enforced
-// on every run); `bind` compiles `output` into a TS type.
-export interface Contract {
-	name: string;
-	input: object;
-	output: object;
-}
-
-// read(addr) — fetch a script's contract. `reduck read` prints YAML (no --json) with a
-// trailing "Success rate…" footer that isn't YAML; strip it before parsing. Swap the
-// strip for --json once the CLI grows it.
-export const read = async (addr: string): Promise<Contract> => {
-	const [cmd, ...pre] = reduckArgv();
-	const { stdout } = await exec(cmd, [...pre, "read", addr]);
-	const footer = stdout.search(/^Success rate/m);
-	return parse(footer < 0 ? stdout : stdout.slice(0, footer)) as Contract;
+	const text = await res.text();
+	// The MCP door answers either JSON or a one-event SSE stream; both carry the same JSON-RPC body.
+	const json = text.startsWith("event:") ? text.slice(text.indexOf("data:") + 5).trim() : text;
+	const body = JSON.parse(json) as {
+		result?: { content?: { text?: string }[] };
+		error?: { message?: string };
+	};
+	if (body.error) throw new Error(`reduck list_devices: ${body.error.message ?? JSON.stringify(body.error)}`);
+	return body.result?.content?.map((c) => c.text ?? "").join("\n") ?? "";
 };

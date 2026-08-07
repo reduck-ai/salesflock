@@ -55,6 +55,7 @@ import { text } from "node:stream/consumers";
 import { join } from "node:path";
 import { compile } from "json-schema-to-typescript";
 import { bind } from "./scripts.js";
+import { devices } from "./clients/reduck.js";
 import { renderError } from "./errors.js";
 import { STORES } from "./stores/index.js";
 import { createReviewer } from "./decide.js";
@@ -109,6 +110,16 @@ program
 		await writeFile(path, await bind(scripts));
 		console.error(`${client}: ${Object.keys(scripts).length} scripts → ${path}`);
 	});
+
+// devices — the paired browsers, by id. Not a contract to compile and not an agent's business: it is
+// the one fact an operator needs before writing `DEVICES` into an agent's config, and it is
+// unanswerable from in here otherwise (the REST run door has no devices endpoint, so the client asks
+// the MCP door). Prints the server's own text — WHICH account each browser is signed into is a
+// separate question, and only `reduck run --script reduck/reddit.com/whoami --device <id>` answers it.
+program
+	.command("devices")
+	.description("List the paired browsers (id, kind, online) — the ids an agent's config pins.")
+	.action(async () => console.log(await devices()));
 
 // decisions — the agent-agnostic review surface, over createReviewer (read-only, no entity bridge).
 // JSON on stdout so an agent reads each result; --agent picks whose Decisions table to read.

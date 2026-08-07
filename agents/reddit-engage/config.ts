@@ -25,6 +25,7 @@
 // inside the human's Confirm, never in a background pass.
 
 import { getStore, type AgentConfig } from "../../src/stores/index.js";
+import type { RunOpts } from "../../src/clients/reduck.js";
 import { say, threadUrl, userUrl } from "../../src/clients/reddit/index.js";
 
 // The two table ids `drop` needs beside `models`: it reads a thread to learn WHO wrote it, then
@@ -101,32 +102,64 @@ export const SUBREDDITS: Record<string, string> = {
 // ("r/AI_Agents", "AI_Agents") finds the same community. The twin of threadUrl's normalization.
 export const subKey = (subreddit: string): string => subreddit.replace(/^r\//i, "").toLowerCase();
 
-// Our own Reddit username — the account DEVICES.write is signed in as (keep the two in step, and
+// Our own Reddit username — the account TARGETS.write is signed in as (keep the two in step, and
 // see the note there for why nothing can check that for you). `queue` never backlogs our own threads
 // (you don't reply to yourself). Empty ⇒ the check is off until filled in.
 export const OWNER: string = "Separate-Still3770";
 
-// WHICH paired browser does what — read on one account, write on another, because a browser IS an
-// identity and the two jobs have opposite risk profiles. Scraping is high-volume and its worst case
-// is a rate-limit or a shadowban; posting is low-volume under the one name that has to keep being
-// welcome in these communities. Splitting them means no amount of reading can cost us the account
-// that replies.
+// WHERE each run goes, one entry per JOB rather than per browser — because the choice is not only
+// which browser but how it egresses, and the three jobs answer differently. Reading is SIGNED OUT
+// wherever it can be; writing is SIGNED IN AS US and nowhere else.
 //
-// Declared here, beside OWNER, because these are OUR accounts: the reduck client takes a device per
-// call but cannot know which is which (core must not import an agent), and the read/write line it
-// DOES own is exactly this line — `say`/`answer` are the writes, everything else reads. Passed
-// explicitly at each call site rather than registered into the client once: a module-level default
-// would be order-dependent, and losing that race means a reply posts under the reading account.
+//   thread   the CLOUD, through RESIDENTIAL egress. Fetching one thread's page is the high-volume
+//            read (one per surviving thread), it is a public page, and doing it as nobody means no
+//            account of ours can be rate-limited, shadowbanned or logged out by scraping — and no
+//            paired device has to exist (two stale ids stopped this funnel dead once).
 //
-// The ids come from `reduck list_devices`; WHO each one is comes from
-// `reduck run --script reduck/reddit.com/whoami` on it. Nothing checks that write is still OWNER —
-// signing that browser into a different account silently changes who we are, so verify after any
-// re-pair or re-login. (Measured, the hard way: both devices were throwaway accounts for an
-// afternoon while this file claimed otherwise.)
-export const DEVICES = {
-	read: "4ff47fc1-c4db-4710-aaed-ece4c8636707",
-	write: "e87f7b96-4ce6-401a-bfbe-b8773060b788"
-} as const;
+//            `country` is the load-bearing half, and it is not a latency knob. From a DATACENTER IP
+//            Reddit serves "You've been blocked by network security" and nothing else — measured in
+//            eu-central-1 and us-west-2, and the run reports a selector TIMEOUT rather than the
+//            block, because the page it is waiting for never renders (the screenshot in the trace is
+//            the only thing that says why). us-east-1's pool answered fine on the same read, which
+//            is worth knowing and not worth relying on: pool reputation is Reddit's to change, and
+//            the failure is silent-looking when it moves. A residential IP is the lever that does
+//            not depend on that.
+//
+//            The evidence it returns matches the device's — same title, same score, the same comment
+//            tree at the same depths — with ONE caveat that is not a defect here: two of three FR
+//            runs returned 5 of the thread's 8 comments where the device returned 8. A partial tree
+//            is VISIBLE rather than silent (`num_comments` is Reddit's own total, the seed keeps
+//            both, and evidence.ts renders "N of M shown"), so a judgment made on a short read says
+//            so — but it IS less evidence, and if a Tier ever looks wrong on a thread whose card
+//            shows "5 of 8", that is the first thing to check.
+//   listing  a paired browser, and ONLY because of a flag: `reduck/reddit.com/get_subreddit_threads`
+//            is declared `loggedIn`, so the run door refuses it on the cloud before it ever tries
+//            ("pass a vaultId + vaultKey, or run it on your paired browser") and REST accepts no
+//            vault (RunParamsSchema is strict; runner.ts pins the key to undefined). Its sibling
+//            `get_thread` is NOT declared that way, which is the whole reason the two lines differ.
+//            Flip that flag on the catalogue script and this becomes `thread`'s value verbatim.
+//   write    ONE paired browser, because a comment has a name on it. A device IS an identity: which
+//            account Reddit sees is whichever one that browser is signed into, and nothing here can
+//            check it. The ids come from `sflock devices`; WHO each one is comes from
+//            `reduck run --script reduck/reddit.com/whoami --device <id>`. Verify after any re-pair
+//            or re-login — signing that browser into another account silently changes who we are.
+//            (Measured, the hard way: both devices were throwaway accounts for an afternoon while
+//            this file claimed otherwise.) Never the cloud: a signed-out session cannot comment.
+//
+// Declared here, beside OWNER, because only the agent knows which is which: the client takes the
+// options per call and core must not import an agent. The read/write line the CLIENT owns is the one
+// below it — `say`/`answer` are the writes, everything else reads. Passed explicitly at each call
+// site rather than registered into the client once: a module-level default would be order-dependent,
+// and losing that race means a reply posts from the wrong browser.
+export const TARGETS = {
+	// Both levers, and both measured: `region` puts the session in the pool Reddit was not blocking
+	// (eu-central-1 and us-west-2 both served the block page), `country` makes the egress residential
+	// so we do not depend on that pool staying welcome. Together they read the full tree every time —
+	// 8 of 8 comments on three consecutive runs, where FR egress returned 5 of 8 on two of three.
+	thread: { target: "cloud", region: "us-east-1", country: "US" },
+	listing: { target: { deviceId: "c12b4b27-9a32-4bdf-b5b9-ecad926c3584" } },
+	write: { target: { deviceId: "c12b4b27-9a32-4bdf-b5b9-ecad926c3584" } }
+} as const satisfies Record<"thread" | "listing" | "write", RunOpts>;
 
 export default {
 	destination: "notion",
@@ -248,8 +281,8 @@ export default {
 						`the reply carries a link (${link[0]}) — Reddit will not let it be submitted here. ` +
 							`Edit the draft to say it in words, or point them at the name and let them search.`
 					);
-				// DEVICES.write — the one account whose name belongs on a reply (OWNER's).
-				const { permalink } = await say(threadUrl(url), text, DEVICES.write);
+				// TARGETS.write — the one browser whose name belongs on a reply (OWNER's).
+				const { permalink } = await say(threadUrl(url), text, TARGETS.write);
 				return {
 					"Comment URL": permalink.startsWith("http")
 						? permalink

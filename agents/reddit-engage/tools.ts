@@ -47,15 +47,16 @@
 //
 // Monotonic + idempotent on the canonical Thread URL, which keys BOTH tables.
 
-import { getSubredditThreads, getThread, sinceIso, subOf, threadUrl, userUrl } from "../../src/clients/reddit/index.js";
+import { getSubredditThreadsAll, getThread, sinceIso, subOf, threadUrl, userUrl } from "../../src/clients/reddit/index.js";
 import { getStore, queryAll } from "../../src/stores/index.js";
 import { createDecider } from "../../src/decide.js";
 import { renderEvidence } from "./evidence.js";
 import { projectInput } from "../../src/project.js";
 import { mapLimit } from "../../src/concurrency.js";
+import { renderError } from "../../src/errors.js";
 import { drain } from "../../src/drain.js";
 import { parse, stringify } from "yaml";
-import config, { DEVICES, SUBREDDITS, OWNER, subKey } from "./config.js";
+import config, { TARGETS, SUBREDDITS, OWNER, subKey } from "./config.js";
 import type { Subject, Verdict } from "../../src/decide.js";
 import type { PromptSpec, Row } from "../../src/stores/index.js";
 import type { Threads } from "../../src/clients/reddit/index.js";
@@ -575,7 +576,7 @@ export const queue = async (
 	return { url: u, queued: r.created, thread: r.url };
 };
 
-// refresh(url) — re-read ONE thread from its own page and re-freeze it, returning the stored row.
+// refresh(row) — re-read ONE thread from its own page and re-freeze it, returning the stored row.
 // The listing gives the post; only the page gives what was said under it, so this is where the
 // comment tree comes from. A tool rather than a bare `reduck run` because it does both things a
 // tool is for (README #3): it composes the fetch with the store write, and it writes the seed in
@@ -595,13 +596,25 @@ export const queue = async (
 // `comments` is written ALWAYS, even as `[]`: its presence is what tells a re-run the fetch already
 // happened (see `hasCommentTree`). Score and the comment count are refreshed while we are here —
 // they moved since the scan, and they are the two numbers the card shows.
-export const refresh = async (url: string): Promise<Row> => {
-	const u = threadUrl(url);
-	// DEVICES.read — a scrape, so it goes out on the reading account, never OWNER's.
-	const t = await getThread(u, DEVICES.read);
-	// Partial, and that is the point: an upsert writes only the fields it is handed, so omitting
-	// Name (required on a full row — it is the Notion title) is how this leaves identity alone.
-	const row: Omit<Partial<RedditThreads>, "Thread URL"> = {
+//
+// It takes the ROW, not a URL, and writes BY ID — the one difference between this and every other
+// write in this file, and the reason is that this is the only write that lands SECONDS after the
+// row was created. An upsert finds its page through a query, a query is served by an index, and the
+// index lags a fresh write: the lookup misses, the upsert creates, and the thread now has a second
+// page carrying only the three columns written here — no Name, no Author, no Subreddit. That is the
+// silent fork the header warns about, and it happened (measured: two threads scanned at 06:24 forked
+// on refresh minutes later, and the funnel then failed on the sparse twin with "has no Author").
+// A `patch` addresses the page we are already holding, so there is nothing to look up and nothing to
+// fork. `rdt refresh` reads the row first — by then the row is not new, and a thread we have never
+// scanned is refused rather than half-created.
+export const refresh = async (row: Row): Promise<Row> => {
+	const u = threadUrl(String(row.fields["Thread URL"]));
+	// TARGETS.thread — the cloud browser through residential egress: a public page read as nobody,
+	// so no account of ours is exposed and no paired device has to be alive for it.
+	const t = await getThread(u, TARGETS.thread);
+	// Partial, and that is the point: a patch writes only the fields it is handed, so omitting Name
+	// (required on a full row — it is the Notion title) is how this leaves identity alone.
+	const fields: Omit<Partial<RedditThreads>, "Thread URL"> = {
 		Score: t.score,
 		Comments: t.num_comments,
 		Thread: stringify(
@@ -634,10 +647,11 @@ export const refresh = async (url: string): Promise<Row> => {
 			{ lineWidth: 0 }
 		)
 	};
-	await writeThread(u, row);
-	// Read back rather than merge in memory: the next judgment reads the row, so it must read what
-	// the store actually holds — the same rule `decide("reply", url)` obeys one stage later.
-	return readThread(u);
+	// Read back rather than merge in memory: the next judgment reads the row, so it must read what the
+	// store actually holds — the same rule `decide("reply", url)` obeys one stage later. By id, like
+	// the write above, for the same reason.
+	await store.patch(config.models.RedditThreads, row.id, fields);
+	return store.get(row.id);
 };
 
 export const tools = {
@@ -661,21 +675,31 @@ export const tools = {
 	// `engage`'s job, and it reads what is owed off the Tier rather than off anything written here.
 	// Dedup across subreddits and re-runs is structural: one canonical Thread URL, one row, and a
 	// write that says nothing about progress cannot undo any.
-	// One reduck run per subreddit — the rules a reply must obey are declared in config.ts, so
-	// discovery has nothing to refresh (they are fetched by hand, as a setup step).
-	scan: async (since = "48h", subreddits?: readonly string[]) =>
-		mapLimit(watched(subreddits), async (subreddit) => {
-			const ranAt = new Date().toISOString();
-			// The listing and what we already hold, fetched together — a browser run and a store query
-			// on different backends, so they overlap rather than queue. `fetched` is the one thing the
-			// listing must not overwrite (see `queue`): the threads whose PAGE has been read, whose seed
-			// therefore carries a comment tree the listing cannot reproduce. One query per subreddit.
-			const [{ threads }, stored] = await Promise.all([
-				getSubredditThreads(subreddit, since, DEVICES.read),
-				select({ subreddit: [subreddit] })
-			]);
+	// ONE reduck request for the whole watchlist — every community's listing in a single call, each on
+	// its own browser (src/clients/reddit `getSubredditThreadsAll`). Discovery is the one stage that
+	// asks the same question of several communities at once, so it asks once; and because each entry
+	// answers for itself, a community that fails (private, banned, a bad window) reports its error
+	// beside the others' threads instead of taking the scan down with it. The rules a reply must obey
+	// are declared in config.ts, so discovery has nothing else to refresh.
+	scan: async (since = "48h", subreddits?: readonly string[]) => {
+		const subs = watched(subreddits);
+		const ranAt = new Date().toISOString();
+		// The listings and what we already hold, fetched together — one browser request and one store
+		// query per community, on different backends, so they overlap rather than queue. `fetched` is
+		// the one thing the listing must not overwrite (see `queue`): the threads whose PAGE has been
+		// read, whose seed therefore carries a comment tree the listing cannot reproduce.
+		const [listings, stored] = await Promise.all([
+			getSubredditThreadsAll(subs, since, TARGETS.listing),
+			Promise.all(subs.map((subreddit) => select({ subreddit: [subreddit] })))
+		]);
+		return mapLimit(subs, async (subreddit, i) => {
+			const listing = listings[i];
+			// Loud, and only about ITS community: the run failed, so we know nothing about this
+			// subreddit — which is not the same as knowing it has no new threads.
+			if (listing.status === "rejected")
+				return { subreddit, error: renderError(listing.reason), queued: [] };
 			const fetched = new Set(
-				stored
+				stored[i]
 					.filter(({ seed }) => fetchedComments(seed))
 					.map(({ row }) => String(row.fields["Thread URL"]))
 			);
@@ -683,12 +707,13 @@ export const tools = {
 			// finish in seconds and then every one of their write fan-outs runs at once, so an unlabelled
 			// m/n would be several counters sharing one stream and none of them readable.
 			const queued = (
-				await mapLimit(threads, (t) => queue(t, subreddit, ranAt, fetched), {
+				await mapLimit(listing.value.threads, (t) => queue(t, subreddit, ranAt, fetched), {
 					label: `scan r/${subreddit}`
 				})
 			).filter((q) => q.queued);
-			return { subreddit, seen: threads.length, queued };
-		}),
+			return { subreddit, seen: listing.value.threads.length, queued };
+		});
+	},
 
 	// engage — everything still owed on one thread, read off the thread's own DATA: qualify it if no
 	// Tier says it was, then draft the reply if it earned one and no outreach was ever opened. Both
@@ -723,7 +748,7 @@ export const tools = {
 				// here, which is the whole reason the read is split (README #9): the listing already
 				// carries the post, so this fetch buys the comments and nothing else.
 				screened = tierOf(v);
-				row = await refresh(u);
+				row = await refresh(row);
 				v = await decider.judge("qualify", subjectOf(u, row));
 			}
 			const move = config.prompts.qualify.resolve(v.output);
@@ -885,11 +910,12 @@ export const tools = {
 
 	// refresh — the primitive above, exposed: re-pull one thread's page and update its seed. The
 	// thread's own state only, so it never disturbs where a thread stands or anything already judged.
-	refresh: (url: string) =>
-		refresh(url).then((r) => ({
-			url: threadUrl(url),
-			comments: seedOf(r)?.comments?.length ?? 0
-		})),
+	// It resolves the row first, so a URL we have never scanned is refused (`notion.read: no page
+	// with Thread URL = …`) rather than half-created as a row with a seed and no identity.
+	refresh: async (url: string) => {
+		const r = await refresh(await readThread(url));
+		return { url: threadUrl(url), comments: seedOf(r)?.comments?.length ?? 0 };
+	},
 
 	// draft — manually (re-)draft a reply for one thread on its stored seed, opening (or re-opening)
 	// its outreach at "Pending approval". The Decision freezes its own copy of that seed as it judges,

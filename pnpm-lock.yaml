@@ -18,8 +18,8 @@ importers:
         specifier: ^3.1090.0
         version: 3.1090.0
       '@reduck-ai/cli':
-        specifier: ^2.1.6
-        version: 2.1.6(zod@4.4.3)
+        specifier: ^2.1.10
+        version: 2.1.10(zod@4.4.3)
       ai:
         specifier: ^7.0.31
         version: 7.0.31(zod@4.4.3)
@@ -176,8 +176,8 @@ packages:
       '@cfworker/json-schema':
         optional: true
 
-  '@reduck-ai/cli@2.1.6':
-    resolution: {integrity: sha512-EKntLXVeTtrEVCDTeKqEAGBX0SMN09UYZaZoEqDgY4HDIwFfqHOfz3sdR5f2ej2dMyRGjTfEWi9QqKrNDHpPLg==}
+  '@reduck-ai/cli@2.1.10':
+    resolution: {integrity: sha512-qIXNFY+y3Ti8Ks2cPO+XiAI/nARhy4bxp6avbqagsVwniRZrs/HvDBM01nKOqr/Hutnieb/bhX9itq/tvnonsA==}
     engines: {node: '>=22'}
     hasBin: true
 
@@ -947,7 +947,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@reduck-ai/cli@2.1.6(zod@4.4.3)':
+  '@reduck-ai/cli@2.1.10(zod@4.4.3)':
     dependencies:
       '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
       commander: 11.1.0

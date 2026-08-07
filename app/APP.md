@@ -132,8 +132,10 @@ outreach already has a `Comment URL` — never on a status. Its result lands eve
 ladder refuses the status move: a permalink is a fact that already happened.
 
 An act reaches a browser through `$core/clients/reduck`, which runs over the MCP server's REST
-API here (the CLI it shells locally does not exist in a serverless function). **`REDUCK_API_KEY`**
-is the only variable it needs: WHICH paired browser — i.e. which signed-in identity the site sees —
+API — the one transport, here and in the runtime alike, so this is no longer a serverless special
+case. **`REDUCK_API_KEY`** is the only variable it needs, and without it the client throws naming
+the variable (it used to shell a CLI that does not exist in a function, and the failure then read
+"Session expired"): WHICH browser — i.e. which signed-in identity the site sees —
 is the agent's to declare and it passes it per call (reddit-engage keeps reading and writing on
 separate accounts, `DEVICES` in its `config.ts`), so no env var decides who acts. A browser run
 takes tens of seconds, so `api/decide` sets `maxDuration` and the card shows its existing
