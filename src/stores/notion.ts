@@ -13,7 +13,7 @@
 // logged-in person sees the whole personal CRM). Same contract as hubspot.ts.
 
 import { spawn } from "node:child_process";
-import { bodyOf, chunks, plain, type BlockPage, type NotionValue } from "./notion.codec.js";
+import { bodyOf, chunks, plain, relation, type BlockPage, type NotionValue } from "./notion.codec.js";
 import { pace, NOTION_RPS } from "../concurrency.js";
 import { log } from "../log.js";
 import type { Ref, Row, Store } from "./index.js";
@@ -446,16 +446,29 @@ export const patch = (model: string, id: string, record: object): Promise<Ref> =
 		return { id: idOf(id), url: pageUrl(idOf(id)), created: false };
 	});
 
-// A page → a Row: its id plus every property flattened to a plain scalar (relations and other
-// pointerish types drop to null and are skipped). The one page→Row mapping, shared by read,
-// query and get so the three return the same shape.
+// A page → a Row: its id, every property flattened to a plain scalar, and its RELATIONS as target
+// page ids. The one page→Row mapping, shared by read, query and get so the three return the same shape.
+//
+// The two go in different places because they are different kinds of thing, and fusing them would
+// lose the distinction that matters: a scalar is CONTENT, a relation is a POINTER. `plain` says so by
+// returning null for one (so `fields` stays a scalar map every consumer can compare and print), and
+// `relation` — the codec's other reader, exported for precisely this — gives the ids. Before `rel`
+// existed a relation could be written and never read, so every join had to be duplicated as a text
+// column on the child: a second copy of the same fact, with a second writer to keep it honest.
+// An empty relation is omitted, so `rel` reads the same way `fields` does — present means set.
 const rowOf = (page: { id: string; properties: Record<string, NotionValue> }): Row => {
 	const fields: Record<string, string | number | boolean> = {};
+	const rel: Record<string, string[]> = {};
 	for (const [name, v] of Object.entries(page.properties)) {
+		if (v.type === "relation") {
+			const ids = relation(v);
+			if (ids.length) rel[name] = ids;
+			continue;
+		}
 		const s = plain(v);
 		if (s !== null && s !== "") fields[name] = s;
 	}
-	return { id: page.id, fields };
+	return { id: page.id, fields, rel };
 };
 
 // read(model, keyProp, value) — the one page whose keyProp equals value, flattened to

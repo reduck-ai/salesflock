@@ -8,9 +8,21 @@ export interface Ref {
 	url: string;
 	created: boolean;
 }
+// A row, as every reader gets it: its id, its scalar columns, and its RELATIONS — apart, because
+// they are a different kind of thing. A scalar is content; a relation is a pointer, so it flattens
+// to target page ids and never to a string a filter could compare (Notion keys a relation by
+// `contains`, not `equals` — see notion.ts `locate`).
+//
+// `rel` exists so a join can BE a relation rather than a text foreign key copied onto the child.
+// Without it a reader could write a link and never read it back, which forces every agent to
+// duplicate the join as a column — one more copy, one more writer, one more thing to drift. The
+// codec has always exported `relation()` for exactly this ("the one non-scalar a reader needs"); this
+// is that reader reaching the Store seam. Empty for a store with no such notion, and `{}` for a row
+// whose model declares no relations — never absent, so a caller never guards.
 export interface Row {
 	id: string;
 	fields: Record<string, string | number | boolean>;
+	rel: Record<string, string[]>;
 }
 
 export interface Store {
@@ -133,7 +145,13 @@ export interface AgentConfig {
 	// ("Lead" for the LinkedIn agents, "X Engagement" for x-engage). Declared ONCE here and read by
 	// both consumers: the runtime binds the Decision to it (decide.ts), and the review app moves that
 	// entity's Status on confirm (app/…/notion.ts). An agent has one pipeline entity, so it's one string.
-	entity: string;
+	//
+	// ABSENT when the agent mints no Decision at all — a purely observational agent (geo: ask, search,
+	// fetch, record) has no pipeline entity to bind one to, and naming a relation no table has would be
+	// fiction. Same rule, and the same reason, as `PromptSpec.resolve`/`pending` being optional: declare
+	// the semantics an agent HAS, never a placeholder for the ones it hasn't. Its two readers —
+	// `decide.ts`'s `decide` and the review app's commit — are unreachable without a Decision kind.
+	entity?: string;
 	// The pipeline entity's forward status ladder — the ONE declaration of which way is forward,
 	// read by both consumers exactly as `resolve` is: the runtime's stages (which never drag an entity
 	// backward) and the review app's commit (an advancing decision may move the entity forward, never

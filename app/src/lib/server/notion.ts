@@ -433,7 +433,10 @@ export const record = async (
 	// the reviewer as "Internal Error" (SvelteKit hides internal messages in production), and the one
 	// thing they need is WHY — the device was asleep, the subreddit refused the post. So the reason
 	// travels, and the card comes back with the judgment untaken.
-	const entityIds = owner ? relation(properties[owner.config.entity]) : [];
+	// `config.entity` is optional now: an agent that mints no Decision binds to no pipeline row (geo —
+	// it only observes). Such an agent can never own a Decision, so this is unreachable for it; the
+	// guard is what says so in the types rather than indexing `properties` with undefined.
+	const entityIds = owner?.config.entity ? relation(properties[owner.config.entity]) : [];
 	const entity = owner?.spec.act && entityIds.length ? await entityOf(entityIds[0]) : undefined;
 	const done = entity
 		? await owner!.spec.act!(committedOutput as Record<string, unknown>, entity.fields).catch(

@@ -403,6 +403,15 @@ export const createDecider = (deps: DeciderDeps) => {
 		publicId: string | Subject,
 		{ dependsOn }: { dependsOn?: string[] } = {}
 	) => {
+		// A Decision binds to the pipeline entity it advances, so an agent that declares no `entity`
+		// cannot make one. Loud here rather than writing a Decision related to nothing: `entity` is
+		// optional because a purely observational agent has no pipeline at all, and the moment such an
+		// agent reaches `decide` the config and the call disagree about what kind of agent it is.
+		if (!config.entity)
+			throw new Error(
+				`this agent declares no \`entity\`, so it has no pipeline row to bind a Decision to — ` +
+					`use \`judge\` for a verdict with no human gate, or declare \`entity\` in its config.ts.`
+			);
 		const ctx = await judgmentContext(key, publicId);
 		const { output, statements } = await runJudgment(ctx, config.model);
 

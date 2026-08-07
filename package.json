@@ -5,7 +5,8 @@
 	"type": "module",
 	"bin": {
 		"sflock": "./dist/src/cli.js",
-		"rdt": "./dist/agents/reddit-engage/cli.js"
+		"rdt": "./dist/agents/reddit-engage/cli.js",
+		"geo": "./dist/agents/geo/cli.js"
 	},
 	"engines": {
 		"node": "24.x"

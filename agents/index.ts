@@ -23,6 +23,8 @@ import type { AgentConfig, PromptSpec } from "../src/stores/index.js";
 import type { Quote } from "../src/anchor.js";
 import redditEngage from "./reddit-engage/config.js";
 import * as redditEngageEvidence from "./reddit-engage/evidence.js";
+import geo from "./geo/config.js";
+import * as geoEvidence from "./geo/evidence.js";
 
 export interface Agent {
 	id: string; // the agents/<id>/ folder — where this agent's prompt files live
@@ -40,7 +42,11 @@ const agent = (id: string, config: AgentConfig, ev: Omit<Agent, "config" | "id">
 
 // id (the agents/<id>/ folder) → the agent. The CLI resolves --agent here; the app never uses ids.
 export const AGENTS: Record<string, Agent> = {
-	"reddit-engage": agent("reddit-engage", redditEngage, redditEngageEvidence)
+	"reddit-engage": agent("reddit-engage", redditEngage, redditEngageEvidence),
+	// Declares no prompts, so it contributes no kind below and never reaches the review app — it is
+	// registered for the one thing every agent needs: `sflock pull --agent geo`, which compiles its
+	// tables' live contracts into agents/geo/schema/.
+	geo: agent("geo", geo, geoEvidence)
 };
 
 // kind (Prompt Name) → the one agent that declares it, plus the spec itself. Two agents declaring
