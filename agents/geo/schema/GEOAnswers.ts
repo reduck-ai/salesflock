@@ -14,10 +14,5 @@ export interface GEOAnswers {
    */
   Prompt?: string[];
   Provider?: "claude";
-  /**
-   * relation → GEOQueries
-   */
-  Queries?: string[];
-  Sources?: string;
   "Stop reason"?: string;
 }

@@ -7,6 +7,12 @@
     "URL"
   ],
   "properties": {
+    "Conversation": {
+      "type": "string",
+      "x-store": {
+        "type": "rich_text"
+      }
+    },
     "Error": {
       "type": "string",
       "x-store": {
@@ -25,18 +31,6 @@
       "format": "uri",
       "x-store": {
         "type": "url"
-      }
-    },
-    "Query": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      },
-      "description": "relation → GEOQueries",
-      "x-store": {
-        "type": "relation",
-        "target": "GEOQueries",
-        "dual": "Results"
       }
     },
     "Status": {

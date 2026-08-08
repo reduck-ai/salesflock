@@ -59,24 +59,6 @@
         "type": "select"
       }
     },
-    "Queries": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      },
-      "description": "relation → GEOQueries",
-      "x-store": {
-        "type": "relation",
-        "target": "GEOQueries",
-        "dual": "Answers"
-      }
-    },
-    "Sources": {
-      "type": "string",
-      "x-store": {
-        "type": "rich_text"
-      }
-    },
     "Stop reason": {
       "type": "string",
       "x-store": {

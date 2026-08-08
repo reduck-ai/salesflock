@@ -1,22 +1,22 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "GEO Queries",
+  "title": "GEO Searches",
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "Key"
+    "Name"
   ],
   "properties": {
-    "Answers": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      },
-      "description": "relation → GEOAnswers",
+    "Conversation": {
+      "type": "string",
       "x-store": {
-        "type": "relation",
-        "target": "GEOAnswers",
-        "dual": "Queries"
+        "type": "rich_text"
+      }
+    },
+    "Egress": {
+      "type": "string",
+      "x-store": {
+        "type": "rich_text"
       }
     },
     "Engine": {
@@ -37,25 +37,13 @@
     "Key": {
       "type": "string",
       "x-store": {
-        "type": "title"
-      }
-    },
-    "Query": {
-      "type": "string",
-      "x-store": {
         "type": "rich_text"
       }
     },
-    "Results": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      },
-      "description": "relation → GEOResults",
+    "Name": {
+      "type": "string",
       "x-store": {
-        "type": "relation",
-        "target": "GEOResults",
-        "dual": "Query"
+        "type": "title"
       }
     },
     "Searched at": {
