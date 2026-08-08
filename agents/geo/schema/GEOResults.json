@@ -19,6 +19,13 @@
         "dual": "Read"
       }
     },
+    "Canonical": {
+      "type": "string",
+      "format": "uri",
+      "x-store": {
+        "type": "url"
+      }
+    },
     "Error": {
       "type": "string",
       "x-store": {
@@ -37,6 +44,30 @@
       "format": "uri",
       "x-store": {
         "type": "url"
+      }
+    },
+    "H2": {
+      "type": "number",
+      "x-store": {
+        "type": "number"
+      }
+    },
+    "H3": {
+      "type": "number",
+      "x-store": {
+        "type": "number"
+      }
+    },
+    "Published": {
+      "type": "string",
+      "x-store": {
+        "type": "rich_text"
+      }
+    },
+    "Schema types": {
+      "type": "string",
+      "x-store": {
+        "type": "rich_text"
       }
     },
     "Search": {

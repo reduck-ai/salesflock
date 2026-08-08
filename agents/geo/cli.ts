@@ -117,7 +117,7 @@ withLimit(
 
 const results = program
 	.command("results")
-	.description("One row per LOOK — one page fetched at one instant, its visible text in the body. Default reads show the newest look per page; --history shows them all (content drift). Rank is a fact about a (query, page) pair — name the query to see it.");
+	.description("One row per LOOK — one page fetched at one instant, its visible text in the body, plus the markup facts frozen at fetch time (canonical, the publisher's claimed date, schema.org types, heading counts — each labeled for whose claim it is). Default reads show the newest look per page; --history shows them all (content drift). Rank is a fact about a (query, page) pair — name the query to see it.");
 
 withLimit(
 	results

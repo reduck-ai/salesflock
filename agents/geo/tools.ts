@@ -140,6 +140,13 @@ const look = async (url: string, answer?: string) => {
 	const t0 = Date.now();
 	const got = await http.get(u);
 	const httpMs = Date.now() - t0;
+	// The markup facts, extracted HERE because this is the last instant the markup exists — the body
+	// keeps only the visible text (the 10–30× byte trade below). The ONE exception to derive-at-read,
+	// and deliberately so: an improved extractor applies only forward, because there is nothing left
+	// to re-derive from. Each column labels whose claim it stores (the schema descriptions); H2/H3
+	// are written even at 0 (a page with no headings is a fact), and nothing is written for a fetch
+	// that never got bytes — on those rows "no facts" means "never read", not "declared nothing".
+	const facts = got.html ? http.factsOf(got.html) : null;
 	const ref = await store.create(T.GEOResults, {
 		URL: u,
 		Status: got.status,
@@ -147,7 +154,16 @@ const look = async (url: string, answer?: string) => {
 		"Final URL": got.finalUrl,
 		"Fetched at": new Date().toISOString(),
 		...(got.error ? { Error: got.error } : {}),
-		...(answer ? { Answer: [answer] } : {})
+		...(answer ? { Answer: [answer] } : {}),
+		...(facts
+			? {
+					H2: facts.h2,
+					H3: facts.h3,
+					...(facts.canonical ? { Canonical: facts.canonical } : {}),
+					...(facts.published ? { Published: facts.published } : {}),
+					...(facts.schemaTypes.length ? { "Schema types": facts.schemaTypes.join(", ") } : {})
+				}
+			: {})
 	} satisfies GEOResults);
 	// The body is the page's visible TEXT, not its markup: the prose is what a search engine indexes,
 	// what an LLM reads, and what "what do the winners publish" means — while the markup around it is
@@ -427,7 +443,14 @@ export const lookView = (r: Row) => {
 		textLength: len,
 		// Status 0 ⇒ unknown, not false: a timeout or DNS blip is a fact about our attempt, not about
 		// whether a crawler can read the page. The two negatives must not fuse.
-		readable: status === 0 ? null : status >= 200 && status < 300 && len >= MIN_TEXT
+		readable: status === 0 ? null : status >= 200 && status < 300 && len >= MIN_TEXT,
+		// The markup facts frozen at look time — each one labeled by the schema for whose claim it is.
+		// null on a look that predates them or never got bytes.
+		canonical: r.fields.Canonical ?? null,
+		published: r.fields.Published ?? null,
+		schemaTypes: r.fields["Schema types"] ?? null,
+		h2: r.fields.H2 ?? null,
+		h3: r.fields.H3 ?? null
 	};
 };
 

@@ -5,12 +5,17 @@ export interface GEOResults {
    * relation → GEOAnswers
    */
   Answer?: string[];
+  Canonical?: string;
   Error?: string;
   /**
    * ISO 8601 date or date-time
    */
   "Fetched at"?: string;
   "Final URL"?: string;
+  H2?: number;
+  H3?: number;
+  Published?: string;
+  "Schema types"?: string;
   /**
    * relation → GEOSearches
    */

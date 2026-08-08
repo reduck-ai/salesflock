@@ -107,6 +107,64 @@ export const textOf = (html: string): string =>
 		.replace(/\s+/g, " ")
 		.trim();
 
+// factsOf(html) — the handful of MARKUP facts worth keeping when the markup itself is thrown away.
+// textOf's counterpart: that reduces the page to its visible words, this to what an INDEXER reads
+// off the structure — and both exist because the html is 10–30× the text and is not stored. Each
+// fact's provenance differs, and the consumer must label it (geo's schema does):
+//   canonical     the page's own <link rel=canonical>, VERBATIM (relative stays relative — it is a
+//                 declaration, not a location). A real gate: Brave's open-source discovery client
+//                 treats a same-domain canonical as a publicness signal and subjects canonical-less
+//                 pages to its strictest privacy checks (web-discovery-project.es).
+//   published     the PUBLISHER's claim — JSON-LD datePublished, else og:article:published_time —
+//                 verbatim, junk included: parsing it into a date would launder an assertion into a
+//                 fact. An index's own age chip is a different observer's claim about the same page.
+//   schemaTypes   deduped JSON-LD @type list, parsed (JSON.parse per block, @graph walked) rather
+//                 than regexed — a self-assertion invisible to readers.
+//   h2/h3         heading counts in the served markup — the one fact here a reader actually sees.
+export interface PageFacts {
+	canonical: string | null;
+	published: string | null;
+	schemaTypes: string[];
+	h2: number;
+	h3: number;
+}
+
+export const factsOf = (html: string): PageFacts => {
+	const canonical =
+		html.match(/<link[^>]+rel=["']canonical["'][^>]*href=["']([^"']+)["']/i)?.[1] ??
+		html.match(/<link[^>]+href=["']([^"']+)["'][^>]*rel=["']canonical["']/i)?.[1] ??
+		null;
+	const types = new Set<string>();
+	let published: string | null = null;
+	const walk = (node: unknown): void => {
+		if (Array.isArray(node)) return node.forEach(walk);
+		if (!node || typeof node !== "object") return;
+		const o = node as Record<string, unknown>;
+		for (const t of Array.isArray(o["@type"]) ? o["@type"] : o["@type"] ? [o["@type"]] : [])
+			if (typeof t === "string") types.add(t);
+		if (!published && typeof o.datePublished === "string") published = o.datePublished;
+		if (o["@graph"]) walk(o["@graph"]);
+	};
+	for (const m of html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
+		try {
+			walk(JSON.parse(m[1]));
+		} catch {
+			// a malformed block is the page's own problem; the other blocks still count
+		}
+	}
+	published ??=
+		html.match(/<meta[^>]+property=["']article:published_time["'][^>]*content=["']([^"']+)["']/i)?.[1] ??
+		html.match(/<meta[^>]+content=["']([^"']+)["'][^>]*property=["']article:published_time["']/i)?.[1] ??
+		null;
+	return {
+		canonical,
+		published,
+		schemaTypes: [...types],
+		h2: (html.match(/<h2[\s>]/gi) ?? []).length,
+		h3: (html.match(/<h3[\s>]/gi) ?? []).length
+	};
+};
+
 // get(url) — fetch one page and reduce it to what a crawler would see. Gated, timed out, and never
 // throwing on the site's behalf.
 export const get = async (url: string): Promise<Fetched> =>
