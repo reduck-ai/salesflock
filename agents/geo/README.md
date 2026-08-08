@@ -11,8 +11,10 @@ prompt and calls no LLM, so `sflock decisions`/`learn`/`eval` and the review app
 `ask [prompts…]`: one new draw per prompt (an ask is a draw, not a measurement — run again for
 another) → the answer, the queries it actually searched, and every source it read fetched now.
 `search [queries…]`: a fresh SERP per query on the index that assistant's web tool reads
-(Brave, for Claude) — the SERP lands whole in the query's own body, replacing the last one,
-and every ranked page is fetched now. Name what you want, or name nothing and the lever takes
+(Brave, for Claude — calibrated once: 33 of the 36 pages Claude read across five draws were in
+Brave's top-20 for the query Claude itself issued, so Brave's ranking decides what Claude
+reads) — the SERP lands whole in the query's own body, replacing the last one, and every
+ranked page is fetched now. Name what you want, or name nothing and the lever takes
 its whole table. That is all the control there is: no `--dry-run` (a run's cost is exactly the
 list you gave it), no retry queue (a failed fetch records its reason on the row and the next
 run that observes the page fetches it again), no third stage. Then the diagnosis, derived at
@@ -32,7 +34,6 @@ From `salesflock/`, after `npm run build`:
     node dist/agents/geo/cli.js prompts add "Which tools let AI agents automate websites?"
     node dist/agents/geo/cli.js ask            # one draw per prompt (or name the prompts)
     node dist/agents/geo/cli.js search         # fresh SERP per query (or name the queries)
-    node dist/agents/geo/cli.js chain          # THE measurement: read ∩ ranked, per draw
 
 `geo --help` lists the four nouns (prompts, answers, queries, results) and the stages; every
 command prints JSON on stdout.

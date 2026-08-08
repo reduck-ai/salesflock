@@ -767,63 +767,6 @@ export const tools = {
 		}
 	},
 
-	// chain — THE measurement, and the reason the stages exist. An answer can only cite what its
-	// tools retrieved, so the question that decides whether any of this is worth doing is: of the
-	// pages the assistant actually READ, how many did the engine RANK for the query the assistant
-	// itself issued?
-	//
-	// Both halves are already observations — the answer's source list, and its queries' SERP bodies —
-	// so this is pure derivation: reads of small tables plus one body per query in scope. No browser,
-	// no write. A source read at rank 11 counts exactly as much as one at rank 1: the assistant reads
-	// down the page, so PRESENCE in the ranked set is the fact, and the rank beside it is how comfortably.
-	chain: async (o: AnswerSelect = {}) => {
-		const [answers, prompts, queries] = await Promise.all([
-			queryAll(store, T.GEOAnswers, ALL_ANSWERS),
-			queryAll(store, T.GEOPrompts, promptFilter({ prompt: o.prompt })),
-			queryAll(store, T.GEOQueries, ALL_QUERIES)
-		]);
-		const wanted = new Set(prompts.map((p) => p.id));
-		const promptText = new Map(prompts.map((p) => [p.id, String(p.fields.Prompt ?? "")]));
-		const qKey = keyById(queries);
-		const mine = answers.filter((a) => (a.rel.Prompt ?? []).some((id) => wanted.has(id)));
-
-		// The SERPs of every query those draws issued — one body read per distinct query.
-		const queryIds = [...new Set(mine.flatMap((a) => a.rel.Queries ?? []))];
-		const serpById = new Map(
-			await mapLimit(queryIds, async (id) => [id, rankedOf(await serpOf(id))] as const)
-		);
-
-		const views = mine.map((a) => {
-			const ids = a.rel.Queries ?? [];
-			const sources = canonSources(lines(a.fields.Sources));
-			const at = sources.map((u) => {
-				const ranks = ids.map((id) => serpById.get(id)?.get(u)?.rank).filter((r): r is number => r !== undefined);
-				return { url: u, rank: ranks.length ? Math.min(...ranks) : null };
-			});
-			return {
-				prompt: promptText.get((a.rel.Prompt ?? [])[0]) ?? null,
-				askedAt: String(a.fields["Asked at"] ?? ""),
-				verdict: verdictOf(drawOf(a)),
-				queries: ids.map(qKey),
-				read: sources.length,
-				ranked: at.filter((x) => x.rank !== null).length,
-				ranks: at.filter((x) => x.rank !== null).map((x) => x.rank),
-				// The ones it read that we never saw ranked: either the query was never searched, or the
-				// assistant reached them some other way. Both are worth seeing rather than averaging away.
-				unranked: at.filter((x) => x.rank === null).map((x) => x.url)
-			};
-		});
-		const scored = views.filter((v) => v.read > 0);
-		return {
-			overall: {
-				draws: scored.length,
-				read: scored.reduce((s, v) => s + v.read, 0),
-				ranked: scored.reduce((s, v) => s + v.ranked, 0)
-			},
-			draws: newest(views, (v) => v.askedAt, o.limit)
-		};
-	},
-
 	// THE FIRST LEVER. Ask the prompts you name — or every prompt in the table — one new draw each.
 	// No counting, no threshold: running it IS the decision to measure, and its cost is exactly the
 	// list it prints as it goes. Want another draw? Run it again.

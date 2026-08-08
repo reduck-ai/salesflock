@@ -166,14 +166,6 @@ withLimit(
 	out(await tools.domains({ ...f, limit: num(f.limit) }))
 );
 
-// chain — the measurement the two levers exist to make.
-withLimit(
-	program
-		.command("chain")
-		.description("Of the pages an assistant actually READ, how many did the engine RANK for the query the assistant itself issued — per draw, with the ranks. An answer can only cite what its tools retrieved, so this number is what says whether ranking on that index is worth anything. Pure derivation: no browser, no write.")
-		.option("--prompt <texts...>", "only draws of these questions")
-).action(async (f: { prompt?: string[]; limit?: string }) => out(await tools.chain({ ...f, limit: num(f.limit) })));
-
 // ─── the two levers ──────────────────────────────────────────────────────────────────────────────
 //
 // No flags that decide FOR you, no dry-run, no third stage. A lever acts on what you name — or on
