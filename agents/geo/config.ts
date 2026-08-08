@@ -109,22 +109,24 @@ const DEVICES = {
 //            them. Brave's limiter is keyed on it.
 //   uptime   a paired browser has to be awake. The cloud target needed nothing of ours to exist.
 //
-// FALSE, and it stays false unless the cloud itself is unavailable. What looked like a cloud outage
-// was the RESIDENTIAL PROXY's quota, and dropping `country` is what fixed it — the datacenter path
-// was working the whole time.
+// TRUE — the operator's call, and what changed to make it viable is the SCRIPT, not Brave: the
+// search script now answers Brave's challenge itself (it is a one-click proof-of-work captcha, and
+// v8 clicks Verify and re-settles, ~3s), so a rate-limited local run heals in-page instead of
+// failing the query AND leaving your own browsing walled. The costs above still stand — locale
+// comparability most of all (the Egress column is what keeps mixed rows tellable-apart) — and the
+// pacing discipline still applies: searchAndRecord runs a device target one query at a time,
+// because six in one burst once earned this machine an HTTP 429 that hit ordinary browsing too.
 //
-// The reason to keep this switch at all is that local search does work: 20 results in 5.5s, and a
-// two-query batch on one device in 2.6s. The reason not to USE it is what happened next — six
-// searches in one burst came back rejected, and a plain curl to search.brave.com then answered
-// HTTP 429 with a captcha page. That block is the MACHINE's, not the automation's: it hit an
-// ordinary browser on the same address. Turning this on borrows against your own ability to use the
-// web, so if you must, pace it — one query at a time, and heed the script's 30–60s backoff.
+// What flipping this BACK buys, when wanted: cloud egress from a fixed region (us-east-1), rows
+// comparable across operators, nothing borrowed from the machine's own IP. What looked like a
+// cloud outage once was the RESIDENTIAL PROXY's quota, never the datacenter path — and the one
+// real cloud captcha since is exactly the case v8 now clears.
 //
 // Also measured, and it is the reason this is a switch rather than a fork: the two egresses see
 // substantially the same Brave. On two queries, 15/20 and 18/20 of the results matched, mean rank
 // shift 1.7 and 1.9, same top five in a different order. Local costs comparability at the margins,
 // not the measurement.
-export const LOCAL_SEARCH = false;
+export const LOCAL_SEARCH = true;
 
 export const TARGETS = {
 	ask: { target: { deviceId: DEVICES.pro } },
