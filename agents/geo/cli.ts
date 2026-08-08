@@ -13,7 +13,7 @@
 //   queries   one (engine, query). Its body holds the latest search WHOLE — the SERP as the script
 //             returned it — so rank, title, snippet and age are read out of it, never stored
 //   results   one PAGE, keyed on its canonical URL however we came to look at it. Its body holds the
-//             raw HTML as served — which is where a 403 tells you it was a bot wall — and mentions
+//             visible text — the prose the winner published — and mentions
 //             are counted off it under today's BRAND, so widening an alias re-counts the corpus
 //
 // No status logic and no retry queue: a failed page fetch records its reason on the row and the
@@ -122,7 +122,7 @@ withLimit(
 
 const results = program
 	.command("results")
-	.description("One row per PAGE (canonical URL): what a plain HTTP client saw at it, its raw HTML in the row's body. Rank is a fact about a (query, page) pair — name the query to see it.");
+	.description("One row per PAGE (canonical URL): what a plain HTTP client saw at it, its visible text in the row's body. Rank is a fact about a (query, page) pair — name the query to see it.");
 
 withLimit(
 	results
@@ -151,7 +151,7 @@ withLimit(
 results
 	.command("show")
 	.argument("<url>", "the page, in any shape (canonicalized)")
-	.description("One page in full: its row, its mention count under today's BRAND, and the raw HTML as served — which is what a status alone cannot tell you: a 403 that is a Cloudflare wall, a 404 on a page still ranking, a 200 whose content only exists in a browser.")
+	.description("One page in full: its row, its mention count under today's BRAND, and the page's visible text — what the winner actually published. A 403 with a few hundred chars of challenge text is a bot wall; a 200 with almost no text is a page whose content only exists in a browser.")
 	.action(async (url: string) => out(await tools.results.show(url)));
 
 // domains — the dimension that separated the winners once on-page features stopped predicting rank.

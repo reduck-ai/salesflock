@@ -17,7 +17,7 @@
 //   a Query's body    the latest search, whole: `{searchedAt, egress, search}` where `search` is the
 //                     script's own output. Rank IS the index — so rank, title, snippet and age are
 //                     read out of the SERP, never stored as columns that could outlive it.
-//   a Result's body   the page as served (raw HTML). A Result row is ONE PAGE — keyed on the
+//   a Result's body   the page's visible TEXT — what the winner published. A Result row is ONE PAGE — keyed on the
 //                     canonical URL, however we came to look at it — so a page three queries rank
 //                     and two draws read is one row, one fetch, one body. Mentions are counted off
 //                     this body under today's BRAND, which is why no count is stored and no stamp
@@ -144,7 +144,9 @@ const rankedOf = (env: SerpEnvelope | null): Map<string, { rank: number; title: 
 
 // How many times the page names us — counted off the STORED body, under today's BRAND, at the
 // moment somebody asks. The whole reason no `Mentions` column (and no stamp over it) exists.
-const mentionsOf = (html: string): number => http.count(http.textOf(html), BRAND.aliases);
+// `textOf` first: new bodies are already plain text and pass through it unchanged, but rows
+// fetched before the text-only change hold raw HTML, and counting words inside markup would lie.
+const mentionsOf = (body: string): number => http.count(http.textOf(body), BRAND.aliases);
 
 // ─── the derivations: everything the tables deliberately do not store ────────────────────────────
 
@@ -407,12 +409,21 @@ const resultFilter = (o: ResultSelect, queryIds: string[]): object => ({
 // lands and stamps. Nothing schedules a retry: the next run that observes this page fetches it again.
 export const readPage = async (id: string, url: string) => {
 	if (!url) throw new Error(`result ${id} has no URL`);
+	const t0 = Date.now();
 	const got = await http.get(url);
+	const httpMs = Date.now() - t0;
 	if (!got.status) {
 		await store.patch(T.GEOResults, id, { Error: got.error ?? "no response" });
+		log("read", `${url} → ${got.error ?? "no response"} (http ${(httpMs / 1000).toFixed(1)}s)`);
 		return { url, status: 0, error: got.error ?? "no response" };
 	}
-	await store.setBody(id, got.html, "html");
+	// The body is the page's visible TEXT, not its markup: the prose is what a search engine indexes,
+	// what an LLM reads, and what "what do the winners publish" means — while the markup around it is
+	// 10–30× the bytes (measured: 987 KB of HTML around 29 KB of text) and every byte is paid for
+	// again at Notion's ~2.5 rps on the way in. Nothing needed for diagnosis is lost: a bot wall is
+	// still `Status: 403` + a few hundred chars reading "Just a moment", and a client-rendered shell
+	// is still a 200 with almost no text.
+	await store.setBody(id, got.text, "plain text");
 	await store.patch(T.GEOResults, id, {
 		Status: got.status,
 		"Text length": got.text.length,
@@ -421,12 +432,18 @@ export const readPage = async (id: string, url: string) => {
 		Error: "",
 		"Fetched at": new Date().toISOString()
 	});
+	// One line per page, cost split by seam — because "why is this slow" has two different answers
+	// (the site, or our store's clock) and a single elapsed cannot say which.
+	log(
+		"read",
+		`${url.replace(/^https:\/\//, "")} → ${got.status} · ${Math.round(got.text.length / 1000)}k chars · ` +
+			`http ${(httpMs / 1000).toFixed(1)}s · store ${((Date.now() - t0 - httpMs) / 1000).toFixed(1)}s`
+	);
 	return {
 		url,
 		status: got.status,
 		textLength: got.text.length,
-		htmlLength: got.html.length,
-		mentions: mentionsOf(got.html),
+		mentions: mentionsOf(got.text),
 		...(got.finalUrl !== url ? { finalUrl: got.finalUrl } : {})
 	};
 };
@@ -748,9 +765,9 @@ export const tools = {
 		},
 
 		// show — one page in full: its row, its mention count under today's BRAND, and the stored BODY
-		// — what we actually captured, as served. The reason the body is worth storing at all: a status
-		// says a crawler was refused, the markup says whether it was a bot wall, a soft 404 or an empty
-		// JavaScript shell.
+		// — the page's visible text, i.e. what the winner actually published. A refused page still
+		// tells its story: `Status: 403` with a few hundred chars of challenge text is a bot wall, a
+		// 200 with almost no text is a client-rendered shell.
 		show: async (url: string) => {
 			const [rows, queries] = await Promise.all([
 				queryAll(store, T.GEOResults, { and: [{ property: "URL", title: { equals: canonicalUrl(url) } }] }),
@@ -758,11 +775,11 @@ export const tools = {
 			]);
 			const row = rows[0];
 			if (!row) throw new Error(`no page ${canonicalUrl(url)} — nothing has looked at it`);
-			const html = row.fields["Fetched at"] ? unfence(await store.body(row.id)) : null;
+			const text = row.fields["Fetched at"] ? unfence(await store.body(row.id)) : null;
 			return {
 				...resultView(row, keyById(queries)),
-				mentions: html ? mentionsOf(html) : null,
-				html
+				mentions: text ? mentionsOf(text) : null,
+				text
 			};
 		}
 	},

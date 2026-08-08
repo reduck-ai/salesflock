@@ -22,7 +22,7 @@ read time from the data: **No search / Not retrieved / Passed over / Cited** —
 four different fixes.
 
 The one rule the tables obey: columns are keys and relations; the **raw observation lives in
-the row's body** (a query's SERP as JSON, a page as the HTML served); everything else — rank,
+the row's body** (a query's SERP as JSON, a page as its visible text); everything else — rank,
 mentions, readable, ours — is derived at read time, so improving a definition reclassifies the
 whole corpus with nothing stored to go stale. A Result row is ONE PAGE, converged on its
 canonical URL, however many queries rank it and draws read it.

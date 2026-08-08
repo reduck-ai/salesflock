@@ -82,6 +82,15 @@ export interface Meter {
 	work: number; // ms actually spent in flight to Notion
 	queued: number; // ms parked waiting for the pacer's clock (and for any 429 hold)
 }
+// The backend heartbeat, at the REQUEST clock — every paced request counts, body writes and queries
+// included, which the per-row version could not see (setBody is requests without rows, and a run
+// smaller than the row threshold printed nothing at all). One line every HEARTBEAT_REQS answers "is
+// it stuck" (the counter advances) and "why is it slow" (the rps IS the clock, the queue is the
+// fan-out's cost) for every caller at once.
+const HEARTBEAT_REQS = 50;
+let reqs = 0;
+let reqQueued = 0;
+
 const api = async <T>(
 	path: string,
 	init?: { method?: string; body?: object },
@@ -110,6 +119,10 @@ const api = async <T>(
 			meter.queued += started - asked;
 			meter.work += Date.now() - started;
 		}
+		reqs++;
+		reqQueued += started - asked;
+		if (reqs % HEARTBEAT_REQS === 0)
+			log("notion", `${reqs} requests · ${slot.rps().toFixed(1)} rps · avg queue ${Math.round(reqQueued / reqs)}ms`);
 		if (res.ok) return (await res.json()) as T;
 		const text = await res.text();
 		if (res.status !== 429 && res.status !== 529)
@@ -453,12 +466,8 @@ const propertiesOf = (
 const ms = (n: number): string => (n < 1000 ? `${n}ms` : `${(n / 1000).toFixed(1)}s`);
 
 // A row this heavy in NOTION's own time is worth naming; queue time is not its fault and is reported
-// in aggregate below. One heartbeat per this many rows — enough that a paced backlog moves visibly,
-// few enough that the counter beside it stays readable.
+// by the request heartbeat above.
 const SLOW_WORK_MS = 3000;
-const HEARTBEAT_ROWS = 25;
-let rows = 0;
-let queuedTotal = 0;
 
 // traced(op, label, write) — the write seam's emission, and it SPEAKS IN AGGREGATE, because a paced
 // backend makes per-row narration actively misleading. It used to print a start line before each
@@ -470,24 +479,15 @@ let queuedTotal = 0;
 // dones, 7 progress lines, and the fact that explained the wait — `queued 244.2s` — printed once per
 // row where nobody could see it.)
 //
-// So the routine channel is a heartbeat naming what the BACKEND is doing (rows landed, the rate the
-// clock has settled on, the average queue per row), which is the one thing this layer knows and the
-// caller cannot: `pace` adapts to Notion's own 429s, so the rate IS the answer to "why is this
-// slow". A row is named individually only when Notion itself was slow for it, which is the case the
-// per-row line was always for. "Is it stuck?" is answered by the counter not advancing — one line,
-// one meaning, and no line that means nothing.
+// So the routine channel is the request heartbeat above (in `api`, so body writes and queries count
+// too — the row-level version missed setBody entirely, which is the heaviest cost there is). What
+// remains here is the outlier line: a row named individually only when Notion itself was slow for
+// it. "Is it stuck?" is answered by the heartbeat counter not advancing — one line, one meaning.
 const traced = async (op: string, label: string, write: (meter: Meter) => Promise<Ref>): Promise<Ref> => {
 	const meter: Meter = { calls: 0, work: 0, queued: 0 };
 	const ref = await write(meter);
-	rows++;
-	queuedTotal += meter.queued;
 	if (meter.work > SLOW_WORK_MS)
 		log("notion", `${op} ${label} → ${ms(meter.work)} in ${meter.calls} calls — slow`);
-	if (rows % HEARTBEAT_ROWS === 0)
-		log(
-			"notion",
-			`${rows} rows written · ${slot.rps().toFixed(1)} rps · ${ms(Math.round(queuedTotal / rows))} queued per row`
-		);
 	return ref;
 };
 
