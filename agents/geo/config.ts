@@ -18,19 +18,22 @@
 //                  so the only intent row. Hand-written, converges on its text.
 //   GEO Answers    one draw. Three draws of one prompt are three rows, because the assistant answers
 //                  differently each time and that variance IS the measurement.
-//   GEO Searches   one query DONE — Claude's or ours. `Conversation` set says Claude issued it in
-//                  that draw (the ask tool cross-validated it minutes later; that SERP is the record
-//                  of its search); empty says direct. The raw SERP lives whole in the row's body.
-//   GEO Results    one LOOK — one page fetched at one instant, its visible text in the body.
-//                  `Conversation` set says the model read this page in that draw.
+//   GEO Searches   one query DONE — Claude's or ours. Its `Answer` relation names the draw that
+//                  issued it (the ask tool cross-validated it minutes later; that SERP is the record
+//                  of its search); no Answer means direct. Its `Results` relation names the looks
+//                  its SERP ranked. The raw SERP lives whole in the row's body.
+//   GEO Results    one LOOK — one page fetched at one instant, its visible text in the body. Its
+//                  `Answer` relation set says the model read this page in that draw.
 //
-// OBSERVATIONS NEVER RELATE TO OBSERVATIONS. The only relation is Prompt ↔ Answers (intent ↔ its
-// draws); everything else joins by VALUE + time — `Conversation` (the draw's own id, stamped on
-// every row the draw caused), `Key` (the normalized query, src/clients/geo `queryKey`), canonical
-// `URL`. Each row mirrors its script's raw output; the coupling logic lives in the ask TOOL, not in
-// data edges. Every observation row is CREATED COMPLETE and never touched — no patch, no re-set
-// body, no replaced relation, no retry queue: a failed look or refused search IS the observation,
-// and the next run simply mints a fresh one.
+// RELATIONS RECORD CAUSATION; VALUES RECORD IDENTITY. Every relation is written from the side whose
+// list is COMPLETE at write time — a Search points at the Answer that triggered it and the looks it
+// ranked (both exist first: looks are fetched before their Search row is created); a look points at
+// the Answer whose read pool held it — so write-once survives. Identity ACROSS time stays a value,
+// `Key` (the normalized query, src/clients/geo `queryKey`) and canonical `URL`, because a moment's
+// rows are never edited to join them; `Conversation` is a raw datum of the draw (the claude.ai
+// handle), never a join key. Every observation row is CREATED COMPLETE and never touched — no
+// patch, no re-set body, no replaced relation, no retry queue: a failed look or refused search IS
+// the observation, and the next run simply mints a fresh one.
 //
 // NO DECISIONS, NO PROMPT SPECS, NO LLM. Every verdict here is a string comparison over evidence we
 // fetched, derived at read time under today's config — rank is the SERP's order in a Search body,
