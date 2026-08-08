@@ -12,14 +12,15 @@
 // circumstances; the RAW OBSERVATION lives in the row's body; everything else is derived at read:
 //   prompts   the questions we want to win (the only thing a human writes; the only intent rows)
 //   answers   one draw. Three draws of a question are three rows — that variance IS the measurement
-//   searches  one query DONE, Claude's (`Conversation` set — the ask tool cross-validated it on the
-//             same index its web tool reads) or yours (empty). The SERP whole in the row's body, so
-//             rank, title, snippet and age are read out of it, never stored
+//   searches  one query DONE, Claude's (its `Answer` relation names the draw — the ask tool
+//             cross-validated it on the same index its web tool reads) or yours (no Answer). The
+//             SERP whole in the row's body — rank, title, snippet, age read out of it, never stored
 //   results   one LOOK — one page fetched at one instant, its visible text in the body, mentions
-//             counted off it under today's BRAND. `Conversation` set = the model read it in that draw
+//             counted off it under today's BRAND. Its `Answer` relation = the model read it in that draw
 //
-// OBSERVATIONS NEVER RELATE TO OBSERVATIONS: joins are by value + time (Conversation, Key, URL).
-// No status logic and no retry queue — re-running appends fresh observations; nothing reconciles.
+// RELATIONS RECORD CAUSATION (written from the side complete at write time); VALUES record IDENTITY
+// across time (Key, URL). No status logic and no retry queue — re-running appends fresh
+// observations; nothing reconciles.
 
 import "../../src/env.js";
 import { Command } from "commander";
@@ -100,12 +101,12 @@ withLimit(
 
 const searches = program
 	.command("searches")
-	.description("One row per query DONE — Claude's (Conversation set) or yours (empty). The SERP time series: group by key for rank drift, by egress for comparability.");
+	.description("One row per query DONE — Claude's (Answer relation set) or yours (none). The SERP time series: group by key for rank drift, by egress for comparability.");
 
 withLimit(
 	searches
 		.command("get")
-		.description("One line per search: key, whose (claude/direct), when, from where, how many results, and why it failed if it did. The SERP itself is the row's body; `results get --query` reads it out. Result counts read each listed row's body — bound the list with --limit.")
+		.description("One line per search: key, whose (claude/direct, off the Answer relation), when, from where, how many looks it ranked (the Results relation), and why it failed if it did. The SERP itself is the row's body; `results get --query` reads it out.")
 		.option("--query <q...>", "only these queries (full key, or the text alone)")
 		.option("--engine <e>", "only this index")
 ).action(async (f: { query?: string[]; engine?: string; limit?: string }) =>
@@ -127,8 +128,8 @@ withLimit(
 		.option("--ours", "only pages on our own domain")
 		.option("--mentions", "only pages that name us, counted off each stored body under today's BRAND — a body read per candidate, the one filter that costs more than a query")
 		.option("--unreadable", "only pages a crawler cannot read (blocked, or a JavaScript shell)")
-		.option("--source", "only pages a model READ (Conversation set) — the set that provably reached it")
-		.option("--ranked", "only pages some query's newest honoured SERP currently ranks")
+		.option("--source", "only pages a model READ (Answer relation set) — the set that provably reached it")
+		.option("--ranked", "only pages some Search ranked (Search relation set) — ever-ranked at fetch time; with the default newest-look-per-page view this reads as currently ranked")
 		.option("--history", "every look, not just the newest per page")
 ).action(
 	async (f: {

@@ -7,10 +7,16 @@
     "URL"
   ],
   "properties": {
-    "Conversation": {
-      "type": "string",
+    "Answer": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "relation → GEOAnswers",
       "x-store": {
-        "type": "rich_text"
+        "type": "relation",
+        "target": "GEOAnswers",
+        "dual": "Read"
       }
     },
     "Error": {
@@ -31,6 +37,18 @@
       "format": "uri",
       "x-store": {
         "type": "url"
+      }
+    },
+    "Search": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "relation → GEOSearches",
+      "x-store": {
+        "type": "relation",
+        "target": "GEOSearches",
+        "dual": "Results"
       }
     },
     "Status": {

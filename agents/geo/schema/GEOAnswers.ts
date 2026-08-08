@@ -14,5 +14,13 @@ export interface GEOAnswers {
    */
   Prompt?: string[];
   Provider?: "claude";
+  /**
+   * relation → GEOResults
+   */
+  Read?: string[];
+  /**
+   * relation → GEOSearches
+   */
+  Searches?: string[];
   "Stop reason"?: string;
 }

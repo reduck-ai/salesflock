@@ -59,6 +59,30 @@
         "type": "select"
       }
     },
+    "Read": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "relation → GEOResults",
+      "x-store": {
+        "type": "relation",
+        "target": "GEOResults",
+        "dual": "Answer"
+      }
+    },
+    "Searches": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "relation → GEOSearches",
+      "x-store": {
+        "type": "relation",
+        "target": "GEOSearches",
+        "dual": "Answer"
+      }
+    },
     "Stop reason": {
       "type": "string",
       "x-store": {

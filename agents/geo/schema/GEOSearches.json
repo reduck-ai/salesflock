@@ -7,10 +7,16 @@
     "Name"
   ],
   "properties": {
-    "Conversation": {
-      "type": "string",
+    "Answer": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "relation → GEOAnswers",
       "x-store": {
-        "type": "rich_text"
+        "type": "relation",
+        "target": "GEOAnswers",
+        "dual": "Searches"
       }
     },
     "Egress": {
@@ -44,6 +50,18 @@
       "type": "string",
       "x-store": {
         "type": "title"
+      }
+    },
+    "Results": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "relation → GEOResults",
+      "x-store": {
+        "type": "relation",
+        "target": "GEOResults",
+        "dual": "Search"
       }
     },
     "Searched at": {

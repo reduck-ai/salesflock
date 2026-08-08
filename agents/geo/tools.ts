@@ -12,19 +12,24 @@
 // grouped by Key), egress comparison (same Key, different Egress), content drift (looks grouped by
 // URL), draw variance (Answers grouped by their Prompt).
 //
-// OBSERVATIONS NEVER RELATE TO OBSERVATIONS — joins are by VALUE + time, none stored:
-//   "what did Claude search"     Searches where Conversation = the draw's
-//   "what did Claude read"       looks where Conversation = the draw's
-//   "what ranked, at the draw"   that Search row's body (minutes after Asked at)
-//   "rank of a page"             its URL's position in the body's results — rank IS the index
-//   "retrieved but skipped"      body URLs minus the read looks
-//   "which query surfaced it"    look URL ∈ which Search body (derived; a web_fetch read ⇒ none)
-//   "rank over time"             group Searches by Key      "content drift"  group looks by URL
+// RELATIONS RECORD CAUSATION; VALUES RECORD IDENTITY. A relation is written from the side whose
+// list is COMPLETE at write time, so write-once survives: a Search row points at the Answer that
+// triggered it and at the looks its SERP ranked (both exist first — looks are fetched before the
+// Search row is created); a look points at the Answer whose read pool it was in. Identity across
+// time stays a VALUE — `Key` (the normalized query) and canonical `URL` — because a moment's rows
+// are never edited to join them. `Conversation` is a raw datum of the draw (the claude.ai handle),
+// never a join key.
+//   "what did Claude search / read"   the Answer's `Searches` / `Read` duals
+//   "what ranked, at the draw"        that Search row's body (minutes after Asked at)
+//   "rank of a page"                  its URL's position in the body's results — rank IS the index
+//   "retrieved but skipped"           a Search's Results whose looks carry no Answer
+//   "rank over time"                  group Searches by Key      "content drift"  group looks by URL
 //
-// THE ONE RULE THE TABLES OBEY: columns are keys, moments and circumstances; the RAW OBSERVATION
-// lives in the row's body (a Search's SERP as the script returned it, a look's visible page text);
-// everything else — rank, mentions, verdicts, readable, currently-ranked — is DERIVED at read time
-// under today's config, so widening BRAND re-reads the whole corpus with nothing to migrate.
+// THE ONE RULE THE TABLES OBEY: columns are keys, moments, circumstances and causation; the RAW
+// OBSERVATION lives in the row's body (a Search's SERP as the script returned it, a look's visible
+// page text); everything else — rank, mentions, verdicts, readable, currently-ranked — is DERIVED
+// at read time under today's config, so widening BRAND re-reads the whole corpus with nothing to
+// migrate.
 
 import { getStore, queryAll } from "../../src/stores/index.js";
 import type { Row } from "../../src/stores/index.js";
@@ -92,25 +97,21 @@ const canonSources = (urls: readonly string[], label: string): string[] => [
 	)
 ];
 
-const lines = (v: unknown): string[] =>
-	String(v ?? "")
-		.split("\n")
-		.map((s) => s.trim())
-		.filter(Boolean);
-
 // ─── the writes: one per log, each creating a row COMPLETE — the whole write discipline ─────────
 
 const writePrompt = (prompt: string) => store.upsert(T.GEOPrompts, { Prompt: promptKey(prompt) }, "Prompt");
 
 const writeAnswer = (fields: GEOAnswers) => store.create(T.GEOAnswers, fields);
 
-// One query DONE: the row (moment + circumstances + whose), then the raw SERP into its body — once,
-// ever. A rejected run has no SERP, so no body: "no body" cleanly means "execution known, SERP
-// unobserved or refused", and the Error says which.
+// One query DONE: the row (moment + circumstances + causation), then the raw SERP into its body —
+// once, ever. `answer` is the draw that issued it (empty ⇒ direct); `results` are the looks its
+// SERP ranked, complete because they are fetched BEFORE this row is created. A rejected run has no
+// SERP, so no body and no results: "no body" cleanly means "execution known, SERP unobserved or
+// refused", and the Error says which.
 const writeSearch = async (
 	key: string,
 	searchedAt: string,
-	o: { egress: string; conversation?: string; error?: string; raw?: Search }
+	o: { egress: string; answer?: string; error?: string; raw?: Search; results?: readonly string[] }
 ) => {
 	const ref = await store.create(T.GEOSearches, {
 		Name: `${key.slice(0, 80)} — ${searchedAt.slice(0, 19).replace("T", " ")}`,
@@ -118,22 +119,23 @@ const writeSearch = async (
 		Engine: queryParts(key).engine as GEOSearches["Engine"],
 		"Searched at": searchedAt,
 		Egress: o.egress,
-		...(o.conversation ? { Conversation: o.conversation } : {}),
+		...(o.answer ? { Answer: [o.answer] } : {}),
+		...(o.results?.length ? { Results: [...o.results] } : {}),
 		...(o.error ? { Error: o.error } : {})
 	} satisfies GEOSearches);
 	if (o.raw) await store.setBody(ref.id, JSON.stringify(o.raw, null, 1), "json");
 	return ref;
 };
 
-// look(url, conversation?) — one page over plain HTTP, recorded as one row: fetch FIRST, then create
-// the row complete, then its text into the body. No browser, because a crawler has none either: a
-// page that only renders in one is a page a crawler cannot read, and that IS the finding.
-// `conversation` set means the model read this page in that draw.
+// look(url, answer?) — one page over plain HTTP, recorded as one row: fetch FIRST, then create the
+// row complete, then its text into the body. No browser, because a crawler has none either: a page
+// that only renders in one is a page a crawler cannot read, and that IS the finding. `answer` set
+// means the model read this page in that draw.
 //
 // A network-level failure (status 0) is still a complete observation — we looked, at this instant,
 // and could not reach it — but it says nothing about whether a crawler can read the page, which is
 // why `readable` derives to unknown for it rather than false.
-const look = async (url: string, conversation?: string) => {
+const look = async (url: string, answer?: string) => {
 	const u = canonicalUrl(url);
 	const t0 = Date.now();
 	const got = await http.get(u);
@@ -145,7 +147,7 @@ const look = async (url: string, conversation?: string) => {
 		"Final URL": got.finalUrl,
 		"Fetched at": new Date().toISOString(),
 		...(got.error ? { Error: got.error } : {}),
-		...(conversation ? { Conversation: conversation } : {})
+		...(answer ? { Answer: [answer] } : {})
 	} satisfies GEOResults);
 	// The body is the page's visible TEXT, not its markup: the prose is what a search engine indexes,
 	// what an LLM reads, and what "what do the winners publish" means — while the markup around it is
@@ -158,6 +160,7 @@ const look = async (url: string, conversation?: string) => {
 			`store ${((Date.now() - t0 - httpMs) / 1000).toFixed(1)}s`
 	);
 	return {
+		id: ref.id,
 		url: u,
 		status: got.status,
 		textLength: got.text.length,
@@ -168,15 +171,16 @@ const look = async (url: string, conversation?: string) => {
 
 // fetchLooks(entries, label) — one look per URL, all now, each failure caught per page (logged and
 // surfaced as data) so one dead host never takes down the run. The caller hands the deduped union of
-// everything this run observed, with `conversation` set exactly on what the model read.
-const fetchLooks = (entries: readonly { url: string; conversation?: string }[], label: string) =>
+// everything this run observed, with `answer` set exactly on what the model read. Each entry comes
+// back with its row `id`, because the Search rows created after this are about to point at them.
+const fetchLooks = (entries: readonly { url: string; answer?: string }[], label: string) =>
 	mapLimit(
 		[...entries],
-		({ url, conversation }) =>
-			look(url, conversation).catch((e: unknown) => {
+		({ url, answer }) =>
+			look(url, answer).catch((e: unknown) => {
 				const error = renderError(e);
 				log("read", `${url} → ${error}`);
-				return { url, error };
+				return { id: null, url, error };
 			}),
 		{ label }
 	);
@@ -193,72 +197,83 @@ const egressOf = (opts: RunOpts): string => {
 
 // ─── the search core, shared by both levers ──────────────────────────────────────────────────────
 
-export interface SearchOutcome {
-	key: string;
-	raw?: Search; // absent when the run was refused
-	relaxed?: boolean; // Brave dropped the operators — the SERP is not evidence about them
-	error?: string;
-}
+// The URLs one honoured SERP ranked — a relaxed SERP stays in its body as an observation but ranks
+// nothing (its hits are soft relevance over the whole web, not evidence about the operator).
+const rankedOf1 = (raw: Search | undefined, relaxed: boolean | undefined, label: string): string[] =>
+	raw && !relaxed ? canonSources(raw.results.map((r) => r.url), label) : [];
 
-// searchMany(keys, conversation?) — every query in ONE batched request (one reduck slot, one cloud
-// browser per query, separate IPs — Brave's limiter is IP-keyed), one Search row per outcome. WIDTH
-// FOLLOWS THE TARGET: all at once against the cloud; one at a time from a device (measured: six
-// concurrent searches from one machine earned an HTTP 429 and a captcha that applied to ordinary
-// browsing too).
-//
-// `operatorsApplied: false` is the one guard: Brave found too few documents matching the operator,
-// dropped it, and answered a relaxed query over the whole web. Those hits are not evidence about the
-// operator, so the caller must not fetch them as ranked — but the observation still lands in the
-// body, and the REASON on the row's Error.
-export const searchMany = async (queries: readonly string[], conversation?: string): Promise<SearchOutcome[]> => {
-	if (!queries.length) return [];
+// searchAndRecord(queries, o) — THE shared core both levers call, and the one flow order that makes
+// every relation complete at write:
+//   1. every query in ONE batched request (one reduck slot, one cloud browser per query, separate
+//      IPs — Brave's limiter is IP-keyed). WIDTH FOLLOWS THE TARGET: all at once against the cloud;
+//      one at a time from a device (measured: six concurrent searches from one machine earned an
+//      HTTP 429 and a captcha that applied to ordinary browsing too).
+//   2. ONE fetch pass over union(read pool, every honoured SERP's URLs), deduped by canonical URL —
+//      each URL fetched once, `answer` set exactly on the read pool.
+//   3. one Search row per outcome, LAST — pointing at the Answer that triggered it and at the looks
+//      its SERP ranked, both already in hand. A rejected run is a row with the Error and nothing
+//      else; three absences (never tried / refused / searched-and-empty) stay distinct.
+export const searchAndRecord = async (
+	queries: readonly string[],
+	o: { answer?: string; readUrls?: readonly string[] } = {}
+) => {
 	const keys = queries.map(keyOf);
 	const target = ENGINES.brave.target as RunOpts;
 	const egress = egressOf(target);
 	const searchedAt = new Date().toISOString();
 
 	const texts = keys.map((k) => queryParts(k).query);
-	let settled: PromiseSettledResult<Search>[];
-	if (typeof target.target === "string") settled = await searchAll(texts, target);
-	else {
-		settled = [];
-		for (const t of texts) settled.push(...(await searchAll([t], target)));
+	let settled: PromiseSettledResult<Search>[] = [];
+	if (keys.length) {
+		if (typeof target.target === "string") settled = await searchAll(texts, target);
+		else for (const t of texts) settled.push(...(await searchAll([t], target)));
 	}
 
-	return mapLimit(keys, async (key, i): Promise<SearchOutcome> => {
-		const outcome = settled[i];
-		if (outcome.status === "rejected") {
-			const error = renderError(outcome.reason);
-			await writeSearch(key, searchedAt, { egress, conversation, error }).catch((e: unknown) =>
-				log("search", `${key} → row not written: ${renderError(e)}`)
-			);
-			log("search", `${key} → ${error}`);
-			return { key, error };
-		}
-		const s = outcome.value;
-		const relaxed = !s.operatorsApplied;
-		await writeSearch(key, searchedAt, {
+	const outcomes: { key: string; raw?: Search; relaxed?: boolean; error?: string }[] = keys.map((key, i) => {
+		const s = settled[i];
+		if (s.status === "rejected") return { key, error: renderError(s.reason) };
+		return { key, raw: s.value, ...(s.value.operatorsApplied ? {} : { relaxed: true }) };
+	});
+
+	// The union fetch: what the model READ ∪ what its queries RANKED, one look per canonical URL.
+	const read = new Set(canonSources(o.readUrls ?? [], "sources"));
+	const perKey = new Map(outcomes.map((oc) => [oc.key, rankedOf1(oc.raw, oc.relaxed, oc.key.slice(0, 32))]));
+	const urls = [...new Set([...read, ...[...perKey.values()].flat()])];
+	const pages = await fetchLooks(
+		urls.map((u) => ({ url: u, ...(read.has(u) ? { answer: o.answer } : {}) })),
+		"read"
+	);
+	const idByUrl = new Map(pages.flatMap((p) => (p.id ? [[p.url, p.id] as const] : [])));
+
+	const rows = await mapLimit(outcomes, async (oc) => {
+		const results = (perKey.get(oc.key) ?? []).flatMap((u) => idByUrl.get(u) ?? []);
+		await writeSearch(oc.key, searchedAt, {
 			egress,
-			conversation,
-			raw: s,
-			...(relaxed ? { error: "Brave dropped the operators and answered a relaxed query — not evidence about them" } : {})
-		});
+			answer: o.answer,
+			raw: oc.raw,
+			results,
+			...(oc.error
+				? { error: oc.error }
+				: oc.relaxed
+					? { error: "Brave dropped the operators and answered a relaxed query — not evidence about them" }
+					: {})
+		}).catch((e: unknown) => log("search", `${oc.key} → row not written: ${renderError(e)}`));
 		log(
 			"search",
-			`${key} → ${s.results.length} results @${egress}${conversation ? " (claude)" : ""}` +
-				`${relaxed ? " (operators dropped — relaxed)" : ""}`
+			oc.error
+				? `${oc.key} → ${oc.error}`
+				: `${oc.key} → ${oc.raw!.results.length} results @${egress}${o.answer ? " (claude)" : ""}` +
+						`${oc.relaxed ? " (operators dropped — relaxed)" : ""}`
 		);
-		return { key, raw: s, ...(relaxed ? { relaxed: true } : {}) };
+		return {
+			query: oc.key,
+			...(oc.raw ? { results: oc.raw.results.length } : {}),
+			...(oc.relaxed ? { relaxed: true } : {}),
+			...(oc.error ? { error: oc.error } : {})
+		};
 	});
+	return { outcomes: rows, pages, read };
 };
-
-// The URLs a set of outcomes RANKED — honoured SERPs only: a relaxed SERP stays in its body as an
-// observation but ranks nothing.
-const rankedUrls = (outcomes: readonly SearchOutcome[]): string[] =>
-	canonSources(
-		outcomes.flatMap((o) => (o.raw && !o.relaxed ? o.raw.results.map((r) => r.url) : [])),
-		"serp"
-	);
 
 // ─── the verdicts — pure functions of what the logs hold, computed at read ──────────────────────
 
@@ -272,8 +287,8 @@ export type Verdict = "Truncated" | "No search" | "Not retrieved" | "Passed over
 
 export interface Draw {
 	stopReason: string;
-	searched: boolean; // a Search row with this draw's Conversation exists
-	readUs: boolean; // a look with this draw's Conversation on one of our pages exists
+	searched: boolean; // the draw issued at least one query (a Search row points at this Answer)
+	readUs: boolean; // the draw's read pool held one of our pages (a look points at this Answer)
 	answer: string;
 }
 
@@ -290,26 +305,19 @@ export const verdictOf = (d: Draw): Verdict => {
 // from the ladder on purpose: it is not an outcome, so it neither wins nor counts.
 const BEST: readonly Verdict[] = ["Cited", "Passed over", "Not retrieved", "No search"];
 
-// The per-draw joins, computed once per read from whole tables: which Conversations searched, and
-// which read one of our pages. Both are Sets over VALUES — no relation to follow, nothing stored.
-const searchedConvs = (searches: Row[]): Set<string> =>
-	new Set(searches.map((r) => String(r.fields.Conversation ?? "")).filter(Boolean));
-const readUsConvs = (ourLooks: Row[]): Set<string> =>
-	new Set(
-		ourLooks
-			.filter((r) => r.fields.Conversation && ours(String(r.fields.URL ?? "")))
-			.map((r) => String(r.fields.Conversation))
-	);
+// A draw's verdict off its own row plus one precomputed set: `searched` is the row's `Searches`
+// dual (free — the store hands relations back with the row), `readUs` needs the one targeted read
+// the callers share — which Answers' read pools held one of OUR pages (their looks' Answer duals).
+const readUsAnswers = (ourLooks: Row[]): Set<string> =>
+	new Set(ourLooks.filter((r) => ours(String(r.fields.URL ?? ""))).flatMap((r) => r.rel.Answer ?? []));
 
-const drawView = (a: Row, searched: Set<string>, readUs: Set<string>): Verdict => {
-	const conv = String(a.fields.Conversation ?? "");
-	return verdictOf({
+const drawView = (a: Row, readUs: Set<string>): Verdict =>
+	verdictOf({
 		stopReason: String(a.fields["Stop reason"] ?? ""),
-		searched: searched.has(conv),
-		readUs: readUs.has(conv),
+		searched: (a.rel.Searches ?? []).length > 0,
+		readUs: readUs.has(a.id),
 		answer: String(a.fields.Answer ?? "")
 	});
-};
 
 // ─── the raw observations, back out of the bodies ────────────────────────────────────────────────
 
@@ -412,8 +420,8 @@ export const lookView = (r: Row) => {
 		finalUrl: r.fields["Final URL"] ?? null,
 		// The model read this page, in that draw. Empty on a page that only ranked — which is what
 		// makes "retrieved but skipped" a visible column instead of a reconstruction.
-		read: !!r.fields.Conversation,
-		conversation: r.fields.Conversation ?? null,
+		read: (r.rel.Answer ?? []).length > 0,
+		answer: (r.rel.Answer ?? [])[0] ?? null,
 		error: r.fields.Error ?? null,
 		status,
 		textLength: len,
@@ -447,8 +455,8 @@ export interface ResultSelect {
 	ours?: boolean;
 	mentions?: boolean;
 	unreadable?: boolean;
-	source?: boolean; // only pages a model READ (Conversation set)
-	ranked?: boolean; // only pages some Key's newest honoured SERP currently ranks
+	source?: boolean; // only pages a model READ (Answer relation set)
+	ranked?: boolean; // only pages some Search ranked (Search relation set)
 	history?: boolean; // every look, not just the newest per URL
 	limit?: number;
 }
@@ -486,15 +494,17 @@ const searchFilter = (o: SearchSelect): object => ({
 	]
 });
 
-const resultFilter = (o: ResultSelect): object => ({
+const resultFilter = (o: ResultSelect, searchIds: string[] = []): object => ({
 	and: [
 		all("URL"),
 		...anyOf((o.url ?? []).map((u) => ({ property: "URL", title: { equals: canonicalUrl(u) } }))),
+		...anyOf(searchIds.map((id) => ({ property: "Search", relation: { contains: id } }))),
 		// `contains` casts a slightly wide net (any URL carrying the domain as a substring); the
 		// reader post-filters with `ours`, which is anchored on the host. The store clause is only
 		// there to keep the read small.
 		...(o.ours ? [{ property: "URL", title: { contains: BRAND.domain } }] : []),
-		...(o.source ? [{ property: "Conversation", rich_text: { is_not_empty: true } }] : [])
+		...(o.source ? [{ property: "Answer", relation: { is_not_empty: true } }] : []),
+		...(o.ranked ? [{ property: "Search", relation: { is_not_empty: true } }] : [])
 	]
 });
 
@@ -521,7 +531,6 @@ export const ask = async (prompt: string, provider: string = DEFAULT_PROVIDER) =
 
 	const askedAt = new Date().toISOString();
 	const a = await askAssistant(p, spec.target);
-	const conversation = a.conversationId;
 	const queries = a.webSearchQueries ?? [];
 	const sources = (a.sources ?? []).map((s) => s.url).filter(Boolean);
 
@@ -534,23 +543,19 @@ export const ask = async (prompt: string, provider: string = DEFAULT_PROVIDER) =
 		Provider: provider as GEOAnswers["Provider"],
 		Model: spec.model,
 		"Asked at": askedAt,
-		Conversation: conversation,
+		Conversation: a.conversationId,
 		"Stop reason": a.stopReason ?? "",
 		Answer: a.answer
 	});
 
 	// The cross-validation: every query Claude issued, run on the index its web tool reads, minutes
-	// later — those SERPs are the record of what it searched (Claude's SERP IS Brave's SERP).
-	const outcomes = await searchMany(queries.map((q) => queryKey(engine, q)), conversation);
-
-	// ONE fetch pass over everything this draw observed: what the model READ (Conversation stamped)
-	// ∪ what its queries RANKED — deduped by canonical URL, one look each.
-	const read = new Set(canonSources(sources, p.slice(0, 32)));
-	const urls = [...new Set([...read, ...rankedUrls(outcomes)])];
-	const pages = await fetchLooks(
-		urls.map((u) => ({ url: u, ...(read.has(u) ? { conversation } : {}) })),
-		`read ${p.slice(0, 32)}`
-	);
+	// later — those SERPs are the record of what it searched (Claude's SERP IS Brave's SERP) — and
+	// the union fetch of everything the draw observed, with the Answer relation set exactly on the
+	// read pool.
+	const { pages, read } = await searchAndRecord(queries.map((q) => queryKey(engine, q)), {
+		answer: ref.id,
+		readUrls: sources
+	});
 
 	const verdict = verdictOf({
 		stopReason: a.stopReason ?? "",
@@ -561,7 +566,7 @@ export const ask = async (prompt: string, provider: string = DEFAULT_PROVIDER) =
 	log(
 		"ask",
 		`${p.slice(0, 48)} @${provider} → ${verdict} (${queries.length} queries, ${read.size} read, ` +
-			`${pages.filter((r) => !("error" in r)).length}/${urls.length} looked)`
+			`${pages.filter((r) => !("error" in r)).length}/${pages.length} looked)`
 	);
 	return {
 		prompt: p,
@@ -569,7 +574,7 @@ export const ask = async (prompt: string, provider: string = DEFAULT_PROVIDER) =
 		verdict,
 		queries,
 		read: read.size,
-		pages,
+		pages: pages.map(({ id: _id, ...page }) => page),
 		answer: ref.url
 	};
 };
@@ -584,20 +589,19 @@ export const tools = {
 				return { prompt: promptKey(t), created: r.created, url: r.url };
 			}),
 
-		// The scoreboard: one line per prompt, everything derived from the three logs in four reads —
-		// answers grouped on the Prompt relation, verdicts from the Conversation joins.
+		// The scoreboard: one line per prompt, everything derived from the logs in three reads —
+		// answers grouped on the Prompt relation, `searched` off each answer's own Searches dual,
+		// `readUs` off the one targeted our-domain looks read.
 		get: async (o: PromptSelect = {}) => {
-			const [prompts, answers, searches, ourLooks] = await Promise.all([
+			const [prompts, answers, ourLooks] = await Promise.all([
 				queryAll(store, T.GEOPrompts, promptFilter(o)),
 				queryAll(store, T.GEOAnswers, ALL_ANSWERS),
-				queryAll(store, T.GEOSearches, ALL_SEARCHES),
 				queryAll(store, T.GEOResults, resultFilter({ ours: true, source: true }))
 			]);
-			const searched = searchedConvs(searches);
-			const readUs = readUsConvs(ourLooks);
+			const readUs = readUsAnswers(ourLooks);
 			const views = prompts.map((p) => {
 				const mine = answers.filter((a) => (a.rel.Prompt ?? []).includes(p.id));
-				const verdicts = mine.map((a) => drawView(a, searched, readUs));
+				const verdicts = mine.map((a) => drawView(a, readUs));
 				const measured: Verdict[] = verdicts.filter((v) => v !== "Truncated");
 				const at = mine.map((a) => String(a.fields["Asked at"] ?? "")).filter(Boolean).sort();
 				return {
@@ -615,8 +619,8 @@ export const tools = {
 	},
 
 	answers: {
-		// One line per draw: verdict, the queries it issued (Search Keys sharing its Conversation),
-		// whether it read us. The answer TEXT is `show`'s job — it is the biggest column in the schema.
+		// One line per draw: verdict, the queries it issued (the Search rows pointing at it), whether
+		// it read us. The answer TEXT is `show`'s job — it is the biggest column in the schema.
 		get: async (o: AnswerSelect = {}) => {
 			const [rows, prompts, searches, ourLooks] = await Promise.all([
 				queryAll(store, T.GEOAnswers, {
@@ -628,35 +632,29 @@ export const tools = {
 			]);
 			const wanted = new Set(prompts.map((p) => p.id));
 			const promptText = new Map(prompts.map((p) => [p.id, String(p.fields.Prompt ?? "")]));
-			const searched = searchedConvs(searches);
-			const readUs = readUsConvs(ourLooks);
-			const byConv = new Map<string, string[]>();
-			for (const s of searches) {
-				const conv = String(s.fields.Conversation ?? "");
-				if (conv) (byConv.get(conv) ?? byConv.set(conv, []).get(conv)!).push(String(s.fields.Key ?? ""));
-			}
+			const readUs = readUsAnswers(ourLooks);
+			const keyById = new Map(searches.map((s) => [s.id, String(s.fields.Key ?? "")]));
 			const views = rows
 				.filter((r) => (r.rel.Prompt ?? []).some((id) => wanted.has(id)))
-				.map((r) => {
-					const conv = String(r.fields.Conversation ?? "");
-					return {
-						prompt: promptText.get((r.rel.Prompt ?? [])[0]) ?? null,
-						provider: r.fields.Provider ?? null,
-						model: r.fields.Model ?? null,
-						askedAt: String(r.fields["Asked at"] ?? ""),
-						verdict: drawView(r, searched, readUs),
-						queries: byConv.get(conv) ?? [],
-						readUs: readUs.has(conv),
-						conversation: r.fields.Conversation ?? null
-					};
-				});
+				.map((r) => ({
+					id: r.id,
+					prompt: promptText.get((r.rel.Prompt ?? [])[0]) ?? null,
+					provider: r.fields.Provider ?? null,
+					model: r.fields.Model ?? null,
+					askedAt: String(r.fields["Asked at"] ?? ""),
+					verdict: drawView(r, readUs),
+					queries: (r.rel.Searches ?? []).map((id) => keyById.get(id) ?? "").filter(Boolean),
+					read: (r.rel.Read ?? []).length,
+					readUs: readUs.has(r.id),
+					conversation: r.fields.Conversation ?? null
+				}));
 			const kept = o.verdict ? views.filter((v) => v.verdict === o.verdict) : views;
 			return newest(kept, (v) => v.askedAt, o.limit);
 		},
 
-		// One draw in full — the answer text, its queries, and what it READ (the looks sharing its
-		// Conversation) — which is what you read when the verdict says `Passed over` and you want to
-		// know what it said instead. Newest first; defaults to 1.
+		// One draw in full — the answer text, its queries, and what it READ (the looks pointing at it)
+		// — which is what you open when the verdict says `Passed over` and you want to know what it
+		// said instead. Newest first; defaults to 1.
 		show: async (o: AnswerSelect = {}) => {
 			const [rows, prompts, searches] = await Promise.all([
 				queryAll(store, T.GEOAnswers, ALL_ANSWERS),
@@ -665,22 +663,17 @@ export const tools = {
 			]);
 			const wanted = new Set(prompts.map((p) => p.id));
 			const promptText = new Map(prompts.map((p) => [p.id, String(p.fields.Prompt ?? "")]));
-			const byConv = new Map<string, string[]>();
-			for (const s of searches) {
-				const conv = String(s.fields.Conversation ?? "");
-				if (conv) (byConv.get(conv) ?? byConv.set(conv, []).get(conv)!).push(String(s.fields.Key ?? ""));
-			}
+			const keyById = new Map(searches.map((s) => [s.id, String(s.fields.Key ?? "")]));
 			const shown = newest(
 				rows.filter((r) => (r.rel.Prompt ?? []).some((id) => wanted.has(id))),
 				(r) => String(r.fields["Asked at"] ?? ""),
 				o.limit ?? 1
 			);
 			return mapLimit(shown, async (r) => {
-				const conv = String(r.fields.Conversation ?? "");
-				// The read pool, by the value join — one targeted query per shown draw.
-				const reads = conv
-					? await queryAll(store, T.GEOResults, { and: [{ property: "Conversation", rich_text: { equals: conv } }] })
-					: [];
+				// The read pool, through the causation relation — one targeted query per shown draw.
+				const reads = await queryAll(store, T.GEOResults, {
+					and: [{ property: "Answer", relation: { contains: r.id } }]
+				});
 				const readUrls = reads.map((l) => String(l.fields.URL ?? ""));
 				return {
 					prompt: promptText.get((r.rel.Prompt ?? [])[0]) ?? null,
@@ -689,11 +682,11 @@ export const tools = {
 					stopReason: r.fields["Stop reason"] ?? null,
 					verdict: verdictOf({
 						stopReason: String(r.fields["Stop reason"] ?? ""),
-						searched: (byConv.get(conv) ?? []).length > 0,
+						searched: (r.rel.Searches ?? []).length > 0,
 						readUs: readUrls.some(ours),
 						answer: String(r.fields.Answer ?? "")
 					}),
-					queries: byConv.get(conv) ?? [],
+					queries: (r.rel.Searches ?? []).map((id) => keyById.get(id) ?? "").filter(Boolean),
 					read: readUrls,
 					answer: String(r.fields.Answer ?? "")
 				};
@@ -702,28 +695,24 @@ export const tools = {
 	},
 
 	searches: {
-		// The SERP time series: one line per query DONE — whose it was (claude/direct), from where,
-		// what it returned. Ranked counts come from each row's body, so they are read only for the
-		// rows this reading keeps (bounded by --limit).
+		// The SERP time series: one line per query DONE — whose it was (claude/direct, off the Answer
+		// relation), from where, what it ranked (the Results relation — no body read needed).
 		get: async (o: SearchSelect = {}) => {
 			const rows = newest(
 				await queryAll(store, T.GEOSearches, searchFilter(o)),
 				(r) => String(r.fields["Searched at"] ?? ""),
 				o.limit
 			);
-			return mapLimit(rows, async (r) => {
-				const serp = await serpOf(r.id);
-				return {
-					key: String(r.fields.Key ?? ""),
-					engine: r.fields.Engine ?? null,
-					searchedAt: r.fields["Searched at"] ?? null,
-					egress: r.fields.Egress ?? null,
-					trigger: r.fields.Conversation ? "claude" : "direct",
-					conversation: r.fields.Conversation ?? null,
-					results: serp ? serp.results.length : null,
-					error: r.fields.Error ?? null
-				};
-			});
+			return rows.map((r) => ({
+				key: String(r.fields.Key ?? ""),
+				engine: r.fields.Engine ?? null,
+				searchedAt: r.fields["Searched at"] ?? null,
+				egress: r.fields.Egress ?? null,
+				trigger: (r.rel.Answer ?? []).length ? "claude" : "direct",
+				answer: (r.rel.Answer ?? [])[0] ?? null,
+				results: (r.rel.Results ?? []).length,
+				error: r.fields.Error ?? null
+			}));
 		}
 	},
 
@@ -733,7 +722,10 @@ export const tools = {
 		// read out of that query's newest honoured SERP; `--mentions` counts each candidate's stored
 		// body under today's BRAND — a body read per row, the one filter that costs more than a query.
 		get: async (o: ResultSelect = {}) => {
-			const rows = await queryAll(store, T.GEOResults, resultFilter(o));
+			// `--query` compiles to the relation: the newest honoured Search per named key, its looks
+			// selected by `Search contains <id>` and decorated with rank from that SERP's body.
+			const named = o.query?.length ? [...latestByKey(await searchRowsOf(o.query)).values()] : [];
+			const rows = await queryAll(store, T.GEOResults, resultFilter(o, named.map((r) => r.id)));
 			let views = rows.map(lookView);
 			if (!o.history) {
 				const seen = new Map<string, (typeof views)[number]>();
@@ -742,23 +734,13 @@ export const tools = {
 			}
 			if (o.ours) views = views.filter((v) => v.ours);
 			if (o.unreadable) views = views.filter((v) => v.readable === false);
-
-			// The named queries' newest honoured SERPs — for the rank decoration and the membership
-			// filter. One body read per query, not per page.
-			if (o.query?.length) {
-				const latest = latestByKey(await searchRowsOf(o.query));
-				const serps = await mapLimit([...latest.values()], (r) => serpOf(r.id));
+			if (named.length) {
+				const serps = await mapLimit(named, (r) => serpOf(r.id));
 				const ranked = serps.map(rankedOf);
-				views = views.flatMap((v) => {
+				views = views.map((v) => {
 					const hit = ranked.map((m) => m.get(v.url)).find(Boolean);
-					return hit ? [{ ...v, ...hit }] : [];
+					return hit ? { ...v, ...hit } : v;
 				});
-			} else if (o.ranked) {
-				// Membership in ANY key's current SERP — every newest honoured body, read once each.
-				const latest = latestByKey(await queryAll(store, T.GEOSearches, ALL_SEARCHES));
-				const serps = await mapLimit([...latest.values()], (r) => serpOf(r.id));
-				const current = new Set(serps.flatMap((s) => [...rankedOf(s).keys()]));
-				views = views.filter((v) => current.has(v.url));
 			}
 
 			// Mentions, computed last so the bodies read are only the survivors'.
@@ -793,7 +775,7 @@ export const tools = {
 					fetchedAt: r.fields["Fetched at"] ?? null,
 					status: Number(r.fields.Status ?? 0),
 					textLength: Number(r.fields["Text length"] ?? 0),
-					read: !!r.fields.Conversation,
+					read: (r.rel.Answer ?? []).length > 0,
 					error: r.fields.Error ?? null
 				})),
 				mentions: text ? mentionsOf(text) : null,
@@ -824,18 +806,9 @@ export const tools = {
 					)
 				];
 		if (!keys.length) return [];
-		const outcomes = await searchMany(keys);
-		const pages = await fetchLooks(
-			rankedUrls(outcomes).map((url) => ({ url })),
-			"read serp"
-		);
-		return outcomes.map((o) => ({
-			query: o.key,
-			...(o.raw ? { results: o.raw.results.length } : {}),
-			...(o.relaxed ? { relaxed: true } : {}),
-			...(o.error ? { error: o.error } : {}),
-			fetched: pages.filter((p) => !("error" in p)).length
-		}));
+		const { outcomes, pages } = await searchAndRecord(keys);
+		const fetched = pages.filter((p) => !("error" in p)).length;
+		return outcomes.map((oc) => ({ ...oc, fetched }));
 	},
 
 	// domains — how much each domain in the corpus PUBLISHES, which is the dimension that separated the
