@@ -126,12 +126,13 @@ export const mapLimit = async <T, R>(
 export const batch = async <T, R>(
 	items: T[],
 	fn: (item: T) => Promise<R>,
-	label?: string
+	label?: string,
+	{ limit }: { limit?: number } = {}
 ): Promise<(R | { item: T; error: string })[]> => {
 	const results = await mapLimit(
 		items,
 		(item) => fn(item).catch((e: unknown) => ({ item, error: renderError(e) })),
-		{ label }
+		{ label, limit }
 	);
 	if (results.some((r) => r && typeof r === "object" && "error" in r)) process.exitCode = 1;
 	return results;

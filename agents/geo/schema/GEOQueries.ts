@@ -6,6 +6,7 @@ export interface GEOQueries {
    */
   Answers?: string[];
   Engine?: "brave";
+  Error?: string;
   Key: string;
   Query?: string;
   /**

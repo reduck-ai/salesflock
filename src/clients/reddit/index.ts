@@ -57,13 +57,9 @@ export const subOf = (url: string): string => threadUrl(url).split("/")[4];
 // SCRIPT's contract — and this is what makes `rdt scan --since 7d` and `rdt threads get --since 7d`
 // mean the same seven days, though only one of them is talking to the script that defines it.
 // Loud on anything else: a window silently read as "the epoch" would quietly select everything.
-export const sinceIso = (window: string): string => {
-	const m = window.match(/^(\d+)\s*([hd])$/i);
-	if (m) return new Date(Date.now() - Number(m[1]) * (m[2].toLowerCase() === "h" ? 3_600_000 : 86_400_000)).toISOString();
-	const t = Date.parse(window);
-	if (Number.isNaN(t)) throw new Error(`not a window: "${window}" — use "48h", "7d", or an ISO date`);
-	return new Date(t).toISOString();
-};
+// A time window is not this source's idea — it moved to src/time.ts the day a second agent needed
+// one. Re-exported so a reader who expects it beside the other reddit helpers still finds it.
+export { sinceIso } from "../../time.js";
 
 // A subreddit's newest threads within a window — the funnel's ONE fetch: each thread carries its
 // `body`, the post's FULL text (the script's contract), so discovery already yields the judged

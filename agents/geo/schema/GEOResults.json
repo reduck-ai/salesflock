@@ -4,7 +4,7 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "Key"
+    "Name"
   ],
   "properties": {
     "Age": {
@@ -31,6 +31,12 @@
         "type": "rich_text"
       }
     },
+    "Egress": {
+      "type": "string",
+      "x-store": {
+        "type": "rich_text"
+      }
+    },
     "Error": {
       "type": "string",
       "x-store": {
@@ -51,16 +57,23 @@
         "type": "url"
       }
     },
-    "Key": {
+    "Mentions": {
+      "type": "number",
+      "x-store": {
+        "type": "number"
+      }
+    },
+    "Name": {
       "type": "string",
       "x-store": {
         "type": "title"
       }
     },
-    "Mentions": {
-      "type": "number",
+    "Observed at": {
+      "type": "string",
+      "description": "ISO 8601 date or date-time",
       "x-store": {
-        "type": "number"
+        "type": "date"
       }
     },
     "Query": {

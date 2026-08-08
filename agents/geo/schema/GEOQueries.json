@@ -28,6 +28,12 @@
         "type": "select"
       }
     },
+    "Error": {
+      "type": "string",
+      "x-store": {
+        "type": "rich_text"
+      }
+    },
     "Key": {
       "type": "string",
       "x-store": {

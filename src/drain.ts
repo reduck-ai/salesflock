@@ -11,12 +11,19 @@ import type { Row, Store } from "./stores/index.js";
 // `label` is the CALLER's word for the work, not this file's: a drain is a shape, and "drain" on a
 // progress line says only that something is looping. The caller knows what it is doing to each row
 // ("engage"), so it names it — same convention as mapLimit's label, which is what actually prints it.
+// `opts.limit` bounds how many rows of a page are in flight at once. Absent ⇒ unbounded, which is
+// right when the backends beneath already meter themselves (each client owns its own gate). It is
+// NOT right when one page of rows means one burst against a single scarce address: a geo search on a
+// paired device sends every outstanding query from the same IP, and six at once was enough to earn
+// an HTTP 429 and a captcha from Brave — a block that then applied to ordinary browsing on that
+// machine. The caller knows whether its width is free; this is how it says so.
 export const drain = async <R>(
 	store: Store,
 	model: string,
 	filter: object,
 	run: (row: Row) => Promise<R>,
-	label = "drain"
+	label = "drain",
+	{ limit }: { limit?: number } = {}
 ): Promise<(R | { item: Row; error: string })[]> => {
 	const out: (R | { item: Row; error: string })[] = [];
 	const seen = new Set<string>();
@@ -30,6 +37,6 @@ export const drain = async <R>(
 		// is that the total is not known in advance (rows leave the filter as they are processed, and
 		// new ones can arrive while it runs), so a page is the largest honest denominator. The
 		// backlog-wide count is what `--dry-run` is for.
-		out.push(...(await batch(fresh, run, label)));
+		out.push(...(await batch(fresh, run, label, { limit })));
 	}
 };

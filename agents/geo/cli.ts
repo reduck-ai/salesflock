@@ -149,8 +149,28 @@ withLimit(
 results
 	.command("show")
 	.argument("<url>", "the page, in any shape (canonicalized)")
-	.description("One page's stored BODY — the raw HTML as served, which is what a status alone cannot tell you: a 403 that is a Cloudflare wall, a 404 on a page still ranking, a 200 whose content only exists in a browser. Every row holding that URL, since a query ranking it and an assistant reading it are two observations of one page.")
+	.description("Every observation of one page, newest first, each with the raw HTML as served at that moment — which is what a status alone cannot tell you: a 403 that is a Cloudflare wall, a 404 on a page still ranking, a 200 whose content only exists in a browser. Several rows is the normal case: each search and each draw is its own observation.")
 	.action(async (url: string) => out(await tools.results.show(url)));
+
+// domains — the dimension that separated the winners once on-page features stopped predicting rank.
+// Fetched on demand, stored nowhere: it is a fact about a domain rather than about a row we hold.
+withLimit(
+	program
+		.command("domains")
+		.description("How much each domain in the corpus PUBLISHES, from its own sitemap: total URLs and how many look like posts, beside how often it ranks for us. `null` means the sitemap could not be read (a 404, a 429) — never that the site publishes nothing.")
+		.option("--query <q...>", "only domains ranking for these queries")
+		.option("--ours", "only our own domain")
+).action(async (f: { query?: string[]; ours?: boolean; limit?: string }) =>
+	out(await tools.domains({ ...f, limit: num(f.limit) }))
+);
+
+// chain — the measurement the other three stages exist to make.
+withLimit(
+	program
+		.command("chain")
+		.description("Of the pages an assistant actually READ, how many did the engine RANK for the query the assistant itself issued — per draw, with the ranks. An answer can only cite what its tools retrieved, so this number is what says whether ranking on that index is worth anything. Pure derivation: no browser, no write.")
+		.option("--prompt <texts...>", "only draws of these questions")
+).action(async (f: { prompt?: string[]; limit?: string }) => out(await tools.chain({ ...f, limit: num(f.limit) })));
 
 // ─── the stages ──────────────────────────────────────────────────────────────────────────────────
 
@@ -177,9 +197,10 @@ withDryRun(
 withDryRun(
 	program
 		.command("search")
-		.description("Search every query that has never been searched, on its own index, all in one request. A query whose operators Brave DROPPED records zero results — those hits are a relaxed query over the whole web, not evidence about the operator.")
-).action(async (f: { dryRun?: boolean }) =>
-	out(f.dryRun ? (await tools.pending()).search : await tools.searchPending())
+		.description("Search every query that has never been searched, on its own index. Each search is a new OBSERVATION — rank, snippet and age as they stood at that instant, stamped with when and from where — so nothing a previous search recorded is ever overwritten. A query whose operators Brave DROPPED records zero results and the reason, because a relaxed query is not evidence about the operator.")
+		.option("--again <window>", `also re-search anything last searched longer ago than this ("7d", "48h") — how the store becomes a series rather than a snapshot`)
+).action(async (f: { dryRun?: boolean; again?: string }) =>
+	out(f.dryRun ? (await tools.pending(1, {}, f.again)).search : await tools.searchPending(f.again))
 );
 
 withDryRun(
@@ -195,11 +216,16 @@ withDryRun(
 	withDraws(
 		program
 			.command("advance")
-			.description("ask → search → read, one pass over everything owed. The stages are strictly ordered (a query exists once an answer issued it; a result once a query was searched), so one command is one pass.")
+			.description("ask → search → read, one pass over everything owed. The stages are strictly ordered (a query exists once an answer issued it; an observation once a query was searched), so one command is one pass.")
+			.option("--again <window>", `also re-search queries last searched longer ago than this ("7d") — the series, in one command`)
 	)
-).action(async (f: { draws: string; provider: string; prompt?: string[]; dryRun?: boolean }) => {
+).action(async (f: { draws: string; provider: string; prompt?: string[]; dryRun?: boolean; again?: string }) => {
 	const o = { prompt: f.prompt };
-	out(f.dryRun ? await tools.pending(Number(f.draws), o) : await tools.advance(Number(f.draws), f.provider, o));
+	out(
+		f.dryRun
+			? await tools.pending(Number(f.draws), o, f.again)
+			: await tools.advance(Number(f.draws), f.provider, o, f.again)
+	);
 });
 
 program.parseAsync().catch((e: unknown) => {

@@ -7,14 +7,19 @@ export interface GEOResults {
    */
   Answers?: string[];
   Brand?: string;
+  Egress?: string;
   Error?: string;
   /**
    * ISO 8601 date or date-time
    */
   "Fetched at"?: string;
   "Final URL"?: string;
-  Key: string;
   Mentions?: number;
+  Name: string;
+  /**
+   * ISO 8601 date or date-time
+   */
+  "Observed at"?: string;
   /**
    * relation → GEOQueries
    */
