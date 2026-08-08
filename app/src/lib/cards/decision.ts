@@ -102,6 +102,9 @@ export const decisionToJudgment = (d: Decision): EvidencedJudgment => {
 		output,
 		proposed,
 		outputSchema: d.outputSchema,
+		// Straight through: it is the server's reading of its own environment, and nothing here can
+		// re-derive it (the credential is not a fact the browser holds, nor should it be).
+		blocked: d.blocked,
 		// placement is code-computed, never the LLM's: the prompt names the Input field the output
 		// answers (`anchorField`), and its rendered span attaches the composer below it. Unset ⇒ the
 		// dock floats. Derived here from the frozen Input, exactly like `evidence` — never stored.

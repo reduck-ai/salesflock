@@ -48,6 +48,11 @@ export interface EvidencedJudgment {
 	// Distinct from `output` precisely because the two may differ; that difference IS an overturn.
 	proposed: Record<string, unknown>;
 	outputSchema?: Record<string, unknown>; // the Prompt's Output JSON Schema — the edit contract
+	// WHY CONFIRMING CANNOT SUCCEED HERE, in one sentence — a precondition of the deployment (this
+	// kind's Confirm performs an act and this process has no credential to run one), resolved by the
+	// server with the rest of the contract. The card renders it exactly where a schema violation
+	// renders, because a reviewer only ever needs the sentence. Absent ⇒ nothing stands in the way.
+	blocked?: string;
 	anchor?: Quote; // the evidence span the composer attaches BELOW (a writing prompt supplies it);
 	// absent ⇒ the composer floats in the dock (a verdict about the whole subject, not one span)
 	hasFeedback: boolean; // does this decision already carry a human delta (any channel, any state)

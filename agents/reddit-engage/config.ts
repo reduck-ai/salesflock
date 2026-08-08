@@ -25,14 +25,21 @@
 // inside the human's Confirm, never in a background pass.
 
 import { getStore, type AgentConfig } from "../../src/stores/index.js";
+import { models } from "../../src/models.js";
 import type { RunOpts } from "../../src/clients/reduck.js";
 import { say, threadUrl, userUrl } from "../../src/clients/reddit/index.js";
 
-// The two table ids `drop` needs beside `models`: it reads a thread to learn WHO wrote it, then
-// closes that person's outreach. Named constants, so the two declarations cannot come to mean
-// different tables.
-const BACKLOG = "ba8786a2-afd6-4b12-8416-df2a85440f58";
-const THREADS = "287eec98-859f-4a64-a50d-75da2e965488";
+// The model NAMES this agent's code addresses. The table ids behind them belong to whoever is
+// running it — a Notion id is a page in one workspace — so they live in models.local.json
+// (src/models.ts) and `sflock init` writes them after building the tables. Each name is also the
+// file name of its contract: agents/reddit-engage/schema/<name>.json, which is what `init` builds
+// the table FROM.
+//
+// A named constant rather than an inline literal because `drop` below needs two of these ids and
+// cannot reach the default export. Reading them from here keeps that path on the SAME map the
+// runtime uses — the two hand-copied uuids this replaced would have kept pointing at the author's
+// own tables however the installation was configured.
+const MODELS = models("reddit-engage", ["RedditThreads", "RedditBacklog", "Decisions"]);
 
 // The watchlist AND each community's own rules — ONE declaration: which subreddits `scan` watches,
 // keyed by canonical name (lowercase, bare), each mapped to the rules a reply posted there must obey.
@@ -105,6 +112,7 @@ export const subKey = (subreddit: string): string => subreddit.replace(/^r\//i, 
 // Our own Reddit username — the account TARGETS.write is signed in as (keep the two in step, and
 // see the note there for why nothing can check that for you). `queue` never backlogs our own threads
 // (you don't reply to yourself). Empty ⇒ the check is off until filled in.
+// Verified 2026-08-07: whoami on DEVICES.tester, which is what TARGETS.write now points at.
 export const OWNER: string = "Separate-Still3770";
 
 // WHERE each run goes, one entry per JOB rather than per browser — because the choice is not only
@@ -151,23 +159,44 @@ export const OWNER: string = "Separate-Still3770";
 // below it — `say`/`answer` are the writes, everything else reads. Passed explicitly at each call
 // site rather than registered into the client once: a module-level default would be order-dependent,
 // and losing that race means a reply posts from the wrong browser.
+// The paired browsers, named by the account each is SIGNED IN AS — which is the only thing that
+// matters about a device here, and the one thing its id cannot tell you. `sflock devices` lists the
+// ids; `reduck run --script reduck/reddit.com/whoami --device <id>` is what says WHO, and it is the
+// only honest answer. Keeping the name beside the id is the cheapest defence against the hazard this
+// file keeps warning about: a device IS an identity, and nothing checks it.
+//
+//   tester  u/Separate-Still3770 — OWNER. Verified 2026-08-07 (whoami: display_name "dhuynh95").
+//   pro     SIGNED OUT of Reddit as of 2026-08-07 — whoami came back "Please launch the local agent
+//           with active cookies or log in to Reddit before running the script." It stays here because
+//           `listing` still points at it, but see the note there: that is a live problem, not a choice.
+//
+// Re-verify after any re-pair or re-login. Nothing in the code can do it for you.
+const DEVICES = {
+	tester: "3279bc8b-6047-4048-9b4d-4659bf98ebd8",
+	pro: "c12b4b27-9a32-4bdf-b5b9-ecad926c3584"
+} as const;
+
 export const TARGETS = {
 	// Both levers, and both measured: `region` puts the session in the pool Reddit was not blocking
 	// (eu-central-1 and us-west-2 both served the block page), `country` makes the egress residential
 	// so we do not depend on that pool staying welcome. Together they read the full tree every time —
 	// 8 of 8 comments on three consecutive runs, where FR egress returned 5 of 8 on two of three.
 	thread: { target: "cloud", region: "us-east-1", country: "US" },
-	listing: { target: { deviceId: "c12b4b27-9a32-4bdf-b5b9-ecad926c3584" } },
-	write: { target: { deviceId: "c12b4b27-9a32-4bdf-b5b9-ecad926c3584" } }
+	// NB (2026-08-07): `pro` is currently signed OUT of Reddit, and `get_subreddit_threads` is declared
+	// `loggedIn` — so discovery fails on this device until someone logs that browser back in, or this
+	// moves to `DEVICES.tester` like `write` did. Left pointing at `pro` because which browser does the
+	// READING is a separate decision from which one signs our name to a comment.
+	listing: { target: { deviceId: DEVICES.pro } },
+	// The tester browser, because it is the one signed in as OWNER (verified above). It used to be
+	// `pro`, which is signed out — so every reply this agent tried to post was going to a browser that
+	// could not post at all, and the run reports that as the site's own complaint rather than as a
+	// misconfiguration.
+	write: { target: { deviceId: DEVICES.tester } }
 } as const satisfies Record<"thread" | "listing" | "write", RunOpts>;
 
 export default {
 	destination: "notion",
-	models: {
-		RedditThreads: "287eec98-859f-4a64-a50d-75da2e965488",
-		RedditBacklog: BACKLOG,
-		Decisions: "eddcfaaf-e6f1-4cea-a112-2b9d98426eb4"
-	},
+	models: MODELS,
 	// The Backlog, not the Thread: a Decision binds to the OUTREACH it advances, and the thread is
 	// merely what that outreach is about. A thread we have never engaged has no row here at all.
 	entity: "Reddit Backlog",
@@ -211,15 +240,15 @@ export default {
 	// posted in.) No outreach at all ⇒ nothing to close, so it is silent rather than inventing a row.
 	drop: async (subject) => {
 		const store = getStore("notion");
-		const thread = await store.read(THREADS, "Thread URL", threadUrl(subject));
+		const thread = await store.read(MODELS.RedditThreads, "Thread URL", threadUrl(subject));
 		if (!thread.fields.Author)
 			throw new Error(`thread ${subject} has no Author — cannot close an outreach with no person`);
-		const [outreach] = await store.query(BACKLOG, {
+		const [outreach] = await store.query(MODELS.RedditBacklog, {
 			property: "Person",
 			url: { equals: userUrl(String(thread.fields.Author)) }
 		});
 		if (!outreach || outreach.fields["Comment URL"]) return;
-		await store.patch(BACKLOG, outreach.id, { Status: "Dropped" });
+		await store.patch(MODELS.RedditBacklog, outreach.id, { Status: "Dropped" });
 	},
 	prompts: {
 		// Is this thread worth answering? The one filter of the funnel (no deterministic pre-filter),

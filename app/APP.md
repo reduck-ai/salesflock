@@ -65,6 +65,17 @@ the mode above.
    with "Make sure the relevant pages and databases are shared with your integration",
    which is the one setup mistake this surface can make.
 
+6. **`SALESFLOCK_MODELS`** — the table ids of the AGENTS' own databases, as one JSON object:
+   `{"reddit-engage":{"RedditThreads":"…","RedditBacklog":"…","Decisions":"…"}}`. It is the
+   contents of `salesflock/models.local.json`, which `sflock init` writes (src/models.ts); the CLI
+   loads that file, and the app — which has no working directory to find it in — takes the variable.
+   `NOTION_DECISIONS_DS` above stays separate and is still required: the queue reads EVERY agent's
+   decisions from one table, so it cannot resolve that id per row the way it resolves an agent.
+   This one is for the opposite case — the single path that reaches an agent's OWN tables, a
+   refusal calling `config.drop` to close the outreach. Without it the note is still saved and the
+   request then fails naming the missing id, which is recoverable (set it, save again) but visible
+   to whoever clicked.
+
 `.env.example` lists every variable; add `AUTH_PROVIDER`, `ALLOWED_DOMAINS`, and
 `ACCESS_KEY` there alongside the originals if they are not yet present.
 
@@ -96,6 +107,17 @@ that posts to the world and cannot be undone.
 Since a decision also moves the linked pipeline entity, "Update content" on that database is needed
 too. Which Status each committed output moves it to is the agent's config (`config.prompts`,
 imported via the `$agents` alias), not app code.
+
+**A CONFIRM BEGINS AS A SAVE.** `record` writes the working copy — minus the note, see below —
+before the gates and before the act, and only then attempts the decision. A draft is not a decision
+and has none of its atomicity requirement: what must never half-happen is the DEED, which is still
+guaranteed (nothing speaks to the world until every gate passes, and `Final output` lands only once
+it has). The human's WORDS have the opposite requirement — they cost human effort, they claim no
+verdict, and losing them because a device was asleep is the one outcome with no upside. It used to
+be exactly that: the card unmounts at the click and its state was the only copy, so a failed act
+took the rewrite with it. The NOTE stays out of that early write, and that asymmetry is the point —
+`Feedback` is a verdict channel, so pre-saving it would make a failed Confirm read as a *rejection*
+in the Past tab and the learn worklist, a failure inventing a decision.
 
 Those four columns are one precedence, resolved once in `cards/decision.ts`, and it is what a card
 opens on: **`Final output ?? Draft output ?? Output`** — the human's latest word if they have one,
@@ -135,7 +157,14 @@ An act reaches a browser through `$core/clients/reduck`, which runs over the MCP
 API — the one transport, here and in the runtime alike, so this is no longer a serverless special
 case. **`REDUCK_API_KEY`** is the only variable it needs, and without it the client throws naming
 the variable (it used to shell a CLI that does not exist in a function, and the failure then read
-"Session expired"): WHICH browser — i.e. which signed-in identity the site sees —
+"Session expired") — but a throw is the *second* line of defence now, because that key is a
+precondition of the deployment, not an outcome of the run: it is constant for a session and
+knowable with no I/O, so `contractOf` resolves it with the rest of the card's contract
+(`$core/clients/reduck` `configured()`) and a Confirm that could not possibly succeed is never
+offered. It arrives as `blocked`, one sentence, and the card merges it into the single string that
+already greys Confirm out for a schema violation (`whyInert`) — no new affordance. Save and Note
+stay live throughout: neither needs a browser, so a blocked Confirm never traps a reviewer.
+WHICH browser — i.e. which signed-in identity the site sees —
 is the agent's to declare and it passes it per call (reddit-engage keeps reading and writing on
 separate accounts, `DEVICES` in its `config.ts`), so no env var decides who acts. A browser run
 takes tens of seconds, so `api/decide` sets `maxDuration` and the card shows its existing

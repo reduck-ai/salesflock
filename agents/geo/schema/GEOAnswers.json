@@ -1,0 +1,99 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GEO Answers",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "Name"
+  ],
+  "properties": {
+    "Answer": {
+      "type": "string",
+      "x-store": {
+        "type": "rich_text"
+      }
+    },
+    "Asked at": {
+      "type": "string",
+      "description": "ISO 8601 date or date-time",
+      "x-store": {
+        "type": "date"
+      }
+    },
+    "Conversation": {
+      "type": "string",
+      "x-store": {
+        "type": "rich_text"
+      }
+    },
+    "Model": {
+      "type": "string",
+      "x-store": {
+        "type": "rich_text"
+      }
+    },
+    "Name": {
+      "type": "string",
+      "x-store": {
+        "type": "title"
+      }
+    },
+    "Pages": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "relation → GEOResults",
+      "x-store": {
+        "type": "relation",
+        "target": "GEOResults",
+        "dual": "Answers"
+      }
+    },
+    "Prompt": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "relation → GEOPrompts",
+      "x-store": {
+        "type": "relation",
+        "target": "GEOPrompts",
+        "dual": "Answers"
+      }
+    },
+    "Provider": {
+      "type": "string",
+      "enum": [
+        "claude"
+      ],
+      "x-store": {
+        "type": "select"
+      }
+    },
+    "Queries": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "relation → GEOQueries",
+      "x-store": {
+        "type": "relation",
+        "target": "GEOQueries",
+        "dual": "Answers"
+      }
+    },
+    "Sources": {
+      "type": "string",
+      "x-store": {
+        "type": "rich_text"
+      }
+    },
+    "Stop reason": {
+      "type": "string",
+      "x-store": {
+        "type": "rich_text"
+      }
+    }
+  }
+}

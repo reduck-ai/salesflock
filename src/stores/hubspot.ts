@@ -88,6 +88,7 @@ const notImplemented = (): never => {
 // runtime reads throw (describe-only today).
 export const hubspot: Store = {
 	describe,
+	provision: notImplemented,
 	upsert: notImplemented,
 	create: notImplemented,
 	patch: notImplemented,
@@ -97,6 +98,7 @@ export const hubspot: Store = {
 	get: notImplemented,
 	title: notImplemented,
 	body: notImplemented,
+	setBody: notImplemented,
 	comment: notImplemented,
 	archive: notImplemented
 };

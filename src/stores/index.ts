@@ -26,7 +26,20 @@ export interface Row {
 }
 
 export interface Store {
-	describe(model: string): Promise<Record<string, unknown>>; // JSON Schema of writable props (setup)
+	// The two halves of SETUP, and they are inverses over one artifact — the JSON Schema committed at
+	// `agents/<id>/schema/<Model>.json`. `describe` reads a table that exists; `provision` builds the
+	// tables a set of schemas declares. `siblings` (an agent's own `models` map) is what lets a
+	// relation name a MODEL KEY instead of a uuid, which is the whole of what makes a schema portable.
+	describe(model: string, siblings?: Record<string, string>): Promise<Record<string, unknown>>;
+	// The WHOLE SET at once, because relations point at each other and no single table can be built
+	// in isolation. Returns one Ref per model key; `created` false means the table was adopted.
+	// Refuses a name already taken under `parent` unless `force`, and only ever adds — never deletes
+	// a property, a row or a table.
+	provision(
+		schemas: Record<string, object>,
+		parent: string,
+		opts?: { force?: boolean }
+	): Promise<Record<string, Ref>>;
 	upsert(model: string, record: object, key: string): Promise<Ref>; // idempotent write, keyed by `key`
 	// Write a NEW row, no lookup — always an addition, never an update. `upsert` is for a row that
 	// CONVERGES (a pipeline entity, keyed so a re-run lands on the same page); `create` is for one that
@@ -48,6 +61,12 @@ export interface Store {
 	get(id: string): Promise<Row>; // the row with this id — model-agnostic (an id implies its model)
 	title(model: string, id: string): Promise<string>; // a record's name, by id (the join)
 	body(id: string): Promise<string>; // a page's CONTENT as markdown — where authored prose lives
+	// Replace a page's CONTENT — the write half of `body`, for content too big for a column (a fetched
+	// page's raw HTML: `chunks` refuses past ~200k chars and says to put it in the body instead).
+	// TEXT, never blocks: blocks are one store's vocabulary and this seam must not learn it. `language`
+	// marks the text as verbatim content of that kind ("html"), so it lands whole rather than being
+	// parsed as prose — a page's markup is not markdown, and reading it as markdown would rewrite it.
+	setBody(id: string, text: string, language?: string): Promise<void>;
 	comment(id: string, text: string): Promise<void>; // append a comment to a page — the obs trail
 	archive(id: string): Promise<void>; // move a page to trash (recoverable) — how eager work is deleted
 }

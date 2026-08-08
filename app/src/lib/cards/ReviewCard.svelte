@@ -300,8 +300,16 @@
 		return JSON.stringify(edited) !== JSON.stringify(judgment.statements) ? edited : undefined;
 	};
 	// the human is a judge too: the committed output is held to the same Prompt Output schema the
-	// LLM's was (the shared gate). Confirm is inert while it violates — derived, no effect.
+	// LLM's was (the shared gate). One of the two reasons Confirm goes inert — derived, no effect.
 	const outputError = $derived(judgment.outputSchema ? schemaError(judgment.outputSchema, output) : null);
+	// WHY CONFIRM IS INERT — one string, whatever the reason, because a reviewer only ever needs the
+	// sentence and there is only one place to read it. Two sources, in this order: a precondition of
+	// the DEPLOYMENT (`judgment.blocked` — this kind's Confirm performs an act and the server has no
+	// credential to run one), then the schema gate on the OUTPUT. The precondition wins because
+	// editing cannot clear it: naming a missing field first would send the reviewer to fix the wrong
+	// thing. Save and Note stay live either way — neither needs a browser — so a blocked Confirm
+	// never traps anyone: they can always park their work, and always refuse.
+	const whyInert = $derived(judgment.blocked ?? outputError);
 	// Both hand back the SAME working copy — the output as it stands, the note, the edited
 	// statements — and differ only in `commit`: true is the decision (and advances the deck), false
 	// is the decision withheld (the row keeps its place and reopens exactly here). One payload, one
@@ -312,7 +320,7 @@
 		reasoning: reasoningEdit()
 	});
 	const commit = () => {
-		if (outputError) return;
+		if (whyInert) return;
 		onjudge?.({ ...working(), commit: true });
 	};
 	export function save() {
@@ -322,15 +330,17 @@
 	// so nothing here declares an intent; the affordance only stops HIDING one. With a note written,
 	// the second act reads "Reject" and fires the save, because that save now closes the outreach.
 	// Same key, same one gesture — but the consequence is stated before the press, which is the rule
-	// Confirm already obeys by going inert while `outputError` is set.
+	// Confirm already obeys by going inert with `whyInert` on show.
 	//
 	// Confirm stays live beside it: a note on a decision you nonetheless post is an approved-with-a-
 	// note, which is its own thing (`sflock learn` keeps that row and moves only the note). The note
-	// refuses only when nothing was committed.
+	// refuses only when nothing was committed. And this act never goes inert — a rejection needs no
+	// browser and no valid output, so whatever stops a Confirm, the reviewer can still say no (and
+	// still ⌘S, which is what keeps their words safe by their own hand as well as by the server's).
 	const refusing = $derived(!!feedback.trim());
 	// ⌘⏎ confirm — driven page-level (the twin of ⌘S), so it fires even mid-note. Inert while
 	// the selection popover is open (a commit would drop the in-progress claim); commit() owns
-	// the schema gate.
+	// `whyInert`, so the key and the button refuse for the same reasons.
 	export function confirm() {
 		if (!menu) commit();
 	}
@@ -691,8 +701,8 @@
 	     editable within its schema; committing it IS the decision. -->
 					<div class="proposal">
 						<OutputForm schema={judgment.outputSchema} bind:value={output} id={judgment.id} />
-						{#if outputError}
-							<p class="err">{outputError}</p>
+						{#if whyInert}
+							<p class="err">{whyInert}</p>
 						{/if}
 					</div>
 				{:else}
@@ -754,7 +764,7 @@
 			<!-- ACTS — outside the scroller, so Confirm never scrolls away -->
 			<div class="acts-wrap">
 				<div class="acts">
-					<button class="btn confirm" onclick={commit} disabled={!!outputError}>
+					<button class="btn confirm" onclick={commit} disabled={!!whyInert}>
 						Confirm <kbd>⌘⏎</kbd>
 					</button>
 					<button
@@ -1472,7 +1482,7 @@
 	.btn.confirm {
 		background: #16a34a;
 	}
-	/* the schema violation — why Confirm is inert; the shared gate's own message */
+	/* why Confirm is inert — one line, whichever reason it is (`whyInert`) */
 	.err {
 		margin: 6px 2px 0;
 		font-size: 12px;

@@ -17,6 +17,13 @@
 // It never throws for the site's sake: a refusal, a timeout and a DNS failure are all ANSWERS about
 // the URL, so they come back as `{ok:false, status, error}` rather than as an exception. Only the
 // caller's own mistakes (a malformed URL) throw. `text` is empty when there was nothing to read.
+//
+// It returns the page BOTH WAYS, because two readers want different things out of one fetch: `text`
+// is what gets counted and measured, `html` is the bytes as served — kept because a status alone
+// cannot tell you WHY a page is unreadable. Measured: producthunt.com answers 403 with 5.7 KB whose
+// first words are "Just a moment", i.e. a Cloudflare wall rather than a refusal aimed at us; that
+// distinction lives in the markup and nowhere else. Carrying it costs nothing — the bytes were
+// already in hand and were being dropped.
 
 import { gate } from "../concurrency.js";
 
@@ -44,9 +51,39 @@ export interface Fetched {
 	finalUrl: string; // where the redirects ended — a soft-404 landing on the homepage shows up here
 	ok: boolean; // a 2xx that yielded bytes; false covers a refusal, a timeout and a DNS failure alike
 	status: number; // HTTP status, or 0 when the request never got one (timeout, DNS, TLS)
+	html: string; // the page as served, decoded but otherwise untouched. Empty when nothing was read
 	text: string; // the page's visible text, tags and scripts removed
 	error?: string; // why there is no status — network-level only, never an HTTP error
 }
+
+// WHICH CHARACTER SET the bytes are in. It used to be UTF-8, always, which is right for most of the
+// web and silently wrong for the rest: decoding windows-1252 or Shift_JIS as UTF-8 replaces every
+// accented character with U+FFFD, in the stored page AND in the count that decides whether we are
+// named on it.
+//
+// The server's own declaration wins. Failing that, the `<meta charset>` in the head — sniffed out of
+// the first 2 KB as latin1, which is safe because every encoding worth handling here agrees with
+// ASCII in that region, so the tag reads the same whatever the document turns out to be.
+const charsetOf = (contentType: string | null, bytes: Uint8Array): string => {
+	const declared = contentType?.match(/charset\s*=\s*["']?([\w-]+)/i)?.[1];
+	if (declared) return declared.toLowerCase();
+	const head = new TextDecoder("latin1").decode(bytes.subarray(0, 2048));
+	const meta =
+		head.match(/<meta[^>]+charset\s*=\s*["']?([\w-]+)/i)?.[1] ??
+		head.match(/<meta[^>]+content\s*=\s*["'][^"']*charset\s*=\s*([\w-]+)/i)?.[1];
+	return (meta ?? "utf-8").toLowerCase();
+};
+
+// Bytes → text, in the declared encoding. No dependency: Node ships full ICU, so `TextDecoder`
+// already knows windows-1252, shift_jis and the rest. A label it does NOT know throws — and a
+// charset we cannot name is not a reason to lose the page, so that falls back to UTF-8.
+const decode = (bytes: Uint8Array, charset: string): string => {
+	try {
+		return new TextDecoder(charset).decode(bytes);
+	} catch {
+		return new TextDecoder("utf-8").decode(bytes);
+	}
+};
 
 // textOf(html) — the page's visible words. Deliberately crude, and crude is right: this measures
 // whether there is prose here and whether it names someone, not what the DOM is. `<script>` and
@@ -85,13 +122,15 @@ export const get = async (url: string): Promise<Fetched> =>
 			// A non-2xx still has a BODY worth measuring: a bot-protection challenge is a small HTML
 			// page, and its size is part of how you recognize one. So the body is read either way and
 			// `ok` carries the verdict.
-			const body = await readCapped(res);
+			const bytes = await readCapped(res);
+			const html = decode(bytes, charsetOf(res.headers.get("content-type"), bytes));
 			return {
 				url,
 				finalUrl: res.url || url,
 				ok: res.ok,
 				status: res.status,
-				text: textOf(body)
+				html,
+				text: textOf(html)
 			};
 		} catch (e) {
 			// No status at all: the request never reached a server, or the clock ran out. That is a fact
@@ -102,6 +141,7 @@ export const get = async (url: string): Promise<Fetched> =>
 				finalUrl: url,
 				ok: false,
 				status: 0,
+				html: "",
 				text: "",
 				error: err.name === "AbortError" ? `timed out after ${TIMEOUT_MS}ms` : err.message
 			};
@@ -112,23 +152,29 @@ export const get = async (url: string): Promise<Fetched> =>
 
 // Read at most MAX_BYTES, then stop pulling. `res.text()` would buffer the whole body first, which is
 // the one thing the cap exists to prevent.
-const readCapped = async (res: Response): Promise<string> => {
-	if (!res.body) return "";
+//
+// BYTES, not text, and that is what makes the charset sniff above possible: the encoding is declared
+// in the response — sometimes only inside the body itself — so nothing can be decoded until the head
+// has been read. Decoding as it streamed meant guessing UTF-8 before the document had said otherwise.
+const readCapped = async (res: Response): Promise<Uint8Array> => {
+	if (!res.body) return new Uint8Array();
 	const reader = res.body.getReader();
-	const decoder = new TextDecoder("utf-8", { fatal: false });
-	let out = "";
+	const parts: Uint8Array[] = [];
 	let seen = 0;
 	for (;;) {
 		const { done, value } = await reader.read();
 		if (done) break;
+		parts.push(value);
 		seen += value.byteLength;
-		out += decoder.decode(value, { stream: true });
 		if (seen >= MAX_BYTES) {
 			await reader.cancel().catch(() => {});
 			break;
 		}
 	}
-	return out + decoder.decode();
+	const out = new Uint8Array(seen);
+	let at = 0;
+	for (const p of parts) (out.set(p, at), (at += p.byteLength));
+	return out;
 };
 
 // count(text, needles) — how many times any of `needles` appears, case-insensitively, on a word

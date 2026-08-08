@@ -13,7 +13,7 @@
 // logged-in person sees the whole personal CRM). Same contract as hubspot.ts.
 
 import { spawn } from "node:child_process";
-import { bodyOf, chunks, plain, relation, type BlockPage, type NotionValue } from "./notion.codec.js";
+import { bodyOf, chunks, plain, relation, verbatimBlocks, type BlockPage, type NotionValue } from "./notion.codec.js";
 import { pace, NOTION_RPS } from "../concurrency.js";
 import { log } from "../log.js";
 import type { Ref, Row, Store } from "./index.js";
@@ -142,7 +142,15 @@ interface NotionProp {
 	select?: { options: { name: string }[] };
 	status?: { options: { name: string }[] };
 	multi_select?: { options: { name: string }[] };
-	relation?: { data_source_id?: string; database_id?: string };
+	// `dual_property` names the twin Notion keeps on the OTHER table. It is what makes a parent-side
+	// list readable at all (`Row.rel.Answers`, `Row.rel.Results`), so it has to survive into the
+	// schema — a relation rebuilt as single_property would leave those lists silently empty.
+	relation?: {
+		data_source_id?: string;
+		database_id?: string;
+		type?: string;
+		dual_property?: { synced_property_name?: string };
+	};
 }
 
 // A bare 32-hex id out of a raw id or a Notion URL (a dashed uuid passes through — Notion's
@@ -202,10 +210,44 @@ const loadDs = (dsId: string, meter?: Meter): Promise<DataSource> =>
 const optionNames = (o?: { options: { name: string }[] }): string[] =>
 	(o?.options ?? []).map((x) => x.name);
 
+// WHAT NOTION CALLS THIS PROPERTY, carried on the fragment so the mapping can be walked back.
+// JSON Schema alone cannot be turned into Notion properties: `{type:"string"}` is a title, a
+// rich_text or a phone_number; an `enum` is a select or a status; an array of strings is a relation
+// or a people. Three ambiguities, and matching on the prose in `description` to break them is how a
+// contract rots. So the type is stated, under one keyword, on every property — `provision` reads it
+// and needs no rules of its own.
+//
+// `target` is the MODEL KEY, never a uuid, which is what makes a committed schema portable: it names
+// a sibling in the same agent, and the id it resolves to is whatever workspace the schema is built
+// in. `dual` is the twin's property name on that sibling.
+export interface StoreProp {
+	type: string;
+	target?: string;
+	dual?: string;
+}
+const X = "x-store";
+
 // Notion property type → JSON Schema fragment. null for read-only types (formula,
 // rollup, the audit *_time/*_by fields, files, button, unique_id, …): a writer can't
 // set them, so they don't belong in the writable contract.
-const fragment = (p: NotionProp): Record<string, unknown> | null => {
+//
+// `nameOf` resolves a relation's target data source to the model key that names it (`sflock pull`
+// hands in the agent's own `models` map). Absent, or pointing outside that map, the raw id rides
+// through — honest, and `provision` refuses it later rather than pointing a relation at nothing.
+const fragment = (p: NotionProp, nameOf: (id?: string) => string | undefined = () => undefined): Record<string, unknown> | null => {
+	const frag = shape(p, nameOf);
+	if (!frag) return null;
+	const store: StoreProp = { type: p.type };
+	if (p.type === "relation") {
+		const target = p.relation?.data_source_id ?? p.relation?.database_id;
+		store.target = nameOf(target) ?? target;
+		if (p.relation?.dual_property?.synced_property_name)
+			store.dual = p.relation.dual_property.synced_property_name;
+	}
+	return { ...frag, [X]: store };
+};
+
+const shape = (p: NotionProp, nameOf: (id?: string) => string | undefined): Record<string, unknown> | null => {
 	switch (p.type) {
 		case "title":
 		case "rich_text":
@@ -230,14 +272,78 @@ const fragment = (p: NotionProp): Record<string, unknown> | null => {
 			return { type: "array", items: { type: "string", enum: optionNames(p.multi_select) } };
 		case "people":
 			return { type: "array", items: { type: "string" }, description: "Notion user ids" };
-		case "relation":
+		case "relation": {
+			const target = p.relation?.data_source_id ?? p.relation?.database_id;
 			return {
 				type: "array",
 				items: { type: "string" },
-				description: `relation → ${p.relation?.data_source_id ?? p.relation?.database_id ?? "?"}`
+				// The comment the generated TS carries. Derived from the same resolution `x-store.target`
+				// uses, in the same call, so the prose and the machine-readable fact cannot disagree.
+				description: `relation → ${nameOf(target) ?? target ?? "?"}`
 			};
+		}
 		default:
 			return null; // read-only / unwritable
+	}
+};
+
+// ─── the inverse: a schema fragment → a Notion property definition ───────────────────────────────
+
+// property(name, frag, dsIdOf) — the mirror of `fragment`, and it lives beside it so the two are
+// read together. Everything it needs is on `x-store`, so there is no guessing from the JSON Schema
+// shape; a fragment without it was not written by `describe` and is refused rather than guessed at.
+//
+// A relation resolves its target through `dsIdOf` — the ids of the tables this same run just made.
+// Always DUAL: the twin on the other table is what a parent-side read (`Row.rel.Answers`) is, and a
+// single_property relation would build tables where those reads return nothing at all.
+const property = (
+	name: string,
+	frag: Record<string, unknown>,
+	dsIdOf: (target: string) => string
+): Record<string, unknown> => {
+	const s = frag[X] as StoreProp | undefined;
+	if (!s?.type)
+		throw new Error(
+			`notion.provision: property "${name}" carries no "${X}" — regenerate this schema with \`sflock pull\``
+		);
+	const options = (): { options: { name: string }[] } => ({
+		options: (((frag.enum ?? (frag.items as { enum?: string[] })?.enum) as string[]) ?? []).map((n) => ({
+			name: n
+		}))
+	});
+	switch (s.type) {
+		case "title":
+		case "rich_text":
+		case "url":
+		case "email":
+		case "phone_number":
+		case "number":
+		case "checkbox":
+		case "date":
+		case "people":
+			return { [s.type]: {} };
+		case "select":
+		case "multi_select":
+			return { [s.type]: options() };
+		case "relation":
+			if (!s.target) throw new Error(`notion.provision: relation "${name}" names no target`);
+			return {
+				relation: {
+					data_source_id: dsIdOf(s.target),
+					type: "dual_property",
+					dual_property: s.dual ? { synced_property_name: s.dual } : {}
+				}
+			};
+		// Notion's API can read a status property but cannot create one — a documented gap, and one
+		// nothing here can work around. Say so plainly instead of writing a select that looks like it
+		// and behaves differently in every board view.
+		case "status":
+			throw new Error(
+				`notion.provision: "${name}" is a status property, which Notion's API cannot create — ` +
+					`add it by hand in the Notion UI, or make it a select`
+			);
+		default:
+			throw new Error(`notion.provision: can't create a "${s.type}" property ("${name}")`);
 	}
 };
 
@@ -559,22 +665,100 @@ const blockPage = (blockId: string, cursor?: string): Promise<BlockPage> =>
 
 export const body = (id: string): Promise<string> => bodyOf(idOf(id), blockPage);
 
-// describe(model) — a JSON Schema of the model's writable properties. The data source
+// setBody(id, text, language) — replace a page's content. Notion has no "replace body" call we can
+// use, so this appends the new blocks and removes the old ones, and the ORDER of those two is the
+// whole safety property: APPEND FIRST, DELETE SECOND. Deleting first is what "wipe and rewrite"
+// reads like, and it makes every failure between the two destructive — the review app's Writer
+// learned that from a rejected block leaving a page with zero of them (app/src/lib/server/writer.ts).
+// This way a failed append has removed nothing, and the worst case is a page briefly showing the old
+// content followed by the new: visible, and recoverable.
+//
+// The stale ids are read BEFORE anything is written, so only what was there at the start is removed —
+// never the blocks this call is about to add.
+const APPEND_CAP = 100; // Notion accepts at most 100 children per append
+const childIds = async (id: string): Promise<string[]> => {
+	const ids: string[] = [];
+	for (let cursor: string | undefined; ; ) {
+		const p = await blockPage(id, cursor);
+		ids.push(...p.results.map((b) => b.id));
+		if (!p.has_more || !p.next_cursor) break;
+		cursor = p.next_cursor;
+	}
+	return ids;
+};
+
+export const setBody = async (id: string, text: string, language = "plain text"): Promise<void> => {
+	const page = idOf(id);
+	const stale = await childIds(page);
+	const blocks = verbatimBlocks(text, language);
+	// Sequentially: Notion appends at the END, so a later batch must land after an earlier one.
+	for (let i = 0; i < blocks.length; i += APPEND_CAP)
+		await api(`/blocks/${page}/children`, {
+			method: "PATCH",
+			body: { children: blocks.slice(i, i + APPEND_CAP) }
+		});
+	await Promise.all(stale.map((blockId) => api(`/blocks/${blockId}`, { method: "DELETE" })));
+};
+
+// An id in whatever shape it arrived — dashed uuid, bare 32-hex, a Notion URL — reduced to the one
+// spelling a map can be keyed on. `idOf` extracts an id from a URL but leaves a dashed uuid alone,
+// so it is not enough on its own to compare two ids that came from different places.
+const bare = (s: string): string => idOf(s).replace(/-/g, "").toLowerCase();
+
+// siblings (model key → handle) → "which of my own tables is this id?". Both spellings of each
+// sibling go in — the handle as config declares it, and the data source it resolves to — because a
+// relation reports the data source and config usually names the database, and in a workspace where
+// those ids differ a map built on either one alone would silently name nothing.
+const namerFor = async (
+	siblings?: Record<string, string>
+): Promise<(id?: string) => string | undefined> => {
+	if (!siblings) return () => undefined;
+	const byId = new Map<string, string>();
+	for (const [key, handle] of Object.entries(siblings)) {
+		byId.set(bare(handle), key);
+		byId.set(bare(await resolveDsId(handle)), key);
+	}
+	return (id) => (id ? byId.get(bare(id)) : undefined);
+};
+
+// describe(model, siblings?) — a JSON Schema of the model's writable properties. The data source
 // id rides in `$id` so a writer can recover it; `title` names the dump file. Properties
 // are sorted by name so the file is stable and `git diff` reads as a changelog.
-export const describe = async (model: string): Promise<Record<string, unknown>> => {
+//
+// `siblings` is the agent's own `models` map, and it is what makes the result PORTABLE: a relation
+// then names the model key it points at rather than a uuid that means something in exactly one
+// workspace. Without it the schema still describes the table correctly — it just cannot be used to
+// build that table anywhere else.
+export const describe = async (
+	model: string,
+	siblings?: Record<string, string>
+): Promise<Record<string, unknown>> => {
 	const ds = await loadDs(await resolveDsId(model));
+	const nameOf = await namerFor(siblings);
 	const title = ds.title.map((t) => t.plain_text).join("") || ds.id;
 	const properties: Record<string, unknown> = {};
 	const required: string[] = [];
+	// A relation pointing OUTSIDE the agent's own models — a column left by an agent that no longer
+	// exists, or a table someone linked by hand. Faithful to report when nobody asked for a portable
+	// schema, and wrong to keep when they did: nothing in the repo declares that table, so no fork can
+	// build it and no code here reads it. Dropped, and named out loud — a column silently vanishing
+	// from a contract is worse than the column.
+	const outside: string[] = [];
 	for (const [name, p] of Object.entries(ds.properties).sort((a, b) =>
 		a[0].localeCompare(b[0])
 	)) {
-		const frag = fragment(p);
+		const frag = fragment(p, nameOf);
 		if (!frag) continue;
+		const s = frag[X] as StoreProp;
+		if (siblings && s.type === "relation" && !(s.target && s.target in siblings)) {
+			outside.push(name);
+			continue;
+		}
 		properties[name] = frag;
 		if (p.type === "title") required.push(name); // the one always-present field
 	}
+	if (outside.length)
+		log("notion", `${title}: ${outside.length} relation(s) point outside this agent's models, left out of the contract — ${outside.join(", ")}`);
 	return {
 		$schema: "http://json-schema.org/draft-07/schema#",
 		$id: ds.id,
@@ -586,9 +770,167 @@ export const describe = async (model: string): Promise<Record<string, unknown>> 
 	};
 };
 
+// provision(schemas, parent, opts) — the inverse of `describe`: the tables a set of schemas
+// declares, built under one Notion page. This is how a fork gets a workspace it can run against,
+// and the two verbs meet over one committed artifact — `agents/<id>/schema/<Model>.json`.
+//
+// IT TAKES THE WHOLE SET, not one table, and that is not a convenience: relations point at each
+// other, so no single table can be created in isolation. Building them one call at a time would
+// hand the ordering problem to the caller, who would then need a two-pass loop of its own and a map
+// of ids in flight. Here it is three passes over data this function already holds:
+//
+//   1. create every table that does not exist yet, RELATIONS LEFT OUT — nothing to point at yet;
+//   2. (--force only) add to an adopted table the properties its schema declares and it lacks;
+//   3. add the relations, now that every id is known.
+//
+// A NAME CLASH STOPS EVERYTHING, and it reports all of them at once rather than dying on the first:
+// a page that already holds a table of that name is somebody's data, and adopting it silently is
+// the one mistake here that cannot be undone by re-running. `--force` says "yes, those are mine",
+// and even then this only ever ADDS — it never deletes a property, a row, or a table.
+interface ChildBlock {
+	id: string;
+	type: string;
+	child_database?: { title: string };
+}
+
+const childDatabases = async (page: string): Promise<Map<string, string>> => {
+	const byTitle = new Map<string, string>();
+	for (let cursor: string | undefined; ; ) {
+		const p = await api<{ results: ChildBlock[]; has_more?: boolean; next_cursor?: string | null }>(
+			`/blocks/${page}/children?page_size=100${cursor ? `&start_cursor=${cursor}` : ""}`
+		);
+		for (const b of p.results)
+			if (b.type === "child_database" && b.child_database?.title)
+				byTitle.set(b.child_database.title, b.id);
+		if (!p.has_more || !p.next_cursor) break;
+		cursor = p.next_cursor;
+	}
+	return byTitle;
+};
+
+const propsOf = (schema: object): Record<string, Record<string, unknown>> =>
+	((schema as { properties?: Record<string, Record<string, unknown>> }).properties ?? {});
+const storeOf = (frag: Record<string, unknown>): StoreProp | undefined => frag[X] as StoreProp | undefined;
+const titleOf = (key: string, schema: object): string => {
+	const t = (schema as { title?: string }).title;
+	if (!t) throw new Error(`notion.provision: schema "${key}" has no \`title\` — it names the table`);
+	return t;
+};
+
+export const provision = async (
+	schemas: Record<string, object>,
+	parent: string,
+	{ force = false }: { force?: boolean } = {}
+): Promise<Record<string, Ref>> => {
+	const page = idOf(parent);
+	const existing = await childDatabases(page);
+
+	const clashes = Object.entries(schemas).filter(([k, s]) => existing.has(titleOf(k, s)));
+	if (clashes.length && !force)
+		throw new Error(
+			`notion.provision: this page already holds ${clashes.length} table(s) of these names — ` +
+				`${clashes.map(([k, s]) => `"${titleOf(k, s)}"`).join(", ")}. Nothing was written. ` +
+				`Point --parent at an empty page, or pass --force to adopt them and add whatever ` +
+				`properties they are missing (it never deletes anything).`
+		);
+
+	// key → the two ids a table has: the DATABASE (what config pins, what a URL opens) and its DATA
+	// SOURCE (what a relation points at, and what every read and write in this file resolves to).
+	const made = new Map<string, { dbId: string; dsId: string; created: boolean }>();
+	// Which properties a table already carries, so pass 3 never re-creates a relation and pass 2
+	// never re-creates a column. Filled from what we just wrote, or from what an adopted table has.
+	const have = new Set<string>();
+	const has = (key: string, prop: string): boolean => have.has(`${key} ${prop}`);
+	const mark = (key: string, prop: string): void => void have.add(`${key} ${prop}`);
+
+	// ── pass 1: the tables themselves, relations left out ────────────────────────────────────────
+	for (const [key, schema] of Object.entries(schemas)) {
+		const title = titleOf(key, schema);
+		const found = existing.get(title);
+		if (found) {
+			const dsId = await resolveDsId(found);
+			for (const name of Object.keys((await loadDs(dsId)).properties)) mark(key, name);
+			made.set(key, { dbId: found, dsId, created: false });
+			continue;
+		}
+		const properties: Record<string, unknown> = {};
+		for (const [name, frag] of Object.entries(propsOf(schema))) {
+			if (storeOf(frag)?.type === "relation") continue; // pass 3
+			properties[name] = property(name, frag, () => "");
+			mark(key, name);
+		}
+		const db = await api<{ id: string; data_sources?: { id: string }[] }>("/databases", {
+			body: {
+				parent: { type: "page_id", page_id: page },
+				title: chunks(title),
+				initial_data_source: { properties }
+			}
+		});
+		made.set(key, {
+			dbId: db.id,
+			dsId: db.data_sources?.[0]?.id ?? (await resolveDsId(db.id)),
+			created: true
+		});
+		log("notion", `created "${title}" · ${Object.keys(properties).length} properties`);
+	}
+
+	// A relation's target, as the data source id it must carry. Loud when the target is not in this
+	// run: a relation pointing nowhere is an incomplete setup, and the fix is naming fewer --agent
+	// (or none, which takes every one of them) rather than a table with a column that goes nowhere.
+	const dsIdOf = (target: string): string => {
+		const hit = made.get(target);
+		if (!hit)
+			throw new Error(
+				`notion.provision: a relation points at "${target}", which is not among the tables being ` +
+					`created (${[...made.keys()].join(", ")}) — run \`sflock init\` without --agent so every ` +
+					`table a relation names is built in the same pass`
+			);
+		return hit.dsId;
+	};
+
+	// ── pass 2: an adopted table gains what it lacks (--force only; created tables are complete) ──
+	for (const [key, schema] of Object.entries(schemas)) {
+		const t = made.get(key)!;
+		if (t.created) continue;
+		const missing: Record<string, unknown> = {};
+		for (const [name, frag] of Object.entries(propsOf(schema))) {
+			if (storeOf(frag)?.type === "relation" || has(key, name)) continue;
+			missing[name] = property(name, frag, dsIdOf);
+			mark(key, name);
+		}
+		if (!Object.keys(missing).length) continue;
+		await api(`/data_sources/${t.dsId}`, { method: "PATCH", body: { properties: missing } });
+		log("notion", `"${titleOf(key, schema)}" · +${Object.keys(missing).length} properties`);
+	}
+
+	// ── pass 3: the relations ────────────────────────────────────────────────────────────────────
+	// Each dual is created ONCE, from whichever side is reached first: Notion makes the twin on the
+	// other table itself, so both halves are marked present and the second one is skipped. Without
+	// that, creating B's side of a pair A already made would add a third, unpaired column.
+	for (const [key, schema] of Object.entries(schemas)) {
+		const t = made.get(key)!;
+		const add: Record<string, unknown> = {};
+		for (const [name, frag] of Object.entries(propsOf(schema))) {
+			const s = storeOf(frag);
+			if (s?.type !== "relation" || has(key, name)) continue;
+			add[name] = property(name, frag, dsIdOf);
+			mark(key, name);
+			if (s.target && s.dual) mark(s.target, s.dual); // the twin Notion is about to make
+		}
+		if (!Object.keys(add).length) continue;
+		await api(`/data_sources/${t.dsId}`, { method: "PATCH", body: { properties: add } });
+		log("notion", `"${titleOf(key, schema)}" · +${Object.keys(add).length} relations`);
+	}
+
+	return Object.fromEntries(
+		[...made].map(([key, t]) => [key, { id: t.dbId, url: pageUrl(t.dbId), created: t.created }])
+	);
+};
+
 // The Store this module implements (Notion is the full System of Record).
 export const notion: Store = {
 	describe,
+	provision,
 	upsert,
 	create,
 	patch,
@@ -598,6 +940,7 @@ export const notion: Store = {
 	get,
 	title,
 	body,
+	setBody,
 	comment,
 	archive
 };

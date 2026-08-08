@@ -10,7 +10,10 @@
 //   prompts   the questions we want to win (the only thing a human writes)
 //   answers   one run of one assistant on one prompt; three draws are three rows
 //   queries   one (engine, query) we have searched
-//   results   one (query, page), and what a plain HTTP client saw at it
+//   results   one page we have looked at, and what a plain HTTP client saw there. Two ways in, and
+//             the key says which: a QUERY ranked it (`brave:<q> :: <url>`), or an assistant READ it
+//             (`sources:<provider> :: <url>`). Same table and same fetch either way — the page's own
+//             raw HTML lands in the row's body, which is where a 403 tells you it was a bot wall.
 //
 // Every stage is idempotent and reads what it owes off the data itself, so any of them re-runs
 // safely after a crash with nothing to reconcile.
@@ -128,9 +131,26 @@ withLimit(
 		.option("--ours", "only pages on our own domain")
 		.option("--mentions", "only pages that already name us — the cheap lever: they rank, and they can be updated")
 		.option("--unreadable", "only pages a crawler cannot read (blocked, or a JavaScript shell)")
-).action(async (f: { query?: string[]; url?: string[]; ours?: boolean; mentions?: boolean; unreadable?: boolean; limit?: string }) =>
-	out(await tools.results.get({ ...f, limit: num(f.limit) }))
+		.option("--source", "only pages an assistant READ (no query ranked them) — the set that provably reached the model")
+		.option("--ranked", "only pages a query RANKED")
+).action(
+	async (f: {
+		query?: string[];
+		url?: string[];
+		ours?: boolean;
+		mentions?: boolean;
+		unreadable?: boolean;
+		source?: boolean;
+		ranked?: boolean;
+		limit?: string;
+	}) => out(await tools.results.get({ ...f, limit: num(f.limit) }))
 );
+
+results
+	.command("show")
+	.argument("<url>", "the page, in any shape (canonicalized)")
+	.description("One page's stored BODY — the raw HTML as served, which is what a status alone cannot tell you: a 403 that is a Cloudflare wall, a 404 on a page still ranking, a 200 whose content only exists in a browser. Every row holding that URL, since a query ranking it and an assistant reading it are two observations of one page.")
+	.action(async (url: string) => out(await tools.results.show(url)));
 
 // ─── the stages ──────────────────────────────────────────────────────────────────────────────────
 
@@ -147,7 +167,7 @@ withDryRun(
 	withDraws(
 		program
 			.command("ask")
-			.description("Ask each question that owes a draw, record the answer plus the queries it issued and the sources it read, and open a Query row per reformulation. Runs on the paired browser — a device IS an account, and the answer depends on which one.")
+			.description("Ask each question still short of its draws: record the answer, open a Query row per reformulation, and FETCH every page it read — because 'what did it answer' and 'what was it looking at' are one question. Runs on the paired browser — a device IS an account, and the answer depends on which one. A source whose fetch fails is left for `read` to retry.")
 	)
 ).action(async (f: { draws: string; provider: string; prompt?: string[]; dryRun?: boolean }) => {
 	const o = { prompt: f.prompt };
@@ -165,9 +185,10 @@ withDryRun(
 withDryRun(
 	program
 		.command("read")
-		.description("Fetch every result that has never been fetched — plain HTTP, no browser, because a crawler has none either. Records status, text length and how many times we are named. Also re-reads anything counted under an older BRAND definition.")
-).action(async (f: { dryRun?: boolean }) =>
-	out(f.dryRun ? (await tools.pending()).read : await tools.readPending())
+		.description("Fetch every page that has never been fetched — plain HTTP, no browser, because a crawler has none either. Records status, text length, how many times we are named, and the page itself (raw HTML, in the row's body). Also re-reads anything counted under an older BRAND definition. A NETWORK failure is left unfetched rather than recorded, so a timeout is retried instead of frozen as a fact.")
+		.option("--url <urls...>", "read exactly these pages, whatever state they are in — the by-hand door. Naming a page means fetch it now; omit for everything owed.")
+).action(async (f: { dryRun?: boolean; url?: string[] }) =>
+	out(f.dryRun ? (await tools.pending()).read : await tools.readPending(f.url))
 );
 
 withDryRun(

@@ -1,0 +1,136 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Decisions",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "Name"
+  ],
+  "properties": {
+    "Depends on": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "relation → Decisions",
+      "x-store": {
+        "type": "relation",
+        "target": "Decisions",
+        "dual": "Unlocks"
+      }
+    },
+    "Draft output": {
+      "type": "string",
+      "x-store": {
+        "type": "rich_text"
+      }
+    },
+    "Feedback": {
+      "type": "string",
+      "x-store": {
+        "type": "rich_text"
+      }
+    },
+    "Final output": {
+      "type": "string",
+      "x-store": {
+        "type": "rich_text"
+      }
+    },
+    "Final reasoning": {
+      "type": "string",
+      "x-store": {
+        "type": "rich_text"
+      }
+    },
+    "Input": {
+      "type": "string",
+      "x-store": {
+        "type": "rich_text"
+      }
+    },
+    "Instructions hash": {
+      "type": "string",
+      "x-store": {
+        "type": "rich_text"
+      }
+    },
+    "Kind": {
+      "type": "string",
+      "enum": [
+        "Reddit Thread Qualification",
+        "Reddit Reply",
+        "Reddit Reply Judge"
+      ],
+      "x-store": {
+        "type": "select"
+      }
+    },
+    "Model": {
+      "type": "string",
+      "x-store": {
+        "type": "rich_text"
+      }
+    },
+    "Name": {
+      "type": "string",
+      "x-store": {
+        "type": "title"
+      }
+    },
+    "Output": {
+      "type": "string",
+      "x-store": {
+        "type": "rich_text"
+      }
+    },
+    "Reasoning": {
+      "type": "string",
+      "x-store": {
+        "type": "rich_text"
+      }
+    },
+    "Reddit Backlog": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "relation → RedditBacklog",
+      "x-store": {
+        "type": "relation",
+        "target": "RedditBacklog",
+        "dual": "Decision"
+      }
+    },
+    "Reddit Thread": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "relation → RedditThreads",
+      "x-store": {
+        "type": "relation",
+        "target": "RedditThreads",
+        "dual": "Decision"
+      }
+    },
+    "Subject": {
+      "type": "string",
+      "x-store": {
+        "type": "rich_text"
+      }
+    },
+    "Unlocks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "relation → Decisions",
+      "x-store": {
+        "type": "relation",
+        "target": "Decisions",
+        "dual": "Depends on"
+      }
+    }
+  }
+}

@@ -1,0 +1,116 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GEO Results",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "Key"
+  ],
+  "properties": {
+    "Age": {
+      "type": "string",
+      "x-store": {
+        "type": "rich_text"
+      }
+    },
+    "Answers": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "relation → GEOAnswers",
+      "x-store": {
+        "type": "relation",
+        "target": "GEOAnswers",
+        "dual": "Pages"
+      }
+    },
+    "Brand": {
+      "type": "string",
+      "x-store": {
+        "type": "rich_text"
+      }
+    },
+    "Error": {
+      "type": "string",
+      "x-store": {
+        "type": "rich_text"
+      }
+    },
+    "Fetched at": {
+      "type": "string",
+      "description": "ISO 8601 date or date-time",
+      "x-store": {
+        "type": "date"
+      }
+    },
+    "Final URL": {
+      "type": "string",
+      "format": "uri",
+      "x-store": {
+        "type": "url"
+      }
+    },
+    "Key": {
+      "type": "string",
+      "x-store": {
+        "type": "title"
+      }
+    },
+    "Mentions": {
+      "type": "number",
+      "x-store": {
+        "type": "number"
+      }
+    },
+    "Query": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "relation → GEOQueries",
+      "x-store": {
+        "type": "relation",
+        "target": "GEOQueries",
+        "dual": "Results"
+      }
+    },
+    "Rank": {
+      "type": "number",
+      "x-store": {
+        "type": "number"
+      }
+    },
+    "Snippet": {
+      "type": "string",
+      "x-store": {
+        "type": "rich_text"
+      }
+    },
+    "Status": {
+      "type": "number",
+      "x-store": {
+        "type": "number"
+      }
+    },
+    "Text length": {
+      "type": "number",
+      "x-store": {
+        "type": "number"
+      }
+    },
+    "Title": {
+      "type": "string",
+      "x-store": {
+        "type": "rich_text"
+      }
+    },
+    "URL": {
+      "type": "string",
+      "format": "uri",
+      "x-store": {
+        "type": "url"
+      }
+    }
+  }
+}

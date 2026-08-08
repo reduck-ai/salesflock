@@ -2,11 +2,16 @@
 // previous stage HAD to write, never a status anyone maintains:
 //
 //   ask     one assistant, one prompt, one draw → an Answer row (the answer, the sources it read),
-//           plus a Query row per reformulation. Owed while the prompt has fewer than `--draws`
-//           answers that measured something.
+//           a Query row per reformulation, and a Result row per SOURCE which it then reads on the
+//           spot. Owed while the prompt has fewer than `--draws` answers that measured something.
 //   search  one query on its engine → a Result row per ranked page. Owed while `Searched at` is empty.
-//   read    one result over plain HTTP → status, text length, mention count. Owed while `Fetched at`
-//           is empty, OR while its `Brand` stamp is not today's.
+//   read    one page over plain HTTP → status, text length, mention count, and the page itself in the
+//           row's body. Owed while `Fetched at` is empty, OR while its `Brand` stamp is not today's.
+//
+// ONE FETCHER, TWO CALLERS (`readPage`): the read stage drains what is owed, and `ask` calls it
+// inline for the pages it just saw. A page an assistant READ and a page a query RANKED are the same
+// kind of thing — a document on the web we have looked at — so they are one table, one fetch and one
+// set of columns, told apart by the key: `sources:<provider>` where a query key would sit.
 //
 // THE TABLES ARE JOINED BY NOTION RELATIONS, and each one is written from the side whose list is
 // COMPLETE the moment it is written — the child. Notion syncs the dual, so the parent's list grows
@@ -38,11 +43,13 @@ import {
 	searchAll,
 	canonicalUrl,
 	hostIsOurs,
+	isSourceKey,
 	promptKey,
 	queryKey,
 	queryParts,
 	resultKey,
-	resultParts
+	resultParts,
+	sourceKey
 } from "../../src/clients/geo/index.js";
 import config, { BRAND, brandStamp, DEFAULT_PROVIDER, ENGINES, PROVIDERS, engineOf } from "./config.js";
 import type { GEOAnswers } from "./schema/GEOAnswers.js";
@@ -51,7 +58,10 @@ import type { GEOQueries } from "./schema/GEOQueries.js";
 import type { GEOResults } from "./schema/GEOResults.js";
 
 const store = getStore(config.destination);
-const { GEOPrompts: PROMPTS, GEOAnswers: ANSWERS, GEOQueries: QUERIES, GEOResults: RESULTS } = config.models;
+// The four tables, read at CALL time. A table id belongs to the installation (src/models.ts), so
+// destructuring it here would read every id the moment this module is imported — and an unconfigured
+// clone would then fail on `import` rather than inside the command, past the CLI's own error handler.
+const T = config.models;
 
 // ─── the writes: one per table, and the ONE place each identity key is minted ────────────────────
 //
@@ -61,18 +71,18 @@ const { GEOPrompts: PROMPTS, GEOAnswers: ANSWERS, GEOQueries: QUERIES, GEOResult
 // invisible to every filter here. Minting it here makes that unreachable rather than merely unlikely.
 
 const writePrompt = (prompt: string, fields: Omit<Partial<GEOPrompts>, "Prompt"> = {}) =>
-	store.upsert(PROMPTS, { ...fields, Prompt: promptKey(prompt) }, "Prompt");
+	store.upsert(T.GEOPrompts, { ...fields, Prompt: promptKey(prompt) }, "Prompt");
 
 // An answer is CREATED, never upserted: it accumulates. Three draws of one prompt are three rows,
 // because the assistant answers differently each time and that variance IS the measurement. It also
 // needs no identity column at all — nothing ever looks one up by key.
-const writeAnswer = (fields: GEOAnswers) => store.create(ANSWERS, fields);
+const writeAnswer = (fields: GEOAnswers) => store.create(T.GEOAnswers, fields);
 
 const writeQuery = (key: string, fields: Omit<Partial<GEOQueries>, "Key"> = {}) =>
-	store.upsert(QUERIES, { ...fields, Key: key }, "Key");
+	store.upsert(T.GEOQueries, { ...fields, Key: key }, "Key");
 
 const writeResult = (key: string, fields: Omit<Partial<GEOResults>, "Key">) =>
-	store.upsert(RESULTS, { ...fields, Key: key }, "Key");
+	store.upsert(T.GEOResults, { ...fields, Key: key }, "Key");
 
 // ─── the derivations: everything the tables deliberately do not store ────────────────────────────
 
@@ -174,8 +184,13 @@ export const resultView = (r: Row) => {
 		title: r.fields.Title ?? null,
 		snippet: r.fields.Snippet ?? null,
 		age: r.fields.Age ?? null,
+		// Where this row came from, read off its own key: an assistant READ it, or a query RANKED it.
+		// Not a column, for the reason `ours` is not one — the key already says so.
+		source: isSourceKey(String(r.fields.Key ?? "")),
 		ours: url ? ours(url) : false,
 		fetchedAt: r.fields["Fetched at"] ?? null,
+		finalUrl: r.fields["Final URL"] ?? null,
+		error: r.fields.Error ?? null,
 		status: fetched ? status : null,
 		textLength: fetched ? len : null,
 		// Unfetched ⇒ unknown, not false. The two negatives must not fuse: "we looked and it is a
@@ -210,6 +225,8 @@ export interface ResultSelect {
 	ours?: boolean;
 	mentions?: boolean;
 	unreadable?: boolean;
+	source?: boolean; // only pages an assistant READ
+	ranked?: boolean; // only pages a query RANKED
 	limit?: number;
 }
 
@@ -242,7 +259,10 @@ const promptFilter = (o: PromptSelect): object => ({
 // whichever engine ran it, so a bare text matches the text column. `--engine` is the key's prefix,
 // which is the same trick and the reason the engine lives in the identity.
 const normQuery = (q: string): string => {
-	if (q.includes(":") && ENGINES[queryParts(q).engine as keyof typeof ENGINES]) return q.trim().toLowerCase();
+	const k = q.trim().toLowerCase();
+	// A source key is already whole — nothing to resolve, and no engine to guess.
+	if (isSourceKey(k)) return k;
+	if (q.includes(":") && ENGINES[queryParts(q).engine as keyof typeof ENGINES]) return k;
 	return queryKey(engineOf(DEFAULT_PROVIDER), q);
 };
 const queryFilter = (o: QuerySelect): object => ({
@@ -263,8 +283,9 @@ const resultFilter = (o: ResultSelect): object => ({
 		...anyOf((o.query ?? []).map((q) => ({ property: "Key", title: { starts_with: `${normQuery(q)} :: ` } }))),
 		...anyOf((o.url ?? []).map((u) => ({ property: "URL", url: { equals: canonicalUrl(u) } }))),
 		// `--ours` is a store filter and needs no `Ours` column: the domain is in the URL, which is
-		// exactly why the boolean was never worth storing.
+		// exactly why the boolean was never worth storing. `--source` is the same trick on the key.
 		...(o.ours ? [{ property: "URL", url: { contains: BRAND.domain } }] : []),
+		...(o.source ? [{ property: "Key", title: { starts_with: "sources:" } }] : []),
 		...(o.mentions ? [{ property: "Mentions", number: { greater_than: 0 } }] : [])
 	]
 });
@@ -286,6 +307,14 @@ const unread = (): object => ({
 			]
 		}
 	]
+});
+
+// NAMING pages is the manual door, and it does NOT ask whether they are owed: saying a URL out loud
+// is saying "fetch this now" — the point of a by-hand read is to look again at something you are
+// working on. Every other read stays derived from the data (`unread` above), so this cannot make the
+// backlog quietly disappear: it addresses rows, one at a time, by the identity you typed.
+const named = (urls: readonly string[]): object => ({
+	and: [all("Key"), ...anyOf(urls.map((u) => ({ property: "URL", url: { equals: canonicalUrl(u) } })))]
 });
 
 // ─── the stages ──────────────────────────────────────────────────────────────────────────────────
@@ -316,27 +345,82 @@ export const ask = async (prompt: string, provider: string = DEFAULT_PROVIDER) =
 		writeQuery(queryKey(engine, q), { Engine: engine as GEOQueries["Engine"], Query: q.trim().toLowerCase() })
 	);
 
+	// Each SOURCE becomes a row too — the pages that provably reached the model, which is the one set
+	// worth reading and the one set nothing used to fetch. Same table and same stages as a ranked
+	// result, keyed under `sources:<provider>` where a query key would sit, because that IS the honest
+	// difference between them: nobody ranked these, an assistant read them.
+	//
+	// A URL too malformed to canonicalize gets no row and stays in the `Sources` text below — which is
+	// why that column is kept: it is what the script REPORTED, this is what we could resolve of it.
+	const canon = [
+		...new Set(
+			sources.flatMap((u) => {
+				try {
+					return [canonicalUrl(u)];
+				} catch {
+					return [];
+				}
+			})
+		)
+	];
+	const pageRefs = await mapLimit(canon, (u) => writeResult(resultKey(sourceKey(provider), u), { URL: u }));
+
 	const fields: GEOAnswers = {
 		Name: `${p.slice(0, 60)} — ${provider} — ${askedAt.slice(0, 19).replace("T", " ")}`,
 		Prompt: [promptRef.id],
 		Queries: queryRefs.map((r) => r.id),
+		// Written from the ANSWER, whose source list is complete the moment it is written — the same rule
+		// `Queries` follows. Notion syncs the dual, so each page's `Answers` fills itself and nothing here
+		// appends to a list it would have had to read back first.
+		Pages: pageRefs.map((r) => r.id),
 		Provider: provider as GEOAnswers["Provider"],
 		Model: spec.model,
 		"Asked at": askedAt,
 		Conversation: a.conversationId,
 		"Stop reason": a.stopReason ?? "",
 		Answer: a.answer,
-		// Sources stay RAW TEXT, and that is not an oversight: a source is a URL the assistant read,
-		// not a row — the script returns one flat deduped list per answer with no query attribution, so
-		// there is nothing honest to relate it to. Small enough to keep whole, so the "did it read us"
-		// question is answered fresh under today's BRAND instead of frozen as a boolean.
+		// Sources stay RAW TEXT beside the relation, and the two are different facts rather than one fact
+		// twice: this is the list the script REPORTED, verbatim, while `Pages` is what we resolved it to
+		// (canonicalized, deduped, and short a URL that would not parse). Keeping it is also what lets
+		// `verdictOf` stay a pure function of one row — "did it read us" is answered fresh under today's
+		// BRAND, off the text, with no second table to join.
 		Sources: sources.join("\n")
 	};
 	const ref = await writeAnswer(fields);
 
+	// …and now READ them, in the same command. A source is a page that provably reached the model, so
+	// "what did it answer" and "what was it looking at" are one question, and asking them separately
+	// meant the second one never got asked at all.
+	//
+	// AFTER the answer is written, deliberately: the ask is the expensive, unrepeatable part (a draw is
+	// a draw — the same prompt answers differently next time), so nothing that can fail is allowed to
+	// stand between it and its record. A fetch that fails is caught and left unfetched, which puts the
+	// row straight into what `geo read` owes — no special case, and no draw lost to a dead socket.
+	const read = await mapLimit(
+		pageRefs,
+		(r, i) =>
+			readPage(r.id, canon[i]).catch((e: unknown) => {
+				log("read", `${canon[i]} → ${renderError(e)} (left unfetched — \`geo read\` will retry)`);
+				return null;
+			}),
+		{ label: `read sources for ${p.slice(0, 32)}` }
+	);
+
 	const verdict = verdictOf({ stopReason: a.stopReason ?? "", queries: queries.length, sources, answer: a.answer });
-	log("ask", `${p.slice(0, 48)} @${provider} → ${verdict} (${queries.length} queries, ${sources.length} sources)`);
-	return { prompt: p, provider, verdict, queries, sources: sources.length, answer: ref.url };
+	log(
+		"ask",
+		`${p.slice(0, 48)} @${provider} → ${verdict} (${queries.length} queries, ${sources.length} sources, ` +
+			`${read.filter(Boolean).length}/${pageRefs.length} read)`
+	);
+	return {
+		prompt: p,
+		provider,
+		verdict,
+		queries,
+		sources: sources.length,
+		pages: read.filter(Boolean),
+		answer: ref.url
+	};
 };
 
 // search — one query on its engine, and its results point back at it.
@@ -372,25 +456,63 @@ export const searchQueries = async (rows: Row[]) => {
 	});
 };
 
-// read — one page over plain HTTP: can a crawler read it, and does it name us. No browser, because a
-// crawler has none either: a page that only renders in one is a page a crawler cannot read, and that
-// IS the finding.
-export const readResult = async (row: Row) => {
-	const url = String(row.fields.URL ?? "");
-	if (!url) throw new Error(`result ${row.id} has no URL`);
+// readPage — one page over plain HTTP: can a crawler read it, does it name us, and what does it
+// actually say. No browser, because a crawler has none either: a page that only renders in one is a
+// page a crawler cannot read, and that IS the finding.
+//
+// It takes an ID AND A URL rather than a Row, because it has two callers and only one of them holds
+// a row: the read stage drains rows, while `ask` has just created one and would otherwise have to
+// read back a page it wrote a line ago. Both facts are all this needs.
+//
+// The BODY is the page as served (`store.setBody`, raw HTML), and it is what a status alone cannot
+// give you. Measured: producthunt.com answers 403 with 5.7 KB reading "Just a moment" — a Cloudflare
+// wall, not a refusal aimed at us — and adsx.com answers 404 for a page Brave still ranks at #10.
+// Both look like one number in a column and like two different problems in the markup.
+export const readPage = async (id: string, url: string) => {
+	if (!url) throw new Error(`result ${id} has no URL`);
 	const got = await http.get(url);
 	const mentions = http.count(got.text, BRAND.aliases);
-	await store.patch(RESULTS, row.id, {
-		"Fetched at": new Date().toISOString(),
+	await store.patch(T.GEOResults, id, {
+		// A NETWORK-level failure is not an answer ABOUT the page. A timeout, a DNS blip or a dead
+		// socket says nothing about whether a crawler can read it — and stamping `Fetched at` would
+		// freeze that blip as a fact forever, because the row leaves the unread set and is never tried
+		// again. So it is left unstamped and stays owed: `eliminate on evidence, never on absence`,
+		// applied to our own network. An HTTP status — 403, 404, 500 — IS the server ruling, so it lands.
+		...(got.status ? { "Fetched at": new Date().toISOString() } : {}),
 		Status: got.status,
 		"Text length": got.text.length,
 		Mentions: mentions,
+		// Where the redirects ended, and why there is no status. Both come back from every fetch and
+		// were being dropped: a soft-404 landing on the homepage is only visible in the first, and a
+		// row reading `Status: 0` with nothing beside it is a failure nobody can diagnose.
+		"Final URL": got.finalUrl,
+		Error: got.error ?? "",
 		// The stamp travels with the count it qualifies, in the same write — so there is no instant at
 		// which a count exists without the definition it was made under.
 		Brand: brandStamp()
 	});
-	return { url, status: got.status, textLength: got.text.length, mentions, ...(got.error ? { error: got.error } : {}) };
+	await store.setBody(id, got.html, "html");
+	return {
+		url,
+		status: got.status,
+		textLength: got.text.length,
+		htmlLength: got.html.length,
+		mentions,
+		...(got.finalUrl !== url ? { finalUrl: got.finalUrl } : {}),
+		...(got.error ? { error: got.error } : {})
+	};
 };
+
+// The page back out of the body, without the code fence. `store.body` renders a page as MARKDOWN, so
+// the blocks `setBody` wrote come back wrapped in ```html — the store's rendering of what it holds,
+// not a thing the page contains. Three exact edits rather than a fence parser: the opening fence, the
+// closing one, and the seam between two consecutive blocks (a page over 200 000 chars spans several).
+// Anything else that looks like a fence is the page's own and is left alone.
+const unfence = (markdown: string): string =>
+	markdown
+		.replace(/^```html\n/, "")
+		.replace(/\n```$/, "")
+		.replace(/\n```\n\n```html\n/g, "");
 
 // ─── the tools ───────────────────────────────────────────────────────────────────────────────────
 
@@ -413,8 +535,8 @@ export const tools = {
 		// tables and a group-by ON THE RELATION — which is the whole reason no counts are stored.
 		get: async (o: PromptSelect = {}) => {
 			const [prompts, answers] = await Promise.all([
-				queryAll(store, PROMPTS, promptFilter(o)),
-				queryAll(store, ANSWERS, ALL_ANSWERS)
+				queryAll(store, T.GEOPrompts, promptFilter(o)),
+				queryAll(store, T.GEOAnswers, ALL_ANSWERS)
 			]);
 			const views = prompts.map((p) => promptView(p, answers));
 			const kept = o.verdict ? views.filter((v) => v.verdict === o.verdict) : views;
@@ -427,9 +549,9 @@ export const tools = {
 		// list of ten draws must not be half a megabyte. `show` prints one.
 		get: async (o: AnswerSelect = {}) => {
 			const [rows, prompts, queries] = await Promise.all([
-				queryAll(store, ANSWERS, { and: [all("Name"), ...(o.provider ? [{ property: "Provider", select: { equals: o.provider } }] : [])] }),
-				queryAll(store, PROMPTS, promptFilter({ prompt: o.prompt })),
-				queryAll(store, QUERIES, ALL_QUERIES)
+				queryAll(store, T.GEOAnswers, { and: [all("Name"), ...(o.provider ? [{ property: "Provider", select: { equals: o.provider } }] : [])] }),
+				queryAll(store, T.GEOPrompts, promptFilter({ prompt: o.prompt })),
+				queryAll(store, T.GEOQueries, ALL_QUERIES)
 			]);
 			const wanted = new Set(prompts.map((p) => p.id));
 			const promptText = new Map(prompts.map((p) => [p.id, String(p.fields.Prompt ?? "")]));
@@ -455,9 +577,9 @@ export const tools = {
 		// `Passed over` and you want to know what it said instead.
 		show: async (o: AnswerSelect = {}) => {
 			const [rows, prompts, queries] = await Promise.all([
-				queryAll(store, ANSWERS, ALL_ANSWERS),
-				queryAll(store, PROMPTS, promptFilter({ prompt: o.prompt })),
-				queryAll(store, QUERIES, ALL_QUERIES)
+				queryAll(store, T.GEOAnswers, ALL_ANSWERS),
+				queryAll(store, T.GEOPrompts, promptFilter({ prompt: o.prompt })),
+				queryAll(store, T.GEOQueries, ALL_QUERIES)
 			]);
 			const wanted = new Set(prompts.map((p) => p.id));
 			const promptText = new Map(prompts.map((p) => [p.id, String(p.fields.Prompt ?? "")]));
@@ -491,7 +613,7 @@ export const tools = {
 			}),
 
 		get: async (o: QuerySelect = {}) => {
-			const rows = await queryAll(store, QUERIES, queryFilter(o));
+			const rows = await queryAll(store, T.GEOQueries, queryFilter(o));
 			return newest(
 				rows.map((r) => ({
 					query: String(r.fields.Key ?? ""),
@@ -512,12 +634,32 @@ export const tools = {
 	results: {
 		get: async (o: ResultSelect = {}) => {
 			// ONE read: a result names its own query off its key, so nothing here follows a relation.
-			const views = (await queryAll(store, RESULTS, resultFilter(o))).map(resultView);
+			const views = (await queryAll(store, T.GEOResults, resultFilter(o))).map(resultView);
 			// `--unreadable` post-filters rather than pushing into the store, because `readable` needs
 			// two columns compared against each other and a Notion filter cannot express that. It is a
-			// reading of a set the store already narrowed, so it costs nothing.
-			const kept = o.unreadable ? views.filter((r) => r.readable === false) : views;
+			// reading of a set the store already narrowed, so it costs nothing. `--ranked` is here for a
+			// duller reason: Notion has `starts_with` and no negation of it.
+			const kept = views
+				.filter((r) => !o.unreadable || r.readable === false)
+				.filter((r) => !o.ranked || !r.source);
 			return newest(kept, (r) => String(r.rank ?? 999).padStart(4, "0"), o.limit).reverse();
+		},
+
+		// show — one page's stored BODY: what we actually captured, as served. The counterpart of
+		// `answers show`, and the reason the body is worth storing at all — a status says a crawler was
+		// refused, the markup says whether it was a bot wall, a soft 404 or an empty JavaScript shell.
+		//
+		// A URL can hold more than one row (a query ranked it AND an assistant read it, which are two
+		// different observations of one page), so this answers for every row it matches rather than
+		// picking one and hiding the rest — the same rule that keeps `site:` samples honest.
+		show: async (url: string) => {
+			const rows = await queryAll(store, T.GEOResults, named([url]));
+			if (!rows.length) throw new Error(`no result row for ${canonicalUrl(url)} — nothing has fetched it`);
+			return mapLimit(rows, async (r) => ({
+				key: String(r.fields.Key ?? ""),
+				...resultView(r),
+				html: r.fields["Fetched at"] ? unfence(await store.body(r.id)) : null
+			}));
 		}
 	},
 
@@ -525,10 +667,10 @@ export const tools = {
 	// stages drain, so a count can never describe a different set than the run.
 	pending: async (draws = 1, o: PromptSelect = {}) => {
 		const [prompts, answers, queries, results] = await Promise.all([
-			queryAll(store, PROMPTS, promptFilter(o)),
-			queryAll(store, ANSWERS, ALL_ANSWERS),
-			queryAll(store, QUERIES, UNSEARCHED),
-			queryAll(store, RESULTS, unread())
+			queryAll(store, T.GEOPrompts, promptFilter(o)),
+			queryAll(store, T.GEOAnswers, ALL_ANSWERS),
+			queryAll(store, T.GEOQueries, UNSEARCHED),
+			queryAll(store, T.GEOResults, unread())
 		]);
 		const owed = prompts.filter((p) => promptView(p, answers).asks < draws);
 		return {
@@ -546,8 +688,8 @@ export const tools = {
 		const out: unknown[] = [];
 		for (let round = 0; round < draws; round++) {
 			const [prompts, answers] = await Promise.all([
-				queryAll(store, PROMPTS, promptFilter(o)),
-				queryAll(store, ANSWERS, ALL_ANSWERS)
+				queryAll(store, T.GEOPrompts, promptFilter(o)),
+				queryAll(store, T.GEOAnswers, ALL_ANSWERS)
 			]);
 			const owed = prompts.filter((p) => promptView(p, answers).asks < draws).map((p) => String(p.fields.Prompt ?? ""));
 			if (!owed.length) break;
@@ -558,9 +700,18 @@ export const tools = {
 		return out;
 	},
 
-	searchPending: async () => drain(store, QUERIES, UNSEARCHED, async (r) => (await searchQueries([r]))[0], "search"),
+	searchPending: async () => drain(store, T.GEOQueries, UNSEARCHED, async (r) => (await searchQueries([r]))[0], "search"),
 
-	readPending: () => drain(store, RESULTS, unread(), readResult, "read"),
+	// The drain, plus the by-hand door: name URLs and it reads exactly those, whatever state they are
+	// in; name none and it reads everything owed.
+	readPending: (urls?: readonly string[]) =>
+		drain(
+			store,
+			T.GEOResults,
+			urls?.length ? named(urls) : unread(),
+			(r) => readPage(r.id, String(r.fields.URL ?? "")),
+			"read"
+		),
 
 	// One pass over the whole loop. The stages are strictly ordered — a query only exists once an
 	// answer issued it, a result only once a query was searched — so one command is one pass.

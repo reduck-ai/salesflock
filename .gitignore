@@ -4,6 +4,10 @@ dist/
 # local env (the committed .env.example is the contract)
 .env
 
+# which tables THIS installation writes to — written by `sflock init`, one workspace's ids.
+# The schema they were built from is committed (agents/*/schema/*.json); the ids are not.
+models.local.json
+
 # lead output (run artifact)
 *.jsonl
 .vercel

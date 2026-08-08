@@ -1,0 +1,80 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Reddit Backlog",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "Name"
+  ],
+  "properties": {
+    "Comment URL": {
+      "type": "string",
+      "format": "uri",
+      "x-store": {
+        "type": "url"
+      }
+    },
+    "Decision": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "relation → Decisions",
+      "x-store": {
+        "type": "relation",
+        "target": "Decisions",
+        "dual": "Reddit Backlog"
+      }
+    },
+    "Name": {
+      "type": "string",
+      "x-store": {
+        "type": "title"
+      }
+    },
+    "Person": {
+      "type": "string",
+      "format": "uri",
+      "x-store": {
+        "type": "url"
+      }
+    },
+    "Posted at": {
+      "type": "string",
+      "description": "ISO 8601 date or date-time",
+      "x-store": {
+        "type": "date"
+      }
+    },
+    "Status": {
+      "type": "string",
+      "enum": [
+        "Pending approval",
+        "Waiting for OP",
+        "Dropped"
+      ],
+      "x-store": {
+        "type": "select"
+      }
+    },
+    "Thread": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "relation → RedditThreads",
+      "x-store": {
+        "type": "relation",
+        "target": "RedditThreads",
+        "dual": "Backlog"
+      }
+    },
+    "Thread URL": {
+      "type": "string",
+      "format": "uri",
+      "x-store": {
+        "type": "url"
+      }
+    }
+  }
+}

@@ -1,0 +1,63 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GEO Queries",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "Key"
+  ],
+  "properties": {
+    "Answers": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "relation → GEOAnswers",
+      "x-store": {
+        "type": "relation",
+        "target": "GEOAnswers",
+        "dual": "Queries"
+      }
+    },
+    "Engine": {
+      "type": "string",
+      "enum": [
+        "brave"
+      ],
+      "x-store": {
+        "type": "select"
+      }
+    },
+    "Key": {
+      "type": "string",
+      "x-store": {
+        "type": "title"
+      }
+    },
+    "Query": {
+      "type": "string",
+      "x-store": {
+        "type": "rich_text"
+      }
+    },
+    "Results": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "relation → GEOResults",
+      "x-store": {
+        "type": "relation",
+        "target": "GEOResults",
+        "dual": "Query"
+      }
+    },
+    "Searched at": {
+      "type": "string",
+      "description": "ISO 8601 date or date-time",
+      "x-store": {
+        "type": "date"
+      }
+    }
+  }
+}

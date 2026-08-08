@@ -47,6 +47,17 @@ export const queryParts = (key: string): { engine: string; query: string } => {
 	return { engine: key.slice(0, i), query: key.slice(i + 1) };
 };
 
+// The left-hand side of a result key for a page an ASSISTANT READ rather than one a query ranked.
+// A source has no query — the ask script returns one flat list per answer with no attribution — so
+// it needs something to occupy the slot a query key occupies, and this is it.
+//
+// `sources:` first, never `<provider>:sources`, and that ordering is the whole of what makes it
+// unambiguous: a query key is `<engine>:<text>`, so a Brave search for the word "sources" is
+// `brave:sources` — which the other spelling would collide with. Nothing can produce a key whose
+// first segment is `sources` except this function.
+export const sourceKey = (provider: string): string => `sources:${provider.toLowerCase()}`;
+export const isSourceKey = (key: string): boolean => key.startsWith("sources:");
+
 // Tracking parameters — carried by a URL, never part of what page it is. Prefix-matched for the
 // families that generate their own suffixes (utm_*, and the ad platforms' click ids).
 const JUNK = /^(utm_|ga_|mc_|pk_|_hs)|^(gclid|gbraid|wbraid|fbclid|msclkid|dclid|igshid|mkt_tok|ref|ref_src|source|si|s_kwcid|yclid|twclid|ttclid)$/i;

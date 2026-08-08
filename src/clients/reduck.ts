@@ -32,6 +32,64 @@ const apiKey = (): string => {
 	return key;
 };
 
+// CAN THIS PROCESS RUN A SCRIPT AT ALL? — the question a caller about to spend a human's CLICK on a
+// browser run needs answered BEFORE the click, not after. Returns null when the answer is yes, else
+// the reason in one sentence.
+//
+// PRESENCE IS NOT VALIDITY, and that distinction is the whole reason this is a round-trip rather
+// than a `!!process.env`: a key that is set but revoked, mistyped, or minted against another
+// environment passes every local check there is and then 401s at the exact moment it costs the most
+// (measured — `reduck 401 /run: invalid or unauthorized credential`, on a real reply, after the
+// reviewer had confirmed and moved on). So the question is put to the SERVER, over the same door and
+// the same credential path `/run` uses, because only the server knows.
+//
+// The probe is `GET /scripts?host=…`: credential-gated, side-effect free, and EMPTY BY CONSTRUCTION
+// — nothing is published under that host, so a valid key gets the cheapest possible true answer
+// rather than a page of rows nobody asked for.
+const PROBE_HOST = "reduck.invalid";
+const PROBE_MS = 4000;
+
+// ONLY A 401 BLOCKS, and this is `eliminate on evidence, never on absence` (README) applied to our
+// own credential. A 401 is the server positively ruling the key out — evidence, and durable. A 500,
+// a timeout or a dead socket is the server failing to answer, which says nothing about the key:
+// treating that as "cannot run" would grey out Confirm for the rest of the process over a blip, and
+// the cure would be worse than the disease. Inconclusive therefore reads as "go ahead" — the act
+// itself will report the truth if there is one, and a failed act now costs nothing but a retry.
+const probe = async (): Promise<{ blocked: string | null; definitive: boolean }> => {
+	const key = process.env.REDUCK_API_KEY;
+	if (!key)
+		return {
+			blocked: "no REDUCK_API_KEY in this process's environment",
+			definitive: true
+		};
+	try {
+		const res = await fetch(`${MCP_URL}/scripts?host=${PROBE_HOST}`, {
+			headers: { "X-API-Key": key.trim(), Accept: "application/json" },
+			signal: AbortSignal.timeout(PROBE_MS)
+		});
+		if (res.status === 401)
+			return {
+				blocked: "REDUCK_API_KEY is set but the Reduck run door rejected it (401)",
+				definitive: true
+			};
+		// A non-401 that is also not ok tells us the server is unwell, not that we are unwelcome.
+		return { blocked: null, definitive: res.ok };
+	} catch {
+		return { blocked: null, definitive: false };
+	}
+};
+
+// Asked once per process, because that is exactly how long an answer stays true: the key is injected
+// at launch (APP.md), so changing it means a restart, and a restart is a new memo. Only a DEFINITIVE
+// answer is kept — an inconclusive probe clears the memo, so the next caller asks again instead of
+// inheriting a verdict the server never gave.
+let asked: Promise<string | null> | undefined;
+export const credentialError = (): Promise<string | null> =>
+	(asked ??= probe().then(({ blocked, definitive }) => {
+		if (!definitive) asked = undefined;
+		return blocked;
+	}));
+
 const client = () => createReduckClient({ credential: { apiKey: apiKey() }, baseUrl: MCP_URL });
 
 // The single ceiling on concurrent requests to the run door. One `runAll` — however many scripts it

@@ -278,7 +278,7 @@ export const chunks = (s: string): { text: { content: string } }[] => {
 // else as prose. Notion's own errors are the backstop for a shape it would refuse (children on a
 // divider, say) — errors never pass silently, so nothing here guesses.
 
-type Block = { object: "block"; type: string; [payload: string]: unknown };
+export type Block = { object: "block"; type: string; [payload: string]: unknown };
 interface Ann {
 	bold?: boolean;
 	italic?: boolean;
@@ -369,6 +369,31 @@ const TODO = /^- \[([ xX])\] (.*)$/;
 const BULLET = /^[-*+] (.*)$/;
 const NUMBERED = /^\d+\. (.*)$/;
 const QUOTE = /^> (.*)$/;
+
+// verbatimBlocks(text, language) — text → code blocks holding it BYTE FOR BYTE. The counterpart of
+// `blocksOf` for content that is not prose and must never be read as it: a fetched page's raw HTML,
+// where a line starting "- " is markup and `**` is two asterisks. `blocksOf` would turn both into
+// something else, and the point of storing the page is that it is the page.
+//
+// The sizes are Notion's own, and they compose so that this is always ONE request: 2000 chars per
+// rich-text run, 100 runs per block, 100 blocks per append. So a block holds 200 000 chars and the
+// 4 MB an HTTP read is capped at (clients/http.ts MAX_BYTES) is at most 21 blocks. Slices never split
+// a surrogate pair, the same rule `chunks` and `pushRuns` obey — a lone half is invalid JSON on write.
+const RUNS_PER_BLOCK = 100;
+export const BLOCK_CHARS = 2000 * RUNS_PER_BLOCK;
+export const verbatimBlocks = (text: string, language = "plain text"): Block[] => {
+	const out: Block[] = [];
+	const code = codeLanguage(language);
+	for (let i = 0; i < text.length; ) {
+		let end = Math.min(i + BLOCK_CHARS, text.length);
+		if (end < text.length && /[\uD800-\uDBFF]/.test(text[end - 1])) end--;
+		const rich: Run[] = [];
+		pushRuns(rich, text.slice(i, end), {}); // no inline parsing — the content is literal
+		out.push({ object: "block", type: "code", code: { rich_text: rich, language: code } });
+		i = end;
+	}
+	return out;
+};
 
 export const blocksOf = (markdown: string): Block[] => {
 	const lines = markdown.replace(/\r\n?/g, "\n").split("\n");

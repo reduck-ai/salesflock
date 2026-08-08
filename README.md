@@ -11,7 +11,8 @@ says what it does. If a fact can drift, it belongs in code, not here.
    server already enforces is never re-typed by hand — it's compiled (`sflock`).
 
 2. **The operator CLI vs the funnel binary.** `sflock` is agent-agnostic and never mutates
-   the pipeline: it *sets up* (compile a destination's or source's contract → a TS type) and
+   the pipeline: it *sets up* (compile a destination's or source's contract → a TS type, and the
+   inverse — `sflock init`, which builds the tables those contracts declare in your own workspace) and
    *reviews* (`sflock decisions` — an agent's Decisions, `sflock prompts` — its live Prompt
    contracts, and `sflock docs` — the Writer's documents, which belong to no agent at all; over
    `createReviewer` or the Store seam, no entity bridge) and *calibrates* (`sflock learn`,
@@ -71,9 +72,16 @@ says what it does. If a fact can drift, it belongs in code, not here.
    attaches as a *satellite* pointing at the canonical entity; pipeline state (an
    outreach) is a *join*, not a column on either. Don't pollute what everyone reads.
 
-5. **Contracts are ground truth; types are generated.** Destinations compile via
-   `describe → TS` (`sflock pull`); sources compile their reduck output schema → TS
-   (`sflock bind`). The server validates args and output against the contract on every run.
+5. **Contracts are ground truth; types are generated — and the contract compiles BOTH WAYS.**
+   Destinations compile via `describe → JSON Schema → TS` (`sflock pull`); sources compile their
+   reduck output schema → TS (`sflock bind`). The server validates args and output against the
+   contract on every run. The schema is written to disk and committed because a contract that only
+   ever flowed one way could describe a table and not build one: `sflock init` reads those same
+   files back and creates the tables in a workspace that has none, which is the whole of what
+   setting up a fork is. What makes the round trip possible is that a schema names its relations by
+   MODEL KEY, never by an id — an id is a page in one workspace, so it is configuration, and it
+   lives with the secrets rather than in the repo (`models.local.json`). An agent's `config.ts`
+   declares the model NAMES its code addresses and nothing else.
    The converse holds too: **prose is authored, not compiled.** A judgment's instructions are
    a document, so a prompt is a FOLDER — `PROMPT.md` beside the `input.json` / `output.json` it is
    held to, and the `ground_truth.yaml` it is calibrated against. One judgment, one directory,

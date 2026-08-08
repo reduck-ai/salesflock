@@ -11,6 +11,7 @@ import { chunks, plain, relation, type NotionValue } from "$core/stores/notion.c
 import { schemaError } from "$core/output";
 import { hasFeedback, SAID } from "$core/review";
 import { agentFor } from "$agents/index";
+import { credentialError } from "$core/clients/reduck";
 import { promptFor } from "$lib/server/prompts";
 import type { Filter } from "$lib/filter";
 
@@ -35,15 +36,34 @@ export interface Decision {
 	outputSchema?: Record<string, unknown>; // the prompt's Output JSON Schema (the edit contract)
 	anchorField?: string; // the Input field the composer attaches below (set ⇒ attached; unset ⇒ floating)
 	system?: string; // the prompt's instructions — grounding the autocomplete as they ground the judge
+	// WHY THIS DECISION CANNOT BE CONFIRMED HERE — a precondition of the DEPLOYMENT, not of the
+	// output, so it is resolved with the rest of the contract and not discovered by trying. Absent ⇒
+	// nothing stands in the way. See `contractOf`.
+	blocked?: string;
 }
 
 // contractOf(kind) — everything a card needs about the judgment that produced it, from the LOCAL
 // prompt tree (server/prompts.ts) plus the roster. This used to be two memoized Notion reads per
 // distinct prompt (its properties, then its body); the contract is a file now, so it is a lookup.
-const contractOf = (kind?: string): Pick<Decision, "outputSchema" | "anchorField" | "system"> => ({
+//
+// `blocked` is the fourth thing, and it is composed of two halves that belong to different owners.
+// WHETHER this kind's Confirm performs an act is the roster's answer, free. WHY the credential
+// cannot perform one is the client's (`credentialError`) — a round-trip, because presence is not
+// validity, so it arrives as `credential` rather than being read here. The consequence sentence is
+// this app's, because only the app knows what the reviewer is about to press and what will keep
+// their words. Core states the fact; the app states what it means for this button.
+const contractOf = (
+	kind?: string,
+	credential?: string | null
+): Pick<Decision, "outputSchema" | "anchorField" | "system" | "blocked"> => ({
 	outputSchema: promptFor(kind)?.outputSchema,
 	anchorField: agentFor(kind)?.spec.anchor,
-	system: promptFor(kind)?.system
+	system: promptFor(kind)?.system,
+	blocked:
+		agentFor(kind)?.spec.act && credential
+			? `${credential} — confirming this decision posts through a browser, so it cannot run. ` +
+				`Save (⌘S) keeps your words.`
+			: undefined
 });
 
 // advanced(id) — has this Decision advanced the pipeline? The ONE reading of a DAG edge: its
@@ -158,17 +178,22 @@ export const page = async (
 
 // One page → a Decision: its title, its writable scalars flattened, and its "Depends on"
 // edges. The one mapping, shared by the queue (decisions) and the deep link (decision).
-const toDecision = ({
-	id,
-	url,
-	created_time,
-	properties
-}: {
-	id: string;
-	url: string;
-	created_time: string;
-	properties: Record<string, NotionValue>;
-}): Decision => {
+const toDecision = (
+	{
+		id,
+		url,
+		created_time,
+		properties
+	}: {
+		id: string;
+		url: string;
+		created_time: string;
+		properties: Record<string, NotionValue>;
+	},
+	// The credential verdict, resolved ONCE by the caller and threaded in — never asked per row: it
+	// is one fact about the process, and a probe per row would be a round-trip per row.
+	credential?: string | null
+): Decision => {
 	let title = "";
 	const fields: Record<string, string> = {};
 	for (const [name, v] of Object.entries(properties)) {
@@ -186,13 +211,17 @@ const toDecision = ({
 		fields,
 		deps: relation(properties["Depends on"]),
 		promptName,
-		...contractOf(promptName)
+		...contractOf(promptName, credential)
 	};
 };
 
 // decision(id) — one Decision by id, for a deep link. No gate: a link opens its decision
 // whatever its state (decided or blocked); the DAG gate governs only the queue's ordering.
-export const decision = async (id: string): Promise<Decision> => toDecision(await page(id));
+// Both reads at once — the page and the credential verdict are independent, so they overlap.
+export const decision = async (id: string): Promise<Decision> => {
+	const [pg, credential] = await Promise.all([page(id), credentialError()]);
+	return toDecision(pg, credential);
+};
 
 // The review working set for a Filter, ordered — the ONE query both the list and the deck consume
 // (the list maps it to summary rows, the deck uses it as the prev/next rail). Only `tab` is the
@@ -206,6 +235,10 @@ export const decisions = async (filter: Filter): Promise<Decision[]> => {
 	// flow's read side: `record` derives the same fact from the same emptiness, so the queue and the
 	// write can never disagree about what a note means.
 	const tabFilter = filter.tab === "past" ? { or: said(true) } : { and: said(false) };
+	// Started here, awaited below: the credential probe is one round-trip that has nothing to do with
+	// Notion, so letting it run alongside the paginated query costs the rail no wall-clock at all —
+	// and after the first page load of a process it is a resolved promise anyway.
+	const credential = credentialError();
 	const results: {
 		id: string;
 		url: string;
@@ -234,7 +267,10 @@ export const decisions = async (filter: Filter): Promise<Decision[]> => {
 	} while (cursor);
 	// Each row arrives whole: `toDecision` resolves its contract from the local prompt tree, so the
 	// list no longer fans out a Prompt read per distinct kind before it can render.
-	const rows = results.map(toDecision);
+	// An arrow, never a bare `results.map(toDecision)`: `map` passes the INDEX as the second argument,
+	// which would land a number where the credential verdict goes.
+	const verdict = await credential;
+	const rows = results.map((r) => toDecision(r, verdict));
 
 	// The DAG gate, derived at read time — never stored: a Decision is reviewable only once every
 	// upstream it depends on has *advanced* the pipeline. Only the review tab gates: past rows are a
@@ -389,6 +425,32 @@ export const record = async (
 		return void (feedback.trim() && (await refuse(pageId)));
 	}
 	const committedOutput = output;
+
+	// A CONFIRM BEGINS AS A SAVE. The working copy is written HERE — before the gates, before the
+	// act — because a draft is not a decision and has none of its atomicity requirement. What must
+	// never half-happen is the DEED, and that is still guaranteed below: nothing speaks to the world
+	// until every gate has passed, and "Final output" lands only once it has. The human's WORDS have
+	// the opposite requirement — they cost human effort, they claim no verdict, and losing them to a
+	// device that was asleep is the one outcome with no upside. (Measured: a missing REDUCK_API_KEY
+	// threw inside `act`, the request correctly persisted nothing, and the reviewer — already two
+	// cards on, the card unmounted with its state — came back to the judge's original text with
+	// their rewrite gone.) Recovery then needs no code at all: the card's opening precedence is
+	// already `Final output ?? Draft output ?? Output`.
+	//
+	// The NOTE is deliberately not among them, and that asymmetry is why this is not simply
+	// `working`: "Feedback" is a VERDICT channel ($core/review `SAID`) — a note with nothing
+	// committed IS a rejection. Writing it here would make a failed Confirm read as a refusal, in
+	// the Past tab and in the learn worklist, which is a failure inventing a decision. So the two
+	// channels that carry no verdict are saved, and the one that does waits for the commit that
+	// earns it.
+	//
+	// Unconditional, and one Notion write (~200ms) on a path that already spends tens of seconds on
+	// a browser run: it equally covers the schema 400, the DAG 409 and any store failure below, and
+	// a branch on "does this kind even act?" would buy nothing worth a second rule.
+	await patch(pageId, {
+		"Draft output": { rich_text: chunks(JSON.stringify(committedOutput)) },
+		"Final reasoning": { rich_text: chunks(finalReasoning ?? "") }
+	});
 
 	// The write runs in three waves — the calls were always independent, only the awaits serialized
 	// them. Wave 1: the decision page (everything below hangs off its properties).
