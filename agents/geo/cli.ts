@@ -1,22 +1,24 @@
 #!/usr/bin/env node
-// geo as CLI subcommands — JSON on stdout. Three stages joined by the store, each owed off data the
-// one before it had to write:
-//   prompts add → ask → [an Answer: the answer, the queries it searched, the sources it read]
-//               → search → [a Result per ranked page] → read → [status, text length, mentions]
-// Then you read the four nouns and conclude. Nothing here judges: every verdict is a string
-// comparison over evidence we fetched, computed at read time, so there is no model and no gate.
+// geo as CLI subcommands — JSON on stdout. TWO LEVERS and the reads:
+//   prompts add → ask → [an Answer: the answer, the queries it searched, the sources it read — fetched]
+//               → search → [the SERP in the query's body, a Result per ranked page — fetched]
+// A lever acts on what you name (default: everything in its table), records what it saw, and
+// fetches those pages in the same run. Then you read the four nouns and conclude. Nothing here
+// judges: every verdict is a string comparison over evidence we fetched, computed at read time.
 //
-// FOUR NOUNS, one per table, each with its own filters — because the tables carry different facts:
+// FOUR NOUNS, one per table. Columns are keys, cursors and relations; the RAW OBSERVATION lives in
+// the row's body; everything else is derived at read time:
 //   prompts   the questions we want to win (the only thing a human writes)
 //   answers   one run of one assistant on one prompt; three draws are three rows
-//   queries   one (engine, query) we have searched
-//   results   one page we have looked at, and what a plain HTTP client saw there. Two ways in, and
-//             the key says which: a QUERY ranked it (`brave:<q> :: <url>`), or an assistant READ it
-//             (`sources:<provider> :: <url>`). Same table and same fetch either way — the page's own
-//             raw HTML lands in the row's body, which is where a 403 tells you it was a bot wall.
+//   queries   one (engine, query). Its body holds the latest search WHOLE — the SERP as the script
+//             returned it — so rank, title, snippet and age are read out of it, never stored
+//   results   one PAGE, keyed on its canonical URL however we came to look at it. Its body holds the
+//             raw HTML as served — which is where a 403 tells you it was a bot wall — and mentions
+//             are counted off it under today's BRAND, so widening an alias re-counts the corpus
 //
-// Every stage is idempotent and reads what it owes off the data itself, so any of them re-runs
-// safely after a crash with nothing to reconcile.
+// No status logic and no retry queue: a failed page fetch records its reason on the row and the
+// next run that observes the page fetches it again. Both levers are idempotent over identity (a
+// prompt, a query, a page each stay one row), so re-running after a crash reconciles nothing.
 
 import "../../src/env.js";
 import { Command } from "commander";
@@ -109,7 +111,7 @@ queries
 withLimit(
 	queries
 		.command("get")
-		.description("One line per query: engine, harvested-or-authored, when we searched it, how many results it holds. `searchedAt` set with `results: 0` means we looked and found nothing — never the same as 'we never looked'.")
+		.description("One line per query: engine, harvested-or-authored, when we searched it, how many pages it currently ranks. `searchedAt` set with `ranked: 0` means we looked and found nothing — never the same as 'we never looked'. The SERP itself is the row's body; `results get --query` reads it out.")
 		.option("--query <q...>", "only these queries (full key, or the text alone)")
 		.option("--engine <e>", "only this index")
 ).action(async (f: { query?: string[]; engine?: string; limit?: string }) =>
@@ -120,19 +122,19 @@ withLimit(
 
 const results = program
 	.command("results")
-	.description("One row per (query, page): where it ranks, and what a plain HTTP client saw at it.");
+	.description("One row per PAGE (canonical URL): what a plain HTTP client saw at it, its raw HTML in the row's body. Rank is a fact about a (query, page) pair — name the query to see it.");
 
 withLimit(
 	results
 		.command("get")
-		.description("Rank, title, snippet, age, plus status / text length / mentions once fetched. `readable` is derived from status AND length together: a 403 is bot protection and a 200 with no text is a client-rendered shell, and those need opposite fixes.")
-		.option("--query <q...>", "only results of these queries")
+		.description("Status / text length / readable per page; with --query, also rank, title, snippet and age read out of that query's stored SERP. `readable` is derived from status AND length together: a 403 is bot protection and a 200 with no text is a client-rendered shell, and those need opposite fixes.")
+		.option("--query <q...>", "only pages these queries currently rank — and decorate each with its rank in that SERP")
 		.option("--url <urls...>", "only these pages")
 		.option("--ours", "only pages on our own domain")
-		.option("--mentions", "only pages that already name us — the cheap lever: they rank, and they can be updated")
+		.option("--mentions", "only pages that name us, counted off each stored body under today's BRAND — a body read per candidate, the one filter that costs more than a query")
 		.option("--unreadable", "only pages a crawler cannot read (blocked, or a JavaScript shell)")
-		.option("--source", "only pages an assistant READ (no query ranked them) — the set that provably reached the model")
-		.option("--ranked", "only pages a query RANKED")
+		.option("--source", "only pages an assistant READ — the set that provably reached the model (derived from the answers' source lists)")
+		.option("--ranked", "only pages some query currently ranks")
 ).action(
 	async (f: {
 		query?: string[];
@@ -149,7 +151,7 @@ withLimit(
 results
 	.command("show")
 	.argument("<url>", "the page, in any shape (canonicalized)")
-	.description("Every observation of one page, newest first, each with the raw HTML as served at that moment — which is what a status alone cannot tell you: a 403 that is a Cloudflare wall, a 404 on a page still ranking, a 200 whose content only exists in a browser. Several rows is the normal case: each search and each draw is its own observation.")
+	.description("One page in full: its row, its mention count under today's BRAND, and the raw HTML as served — which is what a status alone cannot tell you: a 403 that is a Cloudflare wall, a 404 on a page still ranking, a 200 whose content only exists in a browser.")
 	.action(async (url: string) => out(await tools.results.show(url)));
 
 // domains — the dimension that separated the winners once on-page features stopped predicting rank.
@@ -164,7 +166,7 @@ withLimit(
 	out(await tools.domains({ ...f, limit: num(f.limit) }))
 );
 
-// chain — the measurement the other three stages exist to make.
+// chain — the measurement the two levers exist to make.
 withLimit(
 	program
 		.command("chain")
@@ -172,61 +174,25 @@ withLimit(
 		.option("--prompt <texts...>", "only draws of these questions")
 ).action(async (f: { prompt?: string[]; limit?: string }) => out(await tools.chain({ ...f, limit: num(f.limit) })));
 
-// ─── the stages ──────────────────────────────────────────────────────────────────────────────────
+// ─── the two levers ──────────────────────────────────────────────────────────────────────────────
+//
+// No flags that decide FOR you, no dry-run, no third stage. A lever acts on what you name — or on
+// everything in its table — so a run's cost is exactly the list you gave it. Run it again to
+// measure again; a failed page fetch records its reason and is simply fetched again by the next
+// run that observes the page.
 
-const withDraws = (c: Command): Command =>
-	c
-		.option("--draws <n>", "how many answers each question should have — ONE ASK IS A DRAW, NOT A MEASUREMENT: the assistant reformulates differently, or does not search at all, on the next run. What is owed is `answers < draws`, so this accumulates rather than re-asking.", "1")
-		.option("--provider <p>", `which assistant (${Object.keys(PROVIDERS).join(", ")})`, DEFAULT_PROVIDER)
-		.option("--prompt <texts...>", "only these questions");
+program
+	.command("ask")
+	.argument("[prompts...]", "questions to ask, verbatim (default: every prompt in the table)")
+	.option("--provider <p>", `which assistant (${Object.keys(PROVIDERS).join(", ")})`, DEFAULT_PROVIDER)
+	.description("One new draw per prompt: record the answer and the queries it issued, and FETCH every page it read — 'what did it answer' and 'what was it looking at' are one question. Costs one claude.ai turn per prompt, on the paired browser — a device IS an account, and the answer depends on which one. A draw is a draw, not a measurement: run again for another.")
+	.action(async (prompts: string[], f: { provider: string }) => out(await tools.ask(prompts, f.provider)));
 
-const withDryRun = (c: Command): Command =>
-	c.option("--dry-run", "count what is owed instead of doing it — through the SAME filters the stages drain, so it cannot describe a different set than the run. Reads the store and nothing else.");
-
-withDryRun(
-	withDraws(
-		program
-			.command("ask")
-			.description("Ask each question still short of its draws: record the answer, open a Query row per reformulation, and FETCH every page it read — because 'what did it answer' and 'what was it looking at' are one question. Runs on the paired browser — a device IS an account, and the answer depends on which one. A source whose fetch fails is left for `read` to retry.")
-	)
-).action(async (f: { draws: string; provider: string; prompt?: string[]; dryRun?: boolean }) => {
-	const o = { prompt: f.prompt };
-	out(f.dryRun ? await tools.pending(Number(f.draws), o) : await tools.askPending(Number(f.draws), f.provider, o));
-});
-
-withDryRun(
-	program
-		.command("search")
-		.description("Search every query that has never been searched, on its own index. Each search is a new OBSERVATION — rank, snippet and age as they stood at that instant, stamped with when and from where — so nothing a previous search recorded is ever overwritten. A query whose operators Brave DROPPED records zero results and the reason, because a relaxed query is not evidence about the operator.")
-		.option("--again <window>", `also re-search anything last searched longer ago than this ("7d", "48h") — how the store becomes a series rather than a snapshot`)
-).action(async (f: { dryRun?: boolean; again?: string }) =>
-	out(f.dryRun ? (await tools.pending(1, {}, f.again)).search : await tools.searchPending(f.again))
-);
-
-withDryRun(
-	program
-		.command("read")
-		.description("Fetch every page that has never been fetched — plain HTTP, no browser, because a crawler has none either. Records status, text length, how many times we are named, and the page itself (raw HTML, in the row's body). Also re-reads anything counted under an older BRAND definition. A NETWORK failure is left unfetched rather than recorded, so a timeout is retried instead of frozen as a fact.")
-		.option("--url <urls...>", "read exactly these pages, whatever state they are in — the by-hand door. Naming a page means fetch it now; omit for everything owed.")
-).action(async (f: { dryRun?: boolean; url?: string[] }) =>
-	out(f.dryRun ? (await tools.pending()).read : await tools.readPending(f.url))
-);
-
-withDryRun(
-	withDraws(
-		program
-			.command("advance")
-			.description("ask → search → read, one pass over everything owed. The stages are strictly ordered (a query exists once an answer issued it; an observation once a query was searched), so one command is one pass.")
-			.option("--again <window>", `also re-search queries last searched longer ago than this ("7d") — the series, in one command`)
-	)
-).action(async (f: { draws: string; provider: string; prompt?: string[]; dryRun?: boolean; again?: string }) => {
-	const o = { prompt: f.prompt };
-	out(
-		f.dryRun
-			? await tools.pending(Number(f.draws), o, f.again)
-			: await tools.advance(Number(f.draws), f.provider, o, f.again)
-	);
-});
+program
+	.command("search")
+	.argument("[queries...]", "queries to search, by text or full key (default: every query in the table)")
+	.description("A fresh SERP per query: the whole result page lands in the query's own body (with when and from where), replacing the last one, and every ranked page is FETCHED now — so the stored pages match the SERP that ranked them. Costs one cloud browser per query. A query whose operators Brave DROPPED records zero ranked pages and the reason, because a relaxed query is not evidence about the operator.")
+	.action(async (queries: string[]) => out(await tools.search(queries)));
 
 program.parseAsync().catch((e: unknown) => {
 	console.error(renderError(e));

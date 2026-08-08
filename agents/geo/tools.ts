@@ -1,40 +1,43 @@
-// geo tools — the funnel. Three stages joined by the store, and what marks a row's place is DATA a
-// previous stage HAD to write, never a status anyone maintains:
+// geo tools — TWO LEVERS and the reads. No status logic anywhere: a lever does its thing to what
+// you name (default: everything in its table), records what it saw, and fetches those pages in the
+// same run. Running a lever IS the decision; run it again to measure again.
 //
 //   ask     one assistant, one prompt, one draw → an Answer row (the answer, the sources it read),
-//           a Query row per reformulation, and a Result row per SOURCE which it then reads on the
-//           spot. Owed while the prompt has fewer than `--draws` answers that measured something.
-//   search  one query on its engine → a Result row per ranked page. Owed while `Searched at` is empty.
-//   read    one page over plain HTTP → status, text length, mention count, and the page itself in the
-//           row's body. Owed while `Fetched at` is empty, OR while its `Brand` stamp is not today's.
+//           a Query row per reformulation — and every source page fetched on the spot.
+//   search  one query on its engine → the SERP lands whole in the query's own body, one Result row
+//           per ranked page — and every ranked page fetched on the spot.
 //
-// ONE FETCHER, TWO CALLERS (`readPage`): the read stage drains what is owed, and `ask` calls it
-// inline for the pages it just saw. A page an assistant READ and a page a query RANKED are the same
-// kind of thing — a document on the web we have looked at — so they are one table, one fetch and one
-// set of columns, told apart by the key: `sources:<provider>` where a query key would sit.
+// There is no third stage and no retry queue. A fetch that fails writes its reason on the row and
+// stamps nothing — truthful — and heals the next time any run observes that page, because a run
+// always fetches what it observes.
 //
-// THE TABLES ARE JOINED BY NOTION RELATIONS, and each one is written from the side whose list is
-// COMPLETE the moment it is written — the child. Notion syncs the dual, so the parent's list grows
-// without a single column of the parent being touched:
+// THE ONE RULE THE TABLES OBEY: columns are keys, cursors and relations; the RAW OBSERVATION lives
+// in the row's body; everything else is DERIVED at read time.
 //
-//   Answer.Prompt   → one prompt          ⇒ Prompt.Answers fills itself
-//   Answer.Queries  → that draw's whole reformulation set, known at write time
-//   Result.Query    → one query           ⇒ Query.Results fills itself
+//   a Query's body    the latest search, whole: `{searchedAt, egress, search}` where `search` is the
+//                     script's own output. Rank IS the index — so rank, title, snippet and age are
+//                     read out of the SERP, never stored as columns that could outlive it.
+//   a Result's body   the page as served (raw HTML). A Result row is ONE PAGE — keyed on the
+//                     canonical URL, however we came to look at it — so a page three queries rank
+//                     and two draws read is one row, one fetch, one body. Mentions are counted off
+//                     this body under today's BRAND, which is why no count is stored and no stamp
+//                     is needed: widening an alias re-counts the corpus on the next read.
 //
-// Never the other way round. A relation write REPLACES the list, so writing Prompt.Answers would
-// clobber every sibling already attached — the same trap reddit-engage's `attach` exists to avoid.
-// Written from the child, there is no list to clobber and nothing to read-before-write.
+// THE TABLES ARE JOINED BY NOTION RELATIONS, each written from the side whose list is COMPLETE the
+// moment it is written:
 //
-// EVERY VERDICT IS DERIVED, NOTHING IS CACHED. `Asks`, `Cited`, whether an answer read us, whether a
-// page is readable, whether a URL is ours, the diagnosis itself — all computed here from raw columns
-// and relations, every time. The one exception is `Mentions`, because the page body it counts is
-// megabytes and we throw it away; it therefore carries the `Brand` stamp, which is what puts a
-// re-count into the owed set the moment BRAND changes rather than leaving old numbers to rot.
+//   Answer.Prompt    → one prompt                      ⇒ Prompt.Answers fills itself
+//   Answer.Queries   → that draw's whole reformulation set, known at write time
+//   Query.Results    → the SERP's page set, known at search time — REPLACED on re-search, so the
+//                      relation always reads "currently ranked" (the superseded SERP is only ever
+//                      in the body it came from) ⇒ Result.Query fills itself
+//
+// Answers do NOT relate to Results: a source list is the assistant's own report (the `Sources` text,
+// verbatim), and the join to what we fetched is the canonical URL itself — a key, not a relation.
 
 import { getStore, queryAll } from "../../src/stores/index.js";
 import type { Row } from "../../src/stores/index.js";
 import { mapLimit, batch } from "../../src/concurrency.js";
-import { drain } from "../../src/drain.js";
 import { renderError } from "../../src/errors.js";
 import { log } from "../../src/log.js";
 import * as http from "../../src/clients/http.js";
@@ -47,11 +50,10 @@ import {
 	queryKey,
 	queryParts
 } from "../../src/clients/geo/index.js";
-import { sinceIso } from "../../src/time.js";
 import type { RunOpts } from "../../src/clients/reduck.js";
-import config, { BRAND, brandStamp, DEFAULT_PROVIDER, ENGINES, PROVIDERS, engineOf } from "./config.js";
+import type { Search } from "../../src/clients/geo/schema.js";
+import config, { BRAND, DEFAULT_PROVIDER, ENGINES, PROVIDERS, engineOf } from "./config.js";
 import type { GEOAnswers } from "./schema/GEOAnswers.js";
-import type { GEOPrompts } from "./schema/GEOPrompts.js";
 import type { GEOQueries } from "./schema/GEOQueries.js";
 import type { GEOResults } from "./schema/GEOResults.js";
 
@@ -68,8 +70,7 @@ const T = config.models;
 // non-canonical key by CREATING A SECOND PAGE — silent on the way in, permanent once made, and
 // invisible to every filter here. Minting it here makes that unreachable rather than merely unlikely.
 
-const writePrompt = (prompt: string, fields: Omit<Partial<GEOPrompts>, "Prompt"> = {}) =>
-	store.upsert(T.GEOPrompts, { ...fields, Prompt: promptKey(prompt) }, "Prompt");
+const writePrompt = (prompt: string) => store.upsert(T.GEOPrompts, { Prompt: promptKey(prompt) }, "Prompt");
 
 // An answer is CREATED, never upserted: it accumulates. Three draws of one prompt are three rows,
 // because the assistant answers differently each time and that variance IS the measurement. It also
@@ -79,25 +80,71 @@ const writeAnswer = (fields: GEOAnswers) => store.create(T.GEOAnswers, fields);
 const writeQuery = (key: string, fields: Omit<Partial<GEOQueries>, "Key"> = {}) =>
 	store.upsert(T.GEOQueries, { ...fields, Key: key }, "Key");
 
-// An observation is CREATED, never upserted, and that is the whole correction. It used to be keyed
-// on `<query> :: <url>`, so re-searching a query OVERWROTE its previous rank — the store could only
-// ever say where a page stood today, never that it had moved. A ranking is not a property of a page,
-// it is something that happened at a moment; so is a reading. Both belong on a row whose identity IS
-// that moment, beside the query or the answer that occasioned it.
-//
-// It takes no key for the same reason `writeAnswer` takes none: nothing ever looks one up. They are
-// reached through their relations, and read newest-first.
-const createResult = (fields: GEOResults) => store.create(T.GEOResults, fields);
+// A result is ONE PAGE, converging on its canonical URL — which is the row's title, so there is no
+// second Name to invent and nothing to drift. Upserted from every door in (a SERP hit, an
+// assistant's source, a by-hand read), so however many ways we meet a page it is one row.
+const writeResult = (url: string, fields: Omit<Partial<GEOResults>, "URL"> = {}) =>
+	store.upsert(T.GEOResults, { ...fields, URL: canonicalUrl(url) }, "URL");
 
-// WHERE a run went, as one short string on the observation — `cloud/us-east-1`, `device:c12b4b27`.
-// Derived from the target actually used rather than from config, so the stamp cannot disagree with
-// where the browser was. It is not a detail: a residential US proxy, a datacenter and a laptop are
-// three different measurements of Brave, and without this the rows are indistinguishable.
+// WHERE a run went, as one short string inside the SERP envelope — `cloud/us-east-1`,
+// `device:c12b4b27`. Derived from the target actually used rather than from config, so the record
+// cannot disagree with where the browser was. A residential proxy, a datacenter and a laptop are
+// three different measurements of Brave, and without this the observations are indistinguishable.
 const egressOf = (opts: RunOpts): string => {
 	const t = opts.target ?? "extension";
 	const at = typeof t === "string" ? t : `device:${t.deviceId.slice(0, 8)}`;
 	return `${at}${opts.country ? `/${opts.country}` : ""}${opts.region ? `/${opts.region}` : ""}`;
 };
+
+// ─── the raw observations, back out of the bodies ────────────────────────────────────────────────
+
+// The body back out of the store, without the code fence. `store.body` renders a page as MARKDOWN,
+// so the blocks `setBody` wrote come back wrapped in a fence — the store's rendering of what it
+// holds, not a thing the content contains. Three exact edits rather than a fence parser: the opening
+// fence, the closing one, and the seam between two consecutive blocks (content past ~200k chars
+// spans several). Anything else that looks like a fence is the content's own and is left alone.
+const unfence = (markdown: string): string =>
+	markdown
+		.replace(/^```\w*\n/, "")
+		.replace(/\n```$/, "")
+		.replace(/\n```\n\n```\w*\n/g, "");
+
+// What one search observed, whole — the query's body. `null` for a query never searched (no body to
+// read) and for a pre-envelope row, which reads as "no SERP on record" rather than an error: the
+// column cursor (`Searched at`) is still what says whether a search still needs to run.
+export interface SerpEnvelope {
+	searchedAt: string;
+	egress: string;
+	search: Search;
+}
+const serpOf = async (queryRowId: string): Promise<SerpEnvelope | null> => {
+	const body = unfence(await store.body(queryRowId)).trim();
+	if (!body) return null;
+	try {
+		return JSON.parse(body) as SerpEnvelope;
+	} catch {
+		return null;
+	}
+};
+
+// rank/title/snippet/age for every page a SERP ranked, keyed by canonical URL. Rank IS the index —
+// the SERP is an ordered list, and that order is the whole fact.
+const rankedOf = (env: SerpEnvelope | null): Map<string, { rank: number; title: string; snippet: string | null; age: string | null }> => {
+	const m = new Map<string, { rank: number; title: string; snippet: string | null; age: string | null }>();
+	for (const [i, r] of (env?.search.results ?? []).entries()) {
+		try {
+			const u = canonicalUrl(r.url);
+			if (!m.has(u)) m.set(u, { rank: i + 1, title: r.title, snippet: r.snippet ?? null, age: r.age ?? null });
+		} catch {
+			// a URL too malformed to canonicalize stays in the body, unranked here
+		}
+	}
+	return m;
+};
+
+// How many times the page names us — counted off the STORED body, under today's BRAND, at the
+// moment somebody asks. The whole reason no `Mentions` column (and no stamp over it) exists.
+const mentionsOf = (html: string): number => http.count(http.textOf(html), BRAND.aliases);
 
 // ─── the derivations: everything the tables deliberately do not store ────────────────────────────
 
@@ -116,6 +163,20 @@ const ours = (url: string): boolean => {
 		return false;
 	}
 };
+
+// A source list, canonicalized where possible — the join key into the Results table. An entry too
+// malformed to canonicalize is dropped here and survives verbatim in the `Sources` text.
+const canonSources = (sources: string[]): string[] => [
+	...new Set(
+		sources.flatMap((u) => {
+			try {
+				return [canonicalUrl(u)];
+			} catch {
+				return [];
+			}
+		})
+	)
+];
 
 // The four facts a diagnosis is made of. A struct rather than a Row, because the verdict is a pure
 // function of a DRAW and the caller that has just made one holds these directly — it should not have
@@ -179,10 +240,9 @@ export const promptView = (p: Row, answers: Row[]) => {
 	};
 };
 
-// A fetched result, as read: the two booleans the columns deliberately do not hold. `readable` needs
-// BOTH halves and that is the whole reason `Status` and `Text length` are separate columns — a 403
-// is bot protection (nothing you write helps) and a 200 with no text is a client-rendered shell
-// (server-render it), and the two need opposite work.
+// A fetched result, as read: `readable` needs BOTH halves and that is the whole reason `Status` and
+// `Text length` are separate columns — a 403 is bot protection (nothing you write helps) and a 200
+// with no text is a client-rendered shell (server-render it), and the two need opposite work.
 const MIN_TEXT = Number(process.env.GEO_MIN_TEXT) || 500;
 
 // What kind of page this is — the dimension that turned out to carry the analysis, and the one a
@@ -207,8 +267,10 @@ export const kindOf = (url: string): string => {
 	return "other/marketing";
 };
 
-// `qKey` is the id→key resolver for the Query relation: the caller holds one read of the Queries
-// table, so following the join costs nothing. Absent ⇒ the query reads as null rather than wrong.
+// One page, as read off its row. Rank is NOT here, deliberately: rank is a fact about a (query,
+// page) pair at the query's latest search, so it only exists in a reading that names the query —
+// `results get --query` decorates from that SERP. A bare rank column was ambiguous the moment a
+// page ranked for two queries.
 export const resultView = (r: Row, qKey: (id: string) => string = () => "") => {
 	const url = String(r.fields.URL ?? "");
 	const status = Number(r.fields.Status ?? 0);
@@ -216,24 +278,8 @@ export const resultView = (r: Row, qKey: (id: string) => string = () => "") => {
 	const fetched = !!r.fields["Fetched at"];
 	return {
 		url,
-		// WHEN, and from WHERE. An observation without its instant is the row this table used to hold —
-		// a rank with no way to tell whether it is today's or a month old.
-		observedAt: r.fields["Observed at"] ?? r.fields["Fetched at"] ?? null,
-		egress: r.fields.Egress ?? null,
-		// The query, through the relation — `qKey` is the id→key map the caller already built from one
-		// read of the (small) Queries table. It used to be parsed out of this row's key, which is how
-		// the key came to be load-bearing and therefore unable to accumulate.
-		query: (r.rel.Query ?? []).map((id) => qKey(id)).filter(Boolean)[0] ?? null,
-		rank: r.fields.Rank ?? null,
-		title: r.fields.Title ?? null,
-		snippet: r.fields.Snippet ?? null,
-		age: r.fields.Age ?? null,
-		// WHY we looked at this page: a query RANKED it, or an answer READ it. Both are relations now,
-		// so the row says which without a prefix encoded into a key.
-		source: (r.rel.Answers ?? []).length > 0,
-		// What KIND of page — derived, never stored, for the reason `ours` and `readable` are: it is a
-		// function of the URL under today's rules, so improving the classifier reclassifies the whole
-		// corpus instead of leaving old labels behind.
+		// Every query currently ranking this page, through the relation.
+		queries: (r.rel.Query ?? []).map(qKey).filter(Boolean),
 		kind: kindOf(url),
 		ours: url ? ours(url) : false,
 		fetchedAt: r.fields["Fetched at"] ?? null,
@@ -243,9 +289,7 @@ export const resultView = (r: Row, qKey: (id: string) => string = () => "") => {
 		textLength: fetched ? len : null,
 		// Unfetched ⇒ unknown, not false. The two negatives must not fuse: "we looked and it is a
 		// shell" and "we never looked" are different facts, and only one of them is evidence.
-		readable: fetched ? status >= 200 && status < 300 && len >= MIN_TEXT : null,
-		mentions: fetched ? Number(r.fields.Mentions ?? 0) : null,
-		stale: fetched && String(r.fields.Brand ?? "") !== brandStamp()
+		readable: fetched ? status >= 200 && status < 300 && len >= MIN_TEXT : null
 	};
 };
 
@@ -273,8 +317,8 @@ export interface ResultSelect {
 	ours?: boolean;
 	mentions?: boolean;
 	unreadable?: boolean;
-	source?: boolean; // only pages an assistant READ
-	ranked?: boolean; // only pages a query RANKED
+	source?: boolean; // only pages an assistant READ (derived from the answers' source lists)
+	ranked?: boolean; // only pages some query currently ranks
 	limit?: number;
 }
 
@@ -291,6 +335,7 @@ const all = (title: string) => ({
 });
 const ALL_ANSWERS = { and: [all("Name")] };
 const ALL_QUERIES = { and: [all("Key")] };
+const ALL_RESULTS = { and: [all("URL")] };
 
 // `limit` is deliberately absent from every filter: it trims the ANSWER, never the work, so it is a
 // property of a reading and not a fact about the set. A filter that honoured it would hide work.
@@ -319,72 +364,97 @@ const queryFilter = (o: QuerySelect): object => ({
 	]
 });
 
-// An observation is narrowed by its RELATIONS now, not by a prefix of its key — the key is gone, and
-// with it the trick of encoding the query into the row's identity. `--query` therefore resolves the
-// query row first and filters on `contains` (Notion's only relation predicate); a caller that names
-// no query pays for no lookup.
-const resultFilter = async (o: ResultSelect): Promise<object> => {
-	const ids: string[] = [];
-	for (const q of o.query ?? []) {
+// Resolve `--query` to its row (the SERP holder and the relation anchor). Loud when nothing has
+// searched it — a filter over a query that does not exist would read as an empty corpus.
+const queryRowsOf = async (names: readonly string[]): Promise<Row[]> => {
+	const rows: Row[] = [];
+	for (const q of names) {
 		const [row] = await store.query(T.GEOQueries, { property: "Key", title: { equals: normQuery(q) } });
 		if (!row) throw new Error(`no query "${normQuery(q)}" — nothing has searched it`);
-		ids.push(row.id);
+		rows.push(row);
 	}
+	return rows;
+};
+
+const resultFilter = (o: ResultSelect, queryIds: string[]): object => ({
+	and: [
+		all("URL"),
+		...anyOf(queryIds.map((id) => ({ property: "Query", relation: { contains: id } }))),
+		...anyOf((o.url ?? []).map((u) => ({ property: "URL", title: { equals: canonicalUrl(u) } }))),
+		// `contains` casts a slightly wide net (any URL carrying the domain as a substring); the
+		// reader post-filters with `ours`, which is anchored on the host. The store clause is only
+		// there to keep the read small.
+		...(o.ours ? [{ property: "URL", title: { contains: BRAND.domain } }] : []),
+		...(o.ranked ? [{ property: "Query", relation: { is_not_empty: true } }] : [])
+	]
+});
+
+// ─── the fetch: one page over plain HTTP, shared by both levers ──────────────────────────────────
+
+// readPage — one page over plain HTTP: can a crawler read it, and what does it actually say. No
+// browser, because a crawler has none either: a page that only renders in one is a page a crawler
+// cannot read, and that IS the finding.
+//
+// THE ORDER IS THE SAFETY PROPERTY: body FIRST, columns (with `Fetched at`) LAST. `Fetched at` says
+// "this row's body is the page as of this instant", so it must be the final thing that can fail — a
+// body write that 413s then leaves the row saying what it truthfully is (last successful fetch, or
+// never fetched), instead of a row stamped fetched with no page behind it (measured: exactly that
+// happened before the order was fixed).
+//
+// A NETWORK-level failure is not an answer ABOUT the page. A timeout, a DNS blip or a dead socket
+// says nothing about whether a crawler can read it — so only the `Error` lands (why the last try
+// failed) and nothing else moves. An HTTP status — 403, 404, 500 — IS the server's answer, so it
+// lands and stamps. Nothing schedules a retry: the next run that observes this page fetches it again.
+export const readPage = async (id: string, url: string) => {
+	if (!url) throw new Error(`result ${id} has no URL`);
+	const got = await http.get(url);
+	if (!got.status) {
+		await store.patch(T.GEOResults, id, { Error: got.error ?? "no response" });
+		return { url, status: 0, error: got.error ?? "no response" };
+	}
+	await store.setBody(id, got.html, "html");
+	await store.patch(T.GEOResults, id, {
+		Status: got.status,
+		"Text length": got.text.length,
+		// Where the redirects ended — a soft-404 landing on the homepage is only visible here.
+		"Final URL": got.finalUrl,
+		Error: "",
+		"Fetched at": new Date().toISOString()
+	});
 	return {
-		and: [
-			all("Name"),
-			...anyOf(ids.map((id) => ({ property: "Query", relation: { contains: id } }))),
-			...anyOf((o.url ?? []).map((u) => ({ property: "URL", url: { equals: canonicalUrl(u) } }))),
-			// `--ours` needs no `Ours` column: the domain is in the URL, which is why the boolean was
-			// never worth storing. `--source` is now the Answers relation rather than a key prefix.
-			...(o.ours ? [{ property: "URL", url: { contains: BRAND.domain } }] : []),
-			...(o.source ? [{ property: "Answers", relation: { is_not_empty: true } }] : []),
-			...(o.ranked ? [{ property: "Query", relation: { is_not_empty: true } }] : []),
-			...(o.mentions ? [{ property: "Mentions", number: { greater_than: 0 } }] : [])
-		]
+		url,
+		status: got.status,
+		textLength: got.text.length,
+		htmlLength: got.html.length,
+		mentions: mentionsOf(got.html),
+		...(got.finalUrl !== url ? { finalUrl: got.finalUrl } : {})
 	};
 };
 
-// ─── what is owed ────────────────────────────────────────────────────────────────────────────────
+// fetchPages(urls, label) — one row per canonical URL (upserted, so a page every run keeps meeting
+// stays one row), then fetch EVERY one of them, now. No filter: a run fetches what it observed, so
+// the stored body is the page as it stood at the observation — and a page whose last fetch failed
+// heals here without anything having scheduled it. A failure is caught per page (logged, its reason
+// patched onto the row) so one dead host never takes down the run. Each entry carries its row `id`,
+// because the caller that just observed these pages is about to relate to them (search's SERP set).
+const fetchPages = (urls: readonly string[], label: string) =>
+	mapLimit(
+		[...urls],
+		async (u) => {
+			const ref = await writeResult(u);
+			return readPage(ref.id, canonicalUrl(u))
+				.then((page) => ({ id: ref.id, ...page }))
+				.catch(async (e: unknown) => {
+					const error = renderError(e);
+					log("read", `${u} → ${error}`);
+					await store.patch(T.GEOResults, ref.id, { Error: error }).catch(() => undefined);
+					return { id: ref.id, url: u, error };
+				});
+		},
+		{ label }
+	);
 
-// A query owes a search when it has never been searched — and, with `--again`, when the last one is
-// older than the window you name. That second clause is what turns the store into a series: the same
-// query searched twice is two observations, and only re-searching produces the second one. Opt-in,
-// so a routine run never silently spends a browser on work nobody asked for.
-const unsearched = (again?: string): object => ({
-	and: [
-		all("Key"),
-		again
-			? { or: [{ property: "Searched at", date: { is_empty: true } }, { property: "Searched at", date: { before: sinceIso(again) } }] }
-			: { property: "Searched at", date: { is_empty: true } }
-	]
-});
-const UNSEARCHED = unsearched();
-
-// A result owes a read when it has never been fetched, OR when what it counted is no longer what
-// "us" means. The second clause is the `Brand` stamp paying for itself: adding an alias to BRAND puts
-// every counted result back in this set automatically, with no migration and nothing to remember.
-const unread = (): object => ({
-	and: [
-		all("Name"),
-		{
-			or: [
-				{ property: "Fetched at", date: { is_empty: true } },
-				{ property: "Brand", rich_text: { does_not_equal: brandStamp() } }
-			]
-		}
-	]
-});
-
-// NAMING pages is the manual door, and it does NOT ask whether they are owed: saying a URL out loud
-// is saying "fetch this now" — the point of a by-hand read is to look again at something you are
-// working on. Every other read stays derived from the data (`unread` above), so this cannot make the
-// backlog quietly disappear: it addresses rows, one at a time, by the identity you typed.
-const named = (urls: readonly string[]): object => ({
-	and: [all("Name"), ...anyOf(urls.map((u) => ({ property: "URL", url: { equals: canonicalUrl(u) } })))]
-});
-
-// ─── the stages ──────────────────────────────────────────────────────────────────────────────────
+// ─── the two levers ──────────────────────────────────────────────────────────────────────────────
 
 // ask — one draw. The write order IS the relation order: the prompt and the queries must exist
 // before the answer can point at them, and by the time it does its whole list is known. So there is
@@ -412,75 +482,39 @@ export const ask = async (prompt: string, provider: string = DEFAULT_PROVIDER) =
 		writeQuery(queryKey(engine, q), { Engine: engine as GEOQueries["Engine"], Query: q.trim().toLowerCase() })
 	);
 
-	// Each SOURCE becomes an observation too — the pages that provably reached the model, which is the
-	// one set worth reading and the one set nothing used to fetch. Same table and same stages as a
-	// ranked hit, and now the same SHAPE: an observation with no query, whose `Answers` relation says
-	// who read it. It used to need a synthetic `sources:<provider>` key to occupy a query key's slot;
-	// an event has no key, so that whole encoding stopped being necessary.
-	//
-	// A URL too malformed to canonicalize gets no row and stays in the `Sources` text below — which is
-	// why that column is kept: it is what the script REPORTED, this is what we could resolve of it.
-	const canon = [
-		...new Set(
-			sources.flatMap((u) => {
-				try {
-					return [canonicalUrl(u)];
-				} catch {
-					return [];
-				}
-			})
-		)
-	];
-	const pageRefs = await mapLimit(canon, (u) =>
-		createResult({ Name: `read · ${u.slice(8, 70)}`, URL: u, "Observed at": askedAt, Egress: egressOf(spec.target) })
-	);
-
 	const fields: GEOAnswers = {
 		Name: `${p.slice(0, 60)} — ${provider} — ${askedAt.slice(0, 19).replace("T", " ")}`,
 		Prompt: [promptRef.id],
 		Queries: queryRefs.map((r) => r.id),
-		// Written from the ANSWER, whose source list is complete the moment it is written — the same rule
-		// `Queries` follows. Notion syncs the dual, so each page's `Answers` fills itself and nothing here
-		// appends to a list it would have had to read back first.
-		Pages: pageRefs.map((r) => r.id),
 		Provider: provider as GEOAnswers["Provider"],
 		Model: spec.model,
 		"Asked at": askedAt,
 		Conversation: a.conversationId,
 		"Stop reason": a.stopReason ?? "",
 		Answer: a.answer,
-		// Sources stay RAW TEXT beside the relation, and the two are different facts rather than one fact
-		// twice: this is the list the script REPORTED, verbatim, while `Pages` is what we resolved it to
-		// (canonicalized, deduped, and short a URL that would not parse). Keeping it is also what lets
-		// `verdictOf` stay a pure function of one row — "did it read us" is answered fresh under today's
-		// BRAND, off the text, with no second table to join.
+		// The list the script REPORTED, verbatim — the raw observation. What we fetched of it lives in
+		// the Results table, joined by canonical URL; an entry too malformed to canonicalize survives
+		// only here, which is why the column is kept. It is also what lets `verdictOf` stay a pure
+		// function of one row: "did it read us" is answered fresh under today's BRAND, off this text.
 		Sources: sources.join("\n")
 	};
 	const ref = await writeAnswer(fields);
 
-	// …and now READ them, in the same command. A source is a page that provably reached the model, so
-	// "what did it answer" and "what was it looking at" are one question, and asking them separately
-	// meant the second one never got asked at all.
+	// …and now LOOK at what it read, in the same motion. A source is a page that provably reached the
+	// model, so "what did it answer" and "what was it looking at" are one question.
 	//
-	// AFTER the answer is written, deliberately: the ask is the expensive, unrepeatable part (a draw is
-	// a draw — the same prompt answers differently next time), so nothing that can fail is allowed to
-	// stand between it and its record. A fetch that fails is caught and left unfetched, which puts the
-	// row straight into what `geo read` owes — no special case, and no draw lost to a dead socket.
-	const read = await mapLimit(
-		pageRefs,
-		(r, i) =>
-			readPage(r.id, canon[i]).catch((e: unknown) => {
-				log("read", `${canon[i]} → ${renderError(e)} (left unfetched — \`geo read\` will retry)`);
-				return null;
-			}),
-		{ label: `read sources for ${p.slice(0, 32)}` }
-	);
+	// AFTER the answer is written, deliberately: the ask is the expensive, unrepeatable part (a draw
+	// is a draw — the same prompt answers differently next time), so nothing that can fail is allowed
+	// to stand between it and its record. A fetch that fails records its reason on the row and the
+	// next run that observes the page fetches it again — no draw lost to a dead socket.
+	const canon = canonSources(sources);
+	const read = await fetchPages(canon, `read sources for ${p.slice(0, 32)}`);
 
 	const verdict = verdictOf({ stopReason: a.stopReason ?? "", queries: queries.length, sources, answer: a.answer });
 	log(
 		"ask",
 		`${p.slice(0, 48)} @${provider} → ${verdict} (${queries.length} queries, ${sources.length} sources, ` +
-			`${read.filter(Boolean).length}/${pageRefs.length} read)`
+			`${read.filter((r) => !("error" in (r as object))).length}/${canon.length} read)`
 	);
 	return {
 		prompt: p,
@@ -488,29 +522,33 @@ export const ask = async (prompt: string, provider: string = DEFAULT_PROVIDER) =
 		verdict,
 		queries,
 		sources: sources.length,
-		pages: read.filter(Boolean),
+		pages: read,
 		answer: ref.url
 	};
 };
 
-// search — one query on its engine, and its results point back at it.
+// search — one query on its engine. The SERP lands WHOLE in the query's own body (the raw
+// observation, egress and instant included), the ranked pages become Result rows (converged on URL),
+// and the relation is replaced so it always reads "currently ranked". Then the new pages are
+// fetched, in the same motion.
 //
 // `operatorsApplied: false` is the one guard: Brave found too few documents matching the operator,
 // dropped it, and answered a relaxed query over the whole web. Those hits are not evidence about the
-// operator, so none are written — but the REASON is, on the query's `Error`. Recording nothing made
-// "Brave refused the operator" and "nothing matched" and "never tried" the same row.
+// operator, so none are recorded as ranked — but the observation still lands in the body, and the
+// REASON on the query's `Error`. Recording nothing made "Brave refused the operator" and "nothing
+// matched" and "never tried" the same row.
 export const searchQueries = async (rows: Row[], target: RunOpts = ENGINES.brave.target) => {
 	if (!rows.length) return [];
 	const keys = rows.map((r) => String(r.fields.Key));
-	const observedAt = new Date().toISOString();
+	const searchedAt = new Date().toISOString();
 	const egress = egressOf(target);
 	const outcomes = await searchAll(keys.map((k) => queryParts(k).query), target);
 	return mapLimit(rows, async (row, i) => {
 		const key = keys[i];
 		const outcome = outcomes[i];
 		if (outcome.status === "rejected") {
-			// The failure is a fact about this attempt, so it lands on the row. `Searched at` stays empty,
-			// which is what keeps the query owed and retried — the error only says why the last try failed.
+			// The failure is a fact about this attempt, so it lands on the row — truthfully: `Searched at`
+			// keeps whatever the last SUCCESSFUL search stamped, and `Error` says why this try failed.
 			const error = renderError(outcome.reason);
 			await writeQuery(key, { Error: error }).catch(() => undefined);
 			return { query: key, error };
@@ -518,92 +556,33 @@ export const searchQueries = async (rows: Row[], target: RunOpts = ENGINES.brave
 		const s = outcome.value;
 		const relaxed = !s.operatorsApplied;
 		const hits = relaxed ? [] : s.results;
-		await mapLimit(hits, (r, rank) =>
-			createResult({
-				Name: `${key.slice(0, 40)} · rank ${rank + 1} · ${observedAt.slice(0, 16).replace("T", " ")}`,
-				Query: [row.id], // written from the child; Query.Results fills itself
-				"Observed at": observedAt,
-				Egress: egress,
-				URL: canonicalUrl(r.url),
-				Rank: rank + 1,
-				Title: r.title,
-				Snippet: r.snippet ?? undefined,
-				Age: r.age ?? undefined
-			}).catch(() => undefined)
-		);
-		// `Searched at` is the drain's cursor — the instant of the MOST RECENT search, which is the one
-		// thing a Notion filter cannot compute over the observations themselves. `Error` is cleared on a
-		// clean run, so the column always describes the latest attempt and never an old one.
+		const urls = canonSources(hits.map((r) => r.url));
+
+		// The SERP whole into the query's body (the observation), then its pages fetched now, then the
+		// stamp and the relation last — so a query is never marked searched without its SERP on record,
+		// and the relation is written from the ids the fetch just handed back.
+		await store.setBody(row.id, JSON.stringify({ searchedAt, egress, search: s } satisfies SerpEnvelope, null, 1), "json");
+		const read = await fetchPages(urls, `read ${key.slice(0, 32)}`);
 		await writeQuery(key, {
-			"Searched at": observedAt,
-			Error: relaxed ? "Brave dropped the operators and answered a relaxed query — no results recorded" : ""
+			"Searched at": searchedAt,
+			Error: relaxed ? "Brave dropped the operators and answered a relaxed query — no results recorded" : "",
+			// REPLACED, not appended: the relation means "currently ranked", and the superseded SERP is
+			// in the body it came from.
+			Results: read.map((r) => r.id)
 		});
-		log("search", `${key} → ${hits.length} results @${egress}${relaxed ? " (operators dropped — relaxed query, not recorded)" : ""}`);
-		return { query: key, results: hits.length, egress, ...(relaxed ? { relaxed: true } : {}) };
+		const fetched = read.filter((r) => !("error" in r)).length;
+		log(
+			"search",
+			`${key} → ${hits.length} results, ${fetched}/${urls.length} fetched @${egress}` +
+				`${relaxed ? " (operators dropped — relaxed query, not recorded)" : ""}`
+		);
+		return { query: key, results: hits.length, fetched, egress, ...(relaxed ? { relaxed: true } : {}) };
 	});
 };
-
-// readPage — one page over plain HTTP: can a crawler read it, does it name us, and what does it
-// actually say. No browser, because a crawler has none either: a page that only renders in one is a
-// page a crawler cannot read, and that IS the finding.
-//
-// It takes an ID AND A URL rather than a Row, because it has two callers and only one of them holds
-// a row: the read stage drains rows, while `ask` has just created one and would otherwise have to
-// read back a page it wrote a line ago. Both facts are all this needs.
-//
-// The BODY is the page as served (`store.setBody`, raw HTML), and it is what a status alone cannot
-// give you. Measured: producthunt.com answers 403 with 5.7 KB reading "Just a moment" — a Cloudflare
-// wall, not a refusal aimed at us — and adsx.com answers 404 for a page Brave still ranks at #10.
-// Both look like one number in a column and like two different problems in the markup.
-export const readPage = async (id: string, url: string) => {
-	if (!url) throw new Error(`result ${id} has no URL`);
-	const got = await http.get(url);
-	const mentions = http.count(got.text, BRAND.aliases);
-	await store.patch(T.GEOResults, id, {
-		// A NETWORK-level failure is not an answer ABOUT the page. A timeout, a DNS blip or a dead
-		// socket says nothing about whether a crawler can read it — and stamping `Fetched at` would
-		// freeze that blip as a fact forever, because the row leaves the unread set and is never tried
-		// again. So it is left unstamped and stays owed: `eliminate on evidence, never on absence`,
-		// applied to our own network. An HTTP status — 403, 404, 500 — IS the server ruling, so it lands.
-		...(got.status ? { "Fetched at": new Date().toISOString() } : {}),
-		Status: got.status,
-		"Text length": got.text.length,
-		Mentions: mentions,
-		// Where the redirects ended, and why there is no status. Both come back from every fetch and
-		// were being dropped: a soft-404 landing on the homepage is only visible in the first, and a
-		// row reading `Status: 0` with nothing beside it is a failure nobody can diagnose.
-		"Final URL": got.finalUrl,
-		Error: got.error ?? "",
-		// The stamp travels with the count it qualifies, in the same write — so there is no instant at
-		// which a count exists without the definition it was made under.
-		Brand: brandStamp()
-	});
-	await store.setBody(id, got.html, "html");
-	return {
-		url,
-		status: got.status,
-		textLength: got.text.length,
-		htmlLength: got.html.length,
-		mentions,
-		...(got.finalUrl !== url ? { finalUrl: got.finalUrl } : {}),
-		...(got.error ? { error: got.error } : {})
-	};
-};
-
-// The page back out of the body, without the code fence. `store.body` renders a page as MARKDOWN, so
-// the blocks `setBody` wrote come back wrapped in ```html — the store's rendering of what it holds,
-// not a thing the page contains. Three exact edits rather than a fence parser: the opening fence, the
-// closing one, and the seam between two consecutive blocks (a page over 200 000 chars spans several).
-// Anything else that looks like a fence is the page's own and is left alone.
-const unfence = (markdown: string): string =>
-	markdown
-		.replace(/^```html\n/, "")
-		.replace(/\n```$/, "")
-		.replace(/\n```\n\n```html\n/g, "");
 
 // ─── the tools ───────────────────────────────────────────────────────────────────────────────────
 
-// id → the query's readable key, for the readers that print a result's query. Built from a table
+// id → the query's readable key, for the readers that print a result's queries. Built from a table
 // already in hand, so following the relation costs nothing.
 const keyById = (rows: Row[]): ((id: string) => string) => {
 	const m = new Map(rows.map((r) => [r.id, String(r.fields.Key ?? "")]));
@@ -691,7 +670,7 @@ export const tools = {
 	queries: {
 		// An AUTHORED query — an own-domain probe is not a feature, it is a query you write instead of
 		// harvest. Same row, same search stage, same result rows. Provenance stays visible WITHOUT a
-		// column: a harvested query is one some answer points at, which the relation now says outright.
+		// column: a harvested query is one some answer points at, which the relation says outright.
 		add: async (texts: string[], engine: string = engineOf(DEFAULT_PROVIDER)) =>
 			batch(texts, async (t) => {
 				const key = queryKey(engine, t);
@@ -706,13 +685,12 @@ export const tools = {
 					query: String(r.fields.Key ?? ""),
 					engine: r.fields.Engine ?? null,
 					// Both read straight off this row's own duals — no second table, no counting pass.
-					// This is what the relation bought: the joins the parent needs fill themselves.
 					source: (r.rel.Answers ?? []).length ? "harvested" : "authored",
 					draws: (r.rel.Answers ?? []).length,
 					searchedAt: r.fields["Searched at"] ?? null,
-					// Every observation ever made of this query, not the last search's count — which is what
-					// "how much do we know about this query" now means.
-					observations: (r.rel.Results ?? []).length,
+					// Currently ranked pages — the relation the last search replaced. The SERP itself, with
+					// ranks, is the row's body (`results get --query` reads it out).
+					ranked: (r.rel.Results ?? []).length,
 					// WHY the last attempt came back empty: refused at the door, or Brave dropping the
 					// operators. Without it a query with no results looks the same whether we failed to ask
 					// or asked and got nothing.
@@ -725,106 +703,116 @@ export const tools = {
 	},
 
 	results: {
+		// One line per PAGE. Rank appears only when `--query` names whose ranking you are asking about
+		// (it is a fact about the pair, read out of that query's SERP body); `--mentions` counts each
+		// candidate's stored body under today's BRAND — a body read per row, so it is the one filter
+		// that costs more than a query.
 		get: async (o: ResultSelect = {}) => {
-			// TWO reads, and the second is the whole queries table — small, and it is what turns each
-			// observation's `Query` relation back into readable text. The key used to carry it; an event
-			// has no key, so the join does the job the encoding was standing in for.
+			const namedQueries = await queryRowsOf(o.query ?? []);
 			const [rows, queries] = await Promise.all([
-				resultFilter(o).then((f) => queryAll(store, T.GEOResults, f)),
+				queryAll(store, T.GEOResults, resultFilter(o, namedQueries.map((r) => r.id))),
 				queryAll(store, T.GEOQueries, ALL_QUERIES)
 			]);
 			const qKey = keyById(queries);
-			const views = rows.map((r) => resultView(r, qKey));
-			// `--unreadable` post-filters rather than pushing into the store, because `readable` needs
-			// two columns compared against each other and a Notion filter cannot express that. It is a
-			// reading of a set the store already narrowed, so it costs nothing. `--ranked` is here for a
-			// duller reason: Notion has `starts_with` and no negation of it.
-			const kept = views.filter((r) => !o.unreadable || r.readable === false);
-			// NEWEST FIRST, on the instant — because there are several observations of one page now, and
-			// the question is almost always "where does it stand", with the older rows underneath as the
-			// history. Rank orders within one moment; time orders the moments.
-			return newest(kept, (r) => String(r.observedAt ?? ""), o.limit);
+
+			// The named queries' SERPs, for the rank decoration — one body read per query, not per page.
+			const serps = await mapLimit(namedQueries, (r) => serpOf(r.id));
+			const ranked = serps.map(rankedOf);
+
+			// The read-set join, only when asked: which pages some draw's tools actually read.
+			const sourceSet = o.source
+				? new Set(
+						(await queryAll(store, T.GEOAnswers, ALL_ANSWERS)).flatMap((a) => canonSources(lines(a.fields.Sources)))
+					)
+				: undefined;
+
+			let views = rows.map((r) => {
+				const v = resultView(r, qKey);
+				const hit = ranked.map((m) => m.get(v.url)).find(Boolean);
+				return hit ? { ...v, ...hit } : v;
+			});
+			if (o.ours) views = views.filter((v) => v.ours);
+			if (sourceSet) views = views.filter((v) => sourceSet.has(v.url));
+			if (o.unreadable) views = views.filter((v) => v.readable === false);
+
+			// Mentions, computed last so the bodies read are only the survivors'.
+			if (o.mentions) {
+				const withMentions = await mapLimit(views, async (v) => {
+					const row = rows.find((r) => String(r.fields.URL) === v.url)!;
+					const mentions = row.fields["Fetched at"] ? mentionsOf(unfence(await store.body(row.id))) : 0;
+					return { ...v, mentions };
+				});
+				views = withMentions.filter((v) => (v as { mentions: number }).mentions > 0);
+			}
+			return newest(views, (v) => String(v.fetchedAt ?? ""), o.limit);
 		},
 
-		// show — one page's stored BODY: what we actually captured, as served. The counterpart of
-		// `answers show`, and the reason the body is worth storing at all — a status says a crawler was
-		// refused, the markup says whether it was a bot wall, a soft 404 or an empty JavaScript shell.
-		//
-		// A URL can hold more than one row (a query ranked it AND an assistant read it, which are two
-		// different observations of one page), so this answers for every row it matches rather than
-		// picking one and hiding the rest — the same rule that keeps `site:` samples honest.
+		// show — one page in full: its row, its mention count under today's BRAND, and the stored BODY
+		// — what we actually captured, as served. The reason the body is worth storing at all: a status
+		// says a crawler was refused, the markup says whether it was a bot wall, a soft 404 or an empty
+		// JavaScript shell.
 		show: async (url: string) => {
 			const [rows, queries] = await Promise.all([
-				queryAll(store, T.GEOResults, named([url])),
+				queryAll(store, T.GEOResults, { and: [{ property: "URL", title: { equals: canonicalUrl(url) } }] }),
 				queryAll(store, T.GEOQueries, ALL_QUERIES)
 			]);
-			if (!rows.length) throw new Error(`no observation of ${canonicalUrl(url)} — nothing has looked at it`);
-			const qKey = keyById(queries);
-			return mapLimit(
-				newest(rows, (r) => String(r.fields["Observed at"] ?? r.fields["Fetched at"] ?? "")),
-				async (r) => ({ ...resultView(r, qKey), html: r.fields["Fetched at"] ? unfence(await store.body(r.id)) : null })
-			);
+			const row = rows[0];
+			if (!row) throw new Error(`no page ${canonicalUrl(url)} — nothing has looked at it`);
+			const html = row.fields["Fetched at"] ? unfence(await store.body(row.id)) : null;
+			return {
+				...resultView(row, keyById(queries)),
+				mentions: html ? mentionsOf(html) : null,
+				html
+			};
 		}
 	},
 
-	// chain — THE measurement, and the reason the other three stages exist. An answer can only cite
-	// what its tools retrieved, so the question that decides whether any of this is worth doing is:
-	// of the pages the assistant actually READ, how many did the engine RANK for the query the
-	// assistant itself issued?
+	// chain — THE measurement, and the reason the stages exist. An answer can only cite what its
+	// tools retrieved, so the question that decides whether any of this is worth doing is: of the
+	// pages the assistant actually READ, how many did the engine RANK for the query the assistant
+	// itself issued?
 	//
-	// Both halves are already in the store — `Answer.Pages` is what it read, `Query.Results` is what
-	// ranked — and nothing joined them, so the number lived in a throwaway script. It is pure
-	// derivation: three reads of small tables, no browser, no write.
-	//
-	// A source read at rank 11 counts exactly as much as one at rank 1: the assistant reads down the
-	// page, so PRESENCE in the ranked set is the fact, and the rank beside it is how comfortably.
+	// Both halves are already observations — the answer's source list, and its queries' SERP bodies —
+	// so this is pure derivation: reads of small tables plus one body per query in scope. No browser,
+	// no write. A source read at rank 11 counts exactly as much as one at rank 1: the assistant reads
+	// down the page, so PRESENCE in the ranked set is the fact, and the rank beside it is how comfortably.
 	chain: async (o: AnswerSelect = {}) => {
-		const [answers, prompts, queries, results] = await Promise.all([
+		const [answers, prompts, queries] = await Promise.all([
 			queryAll(store, T.GEOAnswers, ALL_ANSWERS),
 			queryAll(store, T.GEOPrompts, promptFilter({ prompt: o.prompt })),
-			queryAll(store, T.GEOQueries, ALL_QUERIES),
-			queryAll(store, T.GEOResults, { and: [all("Name")] })
+			queryAll(store, T.GEOQueries, ALL_QUERIES)
 		]);
 		const wanted = new Set(prompts.map((p) => p.id));
 		const promptText = new Map(prompts.map((p) => [p.id, String(p.fields.Prompt ?? "")]));
 		const qKey = keyById(queries);
-		// url → the best (lowest) rank it ever held for this query, across every observation of it.
-		const rankFor = (queryIds: string[]) => {
-			const m = new Map<string, number>();
-			for (const r of results) {
-				if (!(r.rel.Query ?? []).some((id) => queryIds.includes(id))) continue;
-				const url = String(r.fields.URL ?? "");
-				const rank = Number(r.fields.Rank ?? 0);
-				if (url && rank && (!m.has(url) || rank < m.get(url)!)) m.set(url, rank);
-			}
-			return m;
-		};
-		const views = answers
-			.filter((a) => (a.rel.Prompt ?? []).some((id) => wanted.has(id)))
-			.map((a) => {
-				const queryIds = a.rel.Queries ?? [];
-				const ranked = rankFor(queryIds);
-				const sources = lines(a.fields.Sources).flatMap((u) => {
-					try {
-						return [canonicalUrl(u)];
-					} catch {
-						return [];
-					}
-				});
-				const at = sources.map((u) => ({ url: u, rank: ranked.get(u) ?? null }));
-				return {
-					prompt: promptText.get((a.rel.Prompt ?? [])[0]) ?? null,
-					askedAt: String(a.fields["Asked at"] ?? ""),
-					verdict: verdictOf(drawOf(a)),
-					queries: queryIds.map(qKey),
-					read: sources.length,
-					ranked: at.filter((x) => x.rank !== null).length,
-					ranks: at.filter((x) => x.rank !== null).map((x) => x.rank),
-					// The ones it read that we never saw ranked: either the query was never searched, or the
-					// assistant reached them some other way. Both are worth seeing rather than averaging away.
-					unranked: at.filter((x) => x.rank === null).map((x) => x.url)
-				};
+		const mine = answers.filter((a) => (a.rel.Prompt ?? []).some((id) => wanted.has(id)));
+
+		// The SERPs of every query those draws issued — one body read per distinct query.
+		const queryIds = [...new Set(mine.flatMap((a) => a.rel.Queries ?? []))];
+		const serpById = new Map(
+			await mapLimit(queryIds, async (id) => [id, rankedOf(await serpOf(id))] as const)
+		);
+
+		const views = mine.map((a) => {
+			const ids = a.rel.Queries ?? [];
+			const sources = canonSources(lines(a.fields.Sources));
+			const at = sources.map((u) => {
+				const ranks = ids.map((id) => serpById.get(id)?.get(u)?.rank).filter((r): r is number => r !== undefined);
+				return { url: u, rank: ranks.length ? Math.min(...ranks) : null };
 			});
+			return {
+				prompt: promptText.get((a.rel.Prompt ?? [])[0]) ?? null,
+				askedAt: String(a.fields["Asked at"] ?? ""),
+				verdict: verdictOf(drawOf(a)),
+				queries: ids.map(qKey),
+				read: sources.length,
+				ranked: at.filter((x) => x.rank !== null).length,
+				ranks: at.filter((x) => x.rank !== null).map((x) => x.rank),
+				// The ones it read that we never saw ranked: either the query was never searched, or the
+				// assistant reached them some other way. Both are worth seeing rather than averaging away.
+				unranked: at.filter((x) => x.rank === null).map((x) => x.url)
+			};
+		});
 		const scored = views.filter((v) => v.read > 0);
 		return {
 			overall: {
@@ -836,98 +824,52 @@ export const tools = {
 		};
 	},
 
-	// pending — what each stage owes, without spending anything. It compiles the SAME filters the
-	// stages drain, so a count can never describe a different set than the run.
-	pending: async (draws = 1, o: PromptSelect = {}, again?: string) => {
-		const [prompts, answers, queries, results] = await Promise.all([
-			queryAll(store, T.GEOPrompts, promptFilter(o)),
-			queryAll(store, T.GEOAnswers, ALL_ANSWERS),
-			queryAll(store, T.GEOQueries, unsearched(again)),
-			queryAll(store, T.GEOResults, unread())
-		]);
-		const owed = prompts.filter((p) => promptView(p, answers).asks < draws);
-		return {
-			ask: { owed: owed.length, of: prompts.length, prompts: owed.map((p) => String(p.fields.Prompt)) },
-			search: { owed: queries.length },
-			read: { owed: results.length, brand: brandStamp() }
-		};
+	// THE FIRST LEVER. Ask the prompts you name — or every prompt in the table — one new draw each.
+	// No counting, no threshold: running it IS the decision to measure, and its cost is exactly the
+	// list it prints as it goes. Want another draw? Run it again.
+	ask: async (texts?: readonly string[], provider: string = DEFAULT_PROVIDER) => {
+		const targets = texts?.length
+			? texts.map(promptKey)
+			: (await queryAll(store, T.GEOPrompts, { and: [all("Prompt")] })).map((p) => String(p.fields.Prompt ?? ""));
+		return batch(targets, (p) => ask(p, provider), "ask");
 	},
 
-	// The three stages over everything owed. `search` and `read` drain (processing moves a row out of
-	// the filter, so re-querying pages the backlog with no cursor); `ask` cannot, because "fewer than
-	// N answers" is not expressible as a Notion filter — so it reads both small tables and counts
-	// here. Prompts are a hand-written list of tens, so that read is one query and costs nothing.
-	askPending: async (draws = 1, provider: string = DEFAULT_PROVIDER, o: PromptSelect = {}) => {
-		const out: unknown[] = [];
-		for (let round = 0; round < draws; round++) {
-			const [prompts, answers] = await Promise.all([
-				queryAll(store, T.GEOPrompts, promptFilter(o)),
-				queryAll(store, T.GEOAnswers, ALL_ANSWERS)
-			]);
-			const owed = prompts.filter((p) => promptView(p, answers).asks < draws).map((p) => String(p.fields.Prompt ?? ""));
-			if (!owed.length) break;
-			// One round at a time, re-reading between them: a draw is only evidence if the ones before
-			// it already landed, and this is what makes a crashed run resume at the right count.
-			out.push(...(await batch(owed, (p) => ask(p, provider), `ask (round ${round + 1}/${draws})`)));
-		}
+	// THE SECOND LEVER. Search the queries you name — or every query in the table — a fresh SERP
+	// each, replacing the last one in the row's body. WIDTH FOLLOWS THE TARGET: one at a time from a
+	// device (measured: six concurrent searches from this machine earned an HTTP 429 and a captcha
+	// from Brave that applied to ordinary browsing too), all at once against the cloud, where every
+	// script gets its own browser and its own address.
+	search: async (texts?: readonly string[]) => {
+		const target = ENGINES.brave.target as RunOpts;
+		const rows = texts?.length ? await queryRowsOf(texts) : await queryAll(store, T.GEOQueries, ALL_QUERIES);
+		if (typeof target.target === "string") return searchQueries(rows, target);
+		const out = [];
+		for (const row of rows) out.push(...(await searchQueries([row], target)));
 		return out;
 	},
 
-	// The search drain, BOUNDED. `drain` fans a page out through `batch`, which is unbounded — fine
-	// against the cloud, where each script gets its own browser and its own address, and actively
-	// harmful against a device, where they all leave from one. Measured: six concurrent searches from
-	// this machine earned it an HTTP 429 and a captcha page from Brave, which then applied to ordinary
-	// browsing too. So the width follows the target: many when the addresses are many, one when it is one.
-	searchPending: async (again?: string) => {
-		const target = ENGINES.brave.target as RunOpts;
-		const local = typeof target.target !== "string";
-		return drain(store, T.GEOQueries, unsearched(again), async (r) => (await searchQueries([r], target))[0], "search", {
-			limit: local ? 1 : undefined
-		});
-	},
-
-	// The drain, plus the by-hand door: name URLs and it reads exactly those, whatever state they are
-	// in; name none and it reads everything owed.
-	readPending: (urls?: readonly string[]) =>
-		drain(
-			store,
-			T.GEOResults,
-			urls?.length ? named(urls) : unread(),
-			(r) => readPage(r.id, String(r.fields.URL ?? "")),
-			"read"
-		),
-
-	// One pass over the whole loop. The stages are strictly ordered — a query only exists once an
-	// answer issued it, a result only once a query was searched — so one command is one pass.
-	advance: async (draws = 1, provider: string = DEFAULT_PROVIDER, o: PromptSelect = {}, again?: string) => ({
-		ask: await tools.askPending(draws, provider, o),
-		search: await tools.searchPending(again),
-		read: await tools.readPending()
-	}),
-
 	// domains — how much each domain in the corpus PUBLISHES, which is the dimension that separated the
-	// winners once anything else stopped predicting rank. Computed on demand from each site's own
-	// sitemap and stored NOWHERE: it is a fact about a domain rather than about any row we hold, it
-	// changes on its own schedule, and a stored number would need a stamp to stay honest (the job
-	// `Brand` already does for a mention count, and one of those is enough).
+	// winners once anything else stopped predicting rank. The corpus is the SERPs (who ranks, how well);
+	// the scale is each site's own sitemap, computed on demand and stored NOWHERE: it is a fact about a
+	// domain rather than about any row we hold, and it changes on its own schedule.
 	domains: async (o: ResultSelect = {}) => {
-		const rows = await queryAll(store, T.GEOResults, await resultFilter(o));
-		const hosts = new Map<string, { rows: number; best: number }>();
-		for (const r of rows) {
-			const url = String(r.fields.URL ?? "");
-			if (!url) continue;
-			let host: string;
-			try {
-				host = new URL(url).hostname.replace(/^www\./, "");
-			} catch {
-				continue;
+		const rows = o.query?.length ? await queryRowsOf(o.query) : await queryAll(store, T.GEOQueries, ALL_QUERIES);
+		const serps = await mapLimit(rows, (r) => serpOf(r.id));
+		const hosts = new Map<string, { ranked: number; best: number }>();
+		for (const env of serps)
+			for (const [url, { rank }] of rankedOf(env)) {
+				let host: string;
+				try {
+					host = new URL(url).hostname.replace(/^www\./, "");
+				} catch {
+					continue;
+				}
+				const cur = hosts.get(host) ?? { ranked: 0, best: 999 };
+				hosts.set(host, { ranked: cur.ranked + 1, best: Math.min(cur.best, rank) });
 			}
-			const rank = Number(r.fields.Rank ?? 0) || 999;
-			const cur = hosts.get(host) ?? { rows: 0, best: 999 };
-			hosts.set(host, { rows: cur.rows + 1, best: Math.min(cur.best, rank) });
-		}
+		const wanted = o.ours ? [...hosts.keys()].filter((h) => h === BRAND.domain || h.endsWith(`.${BRAND.domain}`)) : [...hosts.keys()];
 		const scale = await mapLimit(
-			[...hosts.keys()],
+			wanted,
 			async (host) => {
 				const sm = await http.get(`https://${host}/sitemap.xml`);
 				let locs = [...sm.html.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1].trim());
@@ -942,7 +884,7 @@ export const tools = {
 				const h = hosts.get(host)!;
 				return {
 					host,
-					inCorpus: h.rows,
+					ranked: h.ranked,
 					bestRank: h.best === 999 ? null : h.best,
 					sitemap: sm.status,
 					// null, never 0, when the read told us nothing: a 404 or a 429 means we could not look,

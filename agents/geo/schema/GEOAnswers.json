@@ -38,18 +38,6 @@
         "type": "title"
       }
     },
-    "Pages": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      },
-      "description": "relation → GEOResults",
-      "x-store": {
-        "type": "relation",
-        "target": "GEOResults",
-        "dual": "Answers"
-      }
-    },
     "Prompt": {
       "type": "array",
       "items": {

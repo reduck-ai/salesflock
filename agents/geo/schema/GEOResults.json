@@ -4,39 +4,9 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "Name"
+    "URL"
   ],
   "properties": {
-    "Age": {
-      "type": "string",
-      "x-store": {
-        "type": "rich_text"
-      }
-    },
-    "Answers": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      },
-      "description": "relation → GEOAnswers",
-      "x-store": {
-        "type": "relation",
-        "target": "GEOAnswers",
-        "dual": "Pages"
-      }
-    },
-    "Brand": {
-      "type": "string",
-      "x-store": {
-        "type": "rich_text"
-      }
-    },
-    "Egress": {
-      "type": "string",
-      "x-store": {
-        "type": "rich_text"
-      }
-    },
     "Error": {
       "type": "string",
       "x-store": {
@@ -57,25 +27,6 @@
         "type": "url"
       }
     },
-    "Mentions": {
-      "type": "number",
-      "x-store": {
-        "type": "number"
-      }
-    },
-    "Name": {
-      "type": "string",
-      "x-store": {
-        "type": "title"
-      }
-    },
-    "Observed at": {
-      "type": "string",
-      "description": "ISO 8601 date or date-time",
-      "x-store": {
-        "type": "date"
-      }
-    },
     "Query": {
       "type": "array",
       "items": {
@@ -86,18 +37,6 @@
         "type": "relation",
         "target": "GEOQueries",
         "dual": "Results"
-      }
-    },
-    "Rank": {
-      "type": "number",
-      "x-store": {
-        "type": "number"
-      }
-    },
-    "Snippet": {
-      "type": "string",
-      "x-store": {
-        "type": "rich_text"
       }
     },
     "Status": {
@@ -112,17 +51,10 @@
         "type": "number"
       }
     },
-    "Title": {
-      "type": "string",
-      "x-store": {
-        "type": "rich_text"
-      }
-    },
     "URL": {
       "type": "string",
-      "format": "uri",
       "x-store": {
-        "type": "url"
+        "type": "title"
       }
     }
   }

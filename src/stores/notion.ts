@@ -676,6 +676,12 @@ export const body = (id: string): Promise<string> => bodyOf(idOf(id), blockPage)
 // The stale ids are read BEFORE anything is written, so only what was there at the start is removed —
 // never the blocks this call is about to add.
 const APPEND_CAP = 100; // Notion accepts at most 100 children per append
+// …and at most ~500 KB per REQUEST, which a block full of text hits long before the block count
+// does: verbatimBlocks packs 200 000 chars per block, so two of them in one append is already past
+// the ceiling — measured, a 421 KB page 413'd ("Request body too large") and lost its body. Batches
+// are therefore packed by SERIALIZED size against a conservative cap, and the block count stays as
+// the second bound.
+const APPEND_BYTES = 400_000;
 const childIds = async (id: string): Promise<string[]> => {
 	const ids: string[] = [];
 	for (let cursor: string | undefined; ; ) {
@@ -692,11 +698,20 @@ export const setBody = async (id: string, text: string, language = "plain text")
 	const stale = await childIds(page);
 	const blocks = verbatimBlocks(text, language);
 	// Sequentially: Notion appends at the END, so a later batch must land after an earlier one.
-	for (let i = 0; i < blocks.length; i += APPEND_CAP)
-		await api(`/blocks/${page}/children`, {
-			method: "PATCH",
-			body: { children: blocks.slice(i, i + APPEND_CAP) }
-		});
+	// Packed by size AND count (see APPEND_BYTES); a batch always takes at least one block, so a
+	// single oversized block still ships alone rather than looping forever.
+	for (let i = 0; i < blocks.length; ) {
+		const children: typeof blocks = [];
+		let size = 0;
+		while (i < blocks.length && children.length < APPEND_CAP) {
+			const s = JSON.stringify(blocks[i]).length;
+			if (children.length && size + s > APPEND_BYTES) break;
+			children.push(blocks[i]);
+			size += s;
+			i++;
+		}
+		await api(`/blocks/${page}/children`, { method: "PATCH", body: { children } });
+	}
 	await Promise.all(stale.map((blockId) => api(`/blocks/${blockId}`, { method: "DELETE" })));
 };
 

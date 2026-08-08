@@ -26,37 +26,29 @@
 // (no pipeline row for a Decision to bind to), no `prompts`, no `ladder`, no `drop`. The operating
 // agent reading these tables is the intelligence; this is the instrument.
 //
-// THE ONE RULE THE SCHEMA OBEYS: store the raw observation and derive under today's config. Where
-// the raw is too big to store — a page body — store the reduction AND stamp the config it was
-// derived under (`Mentions` + `Brand`), so changing what counts as a mention re-reads instead of
-// silently leaving old numbers behind. Everything else (was it cited, did it read us, is it
-// readable, is it ours) is computed at read time from columns that never go stale.
+// THE ONE RULE THE SCHEMA OBEYS: columns are keys, cursors and relations; the RAW OBSERVATION lives
+// in the row's body (a query's SERP as JSON, a page as the HTML served); everything else — rank,
+// mentions, was it cited, is it readable, is it ours — is DERIVED at read time, under today's
+// config. Nothing cached means nothing to stamp and nothing that can go stale: widening BRAND
+// re-counts every stored page on the next read, with no migration and nothing to remember.
 
 import type { AgentConfig } from "../../src/stores/index.js";
 import { models } from "../../src/models.js";
 import type { RunOpts } from "../../src/clients/reduck.js";
-import { fingerprint } from "../../src/prompts.js";
 import { scripts } from "../../src/clients/geo/scripts.js";
 
 // WHO we are looking for. One declaration, read by everything that asks "is this us": the mention
 // count on a fetched page, whether a source or a result is ours, and whether an answer named us.
 //
 // `aliases` is the whole knob, and it is matched on WORD BOUNDARIES (src/clients/http.ts `count`),
-// so a short name cannot fire inside an unrelated word. Widen it when the market calls us something
-// we do not — and note that widening it invalidates every stored `Mentions`, which is exactly what
-// the `Brand` stamp below exists to catch: the affected results re-read themselves on the next run.
+// so a short name cannot fire inside an unrelated word. Widen it freely: a mention count is derived
+// from each page's stored body at read time, so a wider alias set applies to the whole corpus on the
+// next read — no stored number to invalidate, no stamp, no re-crawl.
 export const BRAND = {
 	name: "Reduck",
 	domain: "reduck.ai",
 	aliases: ["reduck.ai", "reduck"]
 } as const;
-
-// The stamp `Mentions` carries. It covers everything that changes what a mention IS, so any edit to
-// the aliases (or the domain) makes every counted result owe a re-count. Same idiom, for the same
-// reason, as a Decision pinning its `Instructions hash`: a stored derivation must say what it was
-// derived under, or it quietly becomes a lie.
-export const brandStamp = (): string =>
-	fingerprint(BRAND.domain, ...[...BRAND.aliases].sort());
 
 // WHERE each job runs, one entry per job — because the choice is not only which browser but how it
 // egresses, and the two jobs answer differently.

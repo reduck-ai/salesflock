@@ -10,10 +10,6 @@ export interface GEOAnswers {
   Model?: string;
   Name: string;
   /**
-   * relation → GEOResults
-   */
-  Pages?: string[];
-  /**
    * relation → GEOPrompts
    */
   Prompt?: string[];
